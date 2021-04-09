@@ -1,3 +1,4 @@
+mod tests; // test
 mod legacy;
 mod os_interface;
 mod constants;

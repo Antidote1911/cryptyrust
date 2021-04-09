@@ -1,5 +1,3 @@
-mod brute_force; // test
-
 use cryptyrust_core::*;
 
 use std::env;
