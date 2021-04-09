@@ -37,6 +37,9 @@ gui/uic_wrapper.bat
 ##
 ## Get latest from https://github.com/github/gitignore/blob/master/VisualStudio.gitignore
 
+## Ignore JetBrain folder
+.idea
+
 # User-specific files
 *.rsuser
 *.suo
