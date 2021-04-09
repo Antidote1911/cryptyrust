@@ -2,7 +2,6 @@
 use std::error::Error;
 use std::fs::{File, remove_file};
 use std::io::prelude::*;
-use sodiumoxide;
 
 #[derive(Clone, Debug)]
 pub enum Mode {
