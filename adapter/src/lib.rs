@@ -62,7 +62,7 @@ pub extern fn start(ptr: *mut Config) -> *mut c_char {
 
 #[no_mangle]
 pub unsafe extern fn destroyConfig(ptr: *mut Config) {
-    if ptr != null_mut() {
+    if ptr.is_null() {
         drop(Box::from_raw(&mut *ptr));
     }
 }

@@ -81,8 +81,8 @@ pub fn decrypt<I: Read, O: Write>(input: &mut I, output: &mut O, password: &str,
 
     // make sure file is at least prefix + salt + header
     if let Some(size) = filesize {
-        if !(size >= argon2id13::SALTBYTES + HEADERBYTES + SIGNATURE.len()) {
-            return Err(CoreError::new("File not big enough to have been encrypted"))?;
+        if size <= argon2id13::SALTBYTES + HEADERBYTES + SIGNATURE.len() {
+            return Err(CoreError::new("File not big enough to have been encrypted").into())
         }
     }
     let mut total_bytes_read = 0;

@@ -1,5 +1,3 @@
-
-
 use std::error::Error;
 use std::fs::{File, remove_file};
 use std::io::prelude::*;
@@ -55,7 +53,7 @@ pub fn main_routine(c: &Config) -> Result<(), Box<dyn Error>> {
                     if let Some(out_file) = &c.out_file {
                         remove_file(&out_file).map_err(|e2| format!("{}. Could not delete output file: {}.", e, e2))?;
                     }
-                    Err(e)?
+                    return Err(e)
                 },
             };
         },
@@ -72,7 +70,7 @@ pub fn main_routine(c: &Config) -> Result<(), Box<dyn Error>> {
                             if let Some(out_file) = &c.out_file {
                                 remove_file(&out_file).map_err(|e2| format!("{}. Could not delete output file: {}.", e, e2))?;
                             }
-                            Err(e)?
+                            return Err(e)
                         },
                     };
                 },
@@ -84,7 +82,7 @@ pub fn main_routine(c: &Config) -> Result<(), Box<dyn Error>> {
                             if let Some(out_file) = &c.out_file {
                                 remove_file(&out_file).map_err(|e2| format!("{}. Could not delete output file: {}.", e, e2))?;
                             }
-                            Err(e)?
+                            return Err(e)
                         },
                     };
                 },

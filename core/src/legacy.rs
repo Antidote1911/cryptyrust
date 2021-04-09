@@ -32,7 +32,7 @@ pub fn decrypt<I: Read, O: Write>(input: &mut I, output: &mut O, password: &str,
     // make sure file is at least prefix + salt + header
     if let Some(size) = filesize {
         if !(size >= pwhash::SALTBYTES + HEADERBYTES + SIGNATURE.len()) {
-            return Err(CoreError::new("File not big enough to have been encrypted"))?;
+            return Err(CoreError::new("File not big enough to have been encrypted").into())
         }
     }
     let mut total_bytes_read = 0;
@@ -42,7 +42,7 @@ pub fn decrypt<I: Read, O: Write>(input: &mut I, output: &mut O, password: &str,
         Some(four) => {
             // if signature was not present, and we're treating this as a cloaker 1.0 file because of the
             // .cloaker extension or because -d was used from CLI, then use those bytes for the salt.
-            &mut salt[..4].copy_from_slice(&four);
+            salt[..4].copy_from_slice(&four);
             input.read_exact(&mut salt[4..])?;
         },
         None => input.read_exact(&mut salt)?,
