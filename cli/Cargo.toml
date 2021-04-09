@@ -1,0 +1,14 @@
+[package]
+name = "cryptyrust_cli"
+version = "1.0.0"
+authors = ["Antidote1911 <antidote1911@gmail.com>"]
+edition = "2018"
+
+[dependencies]
+cryptyrust_core = { path = "../core" }
+rpassword = "5.0"
+clap = "2"
+
+[dev-dependencies]
+rand = "0.8.3"
+itertools = "0.10.0"
