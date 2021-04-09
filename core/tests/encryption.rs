@@ -42,7 +42,7 @@ mod tests {
         let c = cryptyrust_core::Config::new(
             &cryptyrust_core::Mode::Decrypt,
             pw2,
-            Some(out_file.clone()),
+            Some(out_file),
             Some("./result".to_string()),
             Box::new(ProgressUpdater {}),
         );
@@ -80,7 +80,7 @@ mod tests {
         let c = cryptyrust_core::Config::new(
             &cryptyrust_core::Mode::Decrypt,
             pw2,
-            Some(out_file.clone()),
+            Some(out_file),
             Some("./result2".to_string()),
             Box::new(ProgressUpdater {}),
         );
