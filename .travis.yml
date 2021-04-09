@@ -1,9 +1,16 @@
 language: rust
-
+rust:
+  - 1.51.0 # Version currently supported by Codeforces
+  - stable
+  - beta
+  - nightly
 before_script:
-  - rustup component add rustfmt-preview
   - rustup component add clippy
 script:
-  - cargo fmt --all -- --check
-  - cargo clippy --all -- -D warnings
-  - cargo test
+  - cargo test --verbose
+  - cargo clippy -- -D warnings
+matrix:
+  allow_failures:
+    - rust: nightly
+    - rust: beta # clippy currently has a bug on beta
+  fast_finish: true
