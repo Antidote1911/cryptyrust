@@ -18,10 +18,10 @@ target
 #**/*.rs.bk
 
 _rustc_info.json
-*.rustine
+*.cryptyrust
 *.zip
 .vscode
-build-rustine-*
+build-cryptyrust-*
 .DS_Store
 gui/.qmake.stash
 gui/Makefile

@@ -1,4 +1,6 @@
 [![Build Status](https://www.travis-ci.com/Antidote1911/cryptyrust.svg?branch=master)](https://www.travis-ci.com/Antidote1911/cryptyrust)
+[![License: GPL3](https://img.shields.io/badge/License-GPL3-green.svg)](https://opensource.org/licenses/GPL-3.0)
+
 
 # Cryptyrust
 **Simple cross-platform cli and gui file encryption.**
