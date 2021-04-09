@@ -1,3 +1,5 @@
+[![Build Status](https://travis-ci.org/Antidote1911/cryptyrust.svg?branch=main)](https://travis-ci.org/Antidote1911/cryptyrust)
+
 # Cryptyrust
 **Simple cross-platform cli and gui file encryption.**
 
