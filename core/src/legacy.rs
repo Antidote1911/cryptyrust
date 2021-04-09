@@ -31,7 +31,7 @@ pub fn decrypt<I: Read, O: Write>(input: &mut I, output: &mut O, password: &str,
 
     // make sure file is at least prefix + salt + header
     if let Some(size) = filesize {
-        if !(size >= pwhash::SALTBYTES + HEADERBYTES + SIGNATURE.len()) {
+        if size <= pwhash::SALTBYTES + HEADERBYTES + SIGNATURE.len() {
             return Err(CoreError::new("File not big enough to have been encrypted").into())
         }
     }
