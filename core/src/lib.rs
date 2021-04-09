@@ -1,7 +1,6 @@
 mod constants;
 mod legacy;
 mod os_interface;
-mod testing; // test
 pub use os_interface::*;
 
 use sodiumoxide::crypto::pwhash::argon2id13;
