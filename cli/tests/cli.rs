@@ -2,8 +2,6 @@ use assert_cmd::prelude::*;
 use assert_fs::prelude::*;
 use std::process::Command;
 
-const PASSWORD: &'static str = "mypassword";
-
 #[test]
 fn encrypt_and_decrypt() {
     //   ./cryptyrust_cli -e test.mp4 -p 12345678

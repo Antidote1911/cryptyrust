@@ -34,14 +34,15 @@ Cryptyrust uses the `pwhash` and `secretstream` APIs of [libsodium](https://doc.
 ## GUI Compilation instructions:
 **CLI must be compiled to generate the cryptyrust_core lib.**
 
-After CLI was compiled, open `gui/cryptyrust.pro` in Qt Creator, make sure kit is 64bit, and build in release. Without Qt Creator, open a terminal in project folder and:
+After CLI was compiled, open a terminal in gui folder and:
 
 ```bash
-   qmake
+   cmake
    make
 #if you want install :
    make install
 ```
+
 ### Thanks to JetBrains for open source support
 
 <a href="https://www.jetbrains.com/"><img src="./jetbrains.png" alt="jetbrains" width="150"></a>
