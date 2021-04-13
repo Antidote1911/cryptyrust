@@ -12,3 +12,10 @@ clap = "2"
 [dev-dependencies]
 assert_cmd = "1"
 assert_fs = "1"
+
+[[bin]]
+name = "cryptyrust_cli"
+
+[profile.release]
+opt-level = 'z'
+lto = true  
