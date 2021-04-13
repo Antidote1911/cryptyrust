@@ -12,7 +12,7 @@ configuration: Release
 
 environment:
   global:
-    TARGET: x86_64-windows
+    TARGET: x86_64-pc-windows-msvc
     RUST_VERSION: stable
     CRATE_NAME: cryptyrust
     CARGO_HOME: "c:\\cargo"
