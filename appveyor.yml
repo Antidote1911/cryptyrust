@@ -35,6 +35,6 @@ build_script:
     - cd gui
     - mkdir build
     - cd build
-    - cmake ..
+    - cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
     - dir
-    - mingw32-make cryptyrust
+    - make
