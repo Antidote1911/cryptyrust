@@ -27,11 +27,10 @@ install:
     - rustc -Vv
     - cargo -V
 
-before_build:
+before_build:    
     - cargo test
-    - cd gui
-    - cmake
-    - make
+    - dir
+    - cd /gui && cmake && make
 
 build_script:
     - mingw32-make

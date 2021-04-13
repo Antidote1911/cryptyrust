@@ -15,6 +15,3 @@ assert_fs = "1"
 
 [[bin]]
 name = "cryptyrust_cli"
-
-[profile.release]
-lto = true  
