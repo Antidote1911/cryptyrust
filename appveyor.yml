@@ -38,5 +38,6 @@ build_script:
     - cd build
     - cmake --version
     - cmake .. -G "Visual Studio 16 2019" -A x64
+    - dir
     - mingw32-make
 
