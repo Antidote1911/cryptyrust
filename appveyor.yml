@@ -20,7 +20,7 @@ environment:
 
 install:
     - set QTDIR=C:\Qt\6.0.1\mingw81_64
-    - set PATH=%QTDIR%\bin;C:\Qt\Tools\mingw730_64\bin;%PATH%;
+    - set PATH=%QTDIR%\bin;C:\Qt\Tools\mingw81_64\bin;%PATH%;
     - appveyor DownloadFile https://win.rustup.rs/ -FileName rustup-init.exe
     - rustup-init.exe -y --default-host %TARGET%
     - set PATH=%PATH%;C:\cargo\bin
