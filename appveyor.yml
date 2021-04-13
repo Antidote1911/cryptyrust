@@ -10,6 +10,14 @@ image: Visual Studio 2019
 
 configuration: Release
 
+environment:
+  global:
+    TARGET: x86_64-windows
+    RUST_VERSION: stable
+    CRATE_NAME: cryptyrust
+    CARGO_HOME: "c:\\cargo"
+    RUSTUP_HOME: "c:\\rustup"
+
 install:
     - set QTDIR=C:\Qt\5.14.2\mingw73_64
     - set PATH=%QTDIR%\bin;C:\Qt\Tools\mingw730_64\bin;%PATH%;
