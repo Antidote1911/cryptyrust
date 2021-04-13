@@ -34,10 +34,5 @@ build_script:
     - dir
     - cd gui
     - dir
-    - mkdir build
-    - cd build
-    - cmake --version
-    - cmake .. -G "Visual Studio 16 2019" -A x64
-    - dir
-    - cmake --build
-
+    - qmake
+    - mingw32-make
