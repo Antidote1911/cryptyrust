@@ -35,5 +35,6 @@ build_script:
     - cd gui
     - mkdir build
     - cd build
-    - cmake .. 
-    - mingw32-make
+    - cmake ..
+    - dir
+    - mingw32-make build
