@@ -30,7 +30,7 @@ install:
 before_build:    
     - cargo test
     - dir
-    - cd /gui && cmake && make
+    - cd gui && cmake && make
 
 build_script:
     - mingw32-make
