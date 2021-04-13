@@ -27,7 +27,7 @@ install:
     - rustc -Vv
     - cargo -V
 
-before_build:
+build_script:
     - echo %arch%
     - echo %APPVEYOR_BUILD_WORKER_IMAGE%
     - cargo test
@@ -38,7 +38,5 @@ before_build:
     - cd build
     - cmake --version
     - cmake .. -G "Visual Studio 16 2019" -A x64
-
-build_script:
     - mingw32-make
 
