@@ -21,26 +21,13 @@ test_script:
 before_deploy:
   # Generate artifacts for release
   - cargo build --release --verbose
-  - ps: ci\before_deploy.ps1
-
-deploy:
-  description: 'Automatically deployed release'
-  artifact: /.*\.zip/
-  # Here's how:
-  # - Go to 'https://github.com/settings/tokens/new' and generate a Token with only the
-  # `public_repo` scope enabled
-  # - Then go to 'https://ci.appveyor.com/tools/encrypt' and enter the newly generated token.
-  # - Enter the "encrypted value" below
-  # auth_token:
-  #   secure: 3sIKHRJcGFtNYmb2Axjq3SlfBh0DG8kqZzqhiVauj6cpEubuC7Fhq2jZ9UieLFIO
-  # provider: GitHub
-  # on:
-  #   RUST_VERSION: stable
-  #   appveyor_repo_tag: true
-
-cache:
-  - C:\Users\appveyor\.cargo\registry
-  - target
+  - mkdir staging
+  # TODO update this part to copy the artifacts that make sense for your project
+  - copy target\release\cryptyrust_cli.exe staging
+  - cd staging
+    # release zipfile will look like 'rust-everywhere-v1.2.3-x86_64-pc-windows-msvc'
+  - 7z a ../%CRATE_NAME%-%APPVEYOR_REPO_TAG_NAME%-%TARGET%.zip *
+  - appveyor PushArtifact ../%CRATE_NAME%-%APPVEYOR_REPO_TAG_NAME%-%TARGET%.zip
 
 notifications:
   - provider: Email
