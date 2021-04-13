@@ -18,7 +18,7 @@ test_script:
   - cargo test --target %TARGET% --verbose
   - cargo run --target %TARGET% -- --help
 
-after_build:
+after_test:
   # Generate artifacts for release
   - cargo build --release --verbose
   - mkdir staging
@@ -28,3 +28,8 @@ after_build:
     # release zipfile will look like 'rust-everywhere-v1.2.3-x86_64-pc-windows-msvc'
   - 7z a ../%CRATE_NAME%-%APPVEYOR_REPO_TAG_NAME%-%TARGET%.zip *
   - appveyor PushArtifact ../%CRATE_NAME%-%APPVEYOR_REPO_TAG_NAME%-%TARGET%.zip
+  
+  artifacts:
+  - path: staging\cryptyrust_cli.exe
+    name: rustup-init
+    
