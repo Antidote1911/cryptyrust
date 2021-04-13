@@ -29,7 +29,7 @@ after_test:
   - 7z a ../%CRATE_NAME%-%APPVEYOR_REPO_TAG_NAME%-%TARGET%.zip *
   - appveyor PushArtifact ../%CRATE_NAME%-%APPVEYOR_REPO_TAG_NAME%-%TARGET%.zip
   
-  artifacts:
+artifacts:
   - path: staging\cryptyrust_cli.exe
     name: rustup-init
-    
+
