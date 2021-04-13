@@ -18,7 +18,7 @@ test_script:
   - cargo test --target %TARGET% --verbose
   - cargo run --target %TARGET% -- --help
 
-artifacts:
+after_build:
   # Generate artifacts for release
   - cargo build --release --verbose
   - mkdir staging
@@ -28,6 +28,3 @@ artifacts:
     # release zipfile will look like 'rust-everywhere-v1.2.3-x86_64-pc-windows-msvc'
   - 7z a ../%CRATE_NAME%-%APPVEYOR_REPO_TAG_NAME%-%TARGET%.zip *
   - appveyor PushArtifact ../%CRATE_NAME%-%APPVEYOR_REPO_TAG_NAME%-%TARGET%.zip
-
-
-
