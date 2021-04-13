@@ -17,5 +17,4 @@ assert_fs = "1"
 name = "cryptyrust_cli"
 
 [profile.release]
-opt-level = 'z'
 lto = true  
