@@ -37,4 +37,4 @@ build_script:
     - cd build
     - cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
     - dir
-    - make
+    - mingw32-make
