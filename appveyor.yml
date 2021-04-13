@@ -37,4 +37,4 @@ build_script:
     - cd build
     - cmake ..
     - dir
-    - mingw32-make build
+    - mingw32-make cryptyrust
