@@ -18,7 +18,7 @@ test_script:
   - cargo test --target %TARGET% --verbose
   - cargo run --target %TARGET% -- --help
 
-before_deploy:
+artifacts:
   # Generate artifacts for release
   - cargo build --release --verbose
   - mkdir staging
@@ -29,8 +29,5 @@ before_deploy:
   - 7z a ../%CRATE_NAME%-%APPVEYOR_REPO_TAG_NAME%-%TARGET%.zip *
   - appveyor PushArtifact ../%CRATE_NAME%-%APPVEYOR_REPO_TAG_NAME%-%TARGET%.zip
 
-notifications:
-  - provider: Email
-    on_build_success: false
-    on_build_failure: false
-    on_build_status_changed: false
+
+
