@@ -35,4 +35,4 @@ build_script:
     - cd gui
     - mkdir build
     - cd build
-    - cmake .. && make
+    - cmake .. && mingw32-make
