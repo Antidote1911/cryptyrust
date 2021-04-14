@@ -32,10 +32,12 @@ build_script:
     - echo %APPVEYOR_BUILD_WORKER_IMAGE%
     - cargo test
     - cargo build --release
+    - cd target
     - dir
-    - cd gui
-    - mkdir build
-    - cd build
-    - cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
-    - dir
-    - mingw32-make
+    # - dir
+    # - cd gui
+    # - mkdir build
+    # - cd build
+    # - cmake -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release ..
+    # - dir
+    # - mingw32-make
