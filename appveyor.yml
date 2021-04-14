@@ -33,6 +33,7 @@ build_script:
     - cargo test
     - cargo build --release
     - cd target
+    - cd release
     - dir
     # - dir
     # - cd gui
