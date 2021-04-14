@@ -21,6 +21,7 @@ environment:
 install:
     - set QTDIR=C:\Qt\6.0.1\msvc2019_64
     - set PATH=%PATH%;%QTDIR%\bin
+    - call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvarsall.bat" amd64
     - appveyor DownloadFile https://win.rustup.rs/ -FileName rustup-init.exe
     - rustup-init.exe -y --default-host %TARGET%
     - set PATH=%PATH%;C:\cargo\bin
@@ -34,6 +35,8 @@ build_script:
     - cargo build --release
     - dir
     - cd gui
-    - qmake -makefile CMakeLists.txt
+    - mkdir build
+    - cd build
+    - cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ..
     - dir
     - nmake
