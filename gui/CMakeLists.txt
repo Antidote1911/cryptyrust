@@ -42,8 +42,8 @@ else()
 endif()
 
 if (WIN32)
-    target_link_libraries(cryptyrust PRIVATE Qt${QT_VERSION_MAJOR}::Widgets dl)
     target_link_libraries(${CMAKE_CURRENT_SOURCE_DIR}/../target/release/cryptyrust_adapter)
+    target_link_libraries(cryptyrust PRIVATE Qt${QT_VERSION_MAJOR}::Widgets dl)    
 endif (WIN32)
 
 if (UNIX)
