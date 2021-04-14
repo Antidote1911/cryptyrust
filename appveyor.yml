@@ -34,8 +34,6 @@ build_script:
     - cargo build --release
     - dir
     - cd gui
-    - mkdir build
-    - cd build
-    - cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ..
+    - qmake
     - dir
     - nmake
