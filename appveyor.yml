@@ -50,6 +50,6 @@ build_script:
     - xcopy %APPVEYOR_BUILD_FOLDER%\gui\build\cryptyrust.exe %APPVEYOR_BUILD_FOLDER%\cryptyrust_win_x64\
     - windeployqt cryptyrust.exe
     
-    artifacts:
+artifacts:
     - path: cryptyrust_win_x64
       type: zip
