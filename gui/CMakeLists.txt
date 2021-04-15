@@ -26,7 +26,7 @@ set(PROJECT_SOURCES
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
-    qt_add_executable(cryptyrust
+    qt_add_executable(GuiApplication WIN32 cryptyrust
         ${PROJECT_SOURCES}
     )
 else()
