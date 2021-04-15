@@ -40,3 +40,12 @@ build_script:
     - cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ..
     - dir
     - nmake
+    - cd %APPVEYOR_BUILD_FOLDER%
+    - dir
+    - mkdir cryptyrust_win_x64
+    - cd cryptyrust_win_x64
+    - xcopy %APPVEYOR_BUILD_FOLDER%\target\release\cryptyrust_cli %APPVEYOR_BUILD_FOLDER%\cryptyrust_win_x64\
+    - xcopy %APPVEYOR_BUILD_FOLDER%\LICENSE %APPVEYOR_BUILD_FOLDER%\cryptyrust_win_x64\
+    - xcopy %APPVEYOR_BUILD_FOLDER%\LICENSE %APPVEYOR_BUILD_FOLDER%\cryptyrust_win_x64\
+    - xcopy %APPVEYOR_BUILD_FOLDER%\gui\build\cryptyrust.exe %APPVEYOR_BUILD_FOLDER%\cryptyrust_win_x64\
+    - windeployqt cryptyrust.exe
