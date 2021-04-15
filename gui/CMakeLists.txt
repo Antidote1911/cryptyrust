@@ -26,7 +26,7 @@ set(PROJECT_SOURCES
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
-    qt_add_executable(cryptyrust
+    qt_add_executable(cryptyrust WIN32
         ${PROJECT_SOURCES}
     )
 else()
@@ -43,7 +43,6 @@ endif()
 
 if (WIN32)
     target_link_libraries(cryptyrust PRIVATE Qt${QT_VERSION_MAJOR}::Widgets advapi32 user32 ws2_32 userenv ${CMAKE_CURRENT_SOURCE_DIR}/../target/release/cryptyrust_adapter.lib)
-    ADD_EXECUTABLE( cryptyrust WIN32)
 endif (WIN32)
 
 if (UNIX)
