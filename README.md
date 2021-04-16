@@ -4,11 +4,11 @@
 
 
 # Cryptyrust
-**Simple cross-platform cli and gui file encryption.**
+**Simple cross-platform cli and gui file encryption.**<br/>
+Latest Windows release is [here](https://github.com/Antidote1911/cryptyrust/releases/latest).
 
 ## Usage:
-**Data Loss Disclaimer:** if you lose or forget your password, **your data cannot be recovered!** Use a password manager or another secure form of backup.
-
+**Data Loss Disclaimer:** if you lose or forget your password, **your data cannot be recovered!** Use a password manager or another secure form of backup.<br/>
 With gui, Just drop a file onto the window, set a password, and choose where to save it. To decrypt, drop the encrypted file on the window, enter the password, and choose the output location.
 
 Exemples With CLI :
