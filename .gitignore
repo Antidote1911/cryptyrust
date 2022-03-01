@@ -40,6 +40,9 @@ gui/uic_wrapper.bat
 ## Ignore JetBrain folder
 .idea
 
+## Ignore rust build folder
+target
+
 # User-specific files
 *.rsuser
 *.suo

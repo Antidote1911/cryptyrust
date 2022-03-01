@@ -1,24 +1,30 @@
 mod constants;
-mod legacy;
 mod os_interface;
 pub use os_interface::*;
 
-use sodiumoxide::crypto::pwhash::argon2id13;
-use sodiumoxide::crypto::secretstream::xchacha20poly1305::{Header, Key};
-use sodiumoxide::crypto::secretstream::{Stream, Tag, ABYTES, HEADERBYTES, KEYBYTES};
+use argon2::{
+    password_hash::{
+        rand_core::{OsRng, RngCore},
+        PasswordHasher, SaltString
+    },
+    Argon2, Algorithm, ParamsBuilder, Version,
+};
+use scrypt;
+use crypto_secretstream::*;
 use std::io::prelude::*;
 use std::{error, fmt};
 
 const CHUNKSIZE: usize = 1024 * 512;
 const SIGNATURE: [u8; 4] = [0xC1, 0x0A, 0x6B, 0xED];
+const LEGACY_SIGNATURE: [u8; 4] = [0xC1, 0x0A, 0x4B, 0xED];
+const SALTBYTES: usize = 16;
+const LEGACY_SALTBYTES: usize = 32;
+const KEYBYTES: usize = 32;
+const ABYTES: usize = 17;
 
 #[derive(Debug)]
 pub struct CoreError {
     message: String,
-}
-
-pub fn get_version() -> &'static str {
-    constants::APP_VERSION
 }
 
 impl CoreError {
@@ -37,6 +43,10 @@ impl fmt::Display for CoreError {
 
 impl error::Error for CoreError {}
 
+pub const fn get_version() -> &'static str {
+    constants::APP_VERSION
+}
+
 pub fn encrypt<I: Read, O: Write>(
     input: &mut I,
     output: &mut O,
@@ -44,44 +54,32 @@ pub fn encrypt<I: Read, O: Write>(
     ui: &Box<dyn Ui>,
     filesize: Option<usize>,
 ) -> Result<(), Box<dyn error::Error>> {
-    let mut buffer = vec![0; CHUNKSIZE];
     let mut total_bytes_read = 0;
 
     // write file signature
     output.write_all(&SIGNATURE)?;
 
-    let salt = argon2id13::gen_salt();
-    output.write_all(&salt.0)?;
+    let mut salt_bytes = [0; SALTBYTES];
+    OsRng.fill_bytes(&mut salt_bytes);
+    output.write_all(&salt_bytes)?;
+    let salt = SaltString::b64_encode(&salt_bytes).map_err(|e| e.to_string())?;
+    let key = get_argon2_key(password, salt)?;
+    let (header, mut stream) = PushStream::init(&mut rand_core::OsRng, &key);
+    output.write_all(header.as_ref())?;
 
-    let mut key = [0u8; KEYBYTES];
-    argon2id13::derive_key(
-        &mut key,
-        password.as_bytes(),
-        &salt,
-        argon2id13::OPSLIMIT_INTERACTIVE,
-        argon2id13::MEMLIMIT_INTERACTIVE,
-    )
-    .unwrap();
-    let key = Key(key);
-    let (mut stream, header) =
-        Stream::init_push(&key).map_err(|_| CoreError::new("init_push failed"))?;
-    output.write_all(&header.0)?;
     let mut eof = false;
     while !eof {
-        let res = maybe_fill_buffer(input, &mut buffer)?;
+        let res = read_up_to(input, CHUNKSIZE)?;
         eof = res.0;
-        let bytes_read = res.1;
-        total_bytes_read += bytes_read;
+        let mut buffer = res.1;
+        total_bytes_read += buffer.len();
         let tag = if eof { Tag::Final } else { Tag::Message };
         if let Some(size) = filesize {
             let percentage = (((total_bytes_read as f32) / (size as f32)) * 100.) as i32;
             ui.output(percentage);
         }
-        output.write_all(
-            &stream
-                .push(&buffer[..bytes_read], None, tag)
-                .map_err(|_| CoreError::new("Encrypting file failed"))?,
-        )?;
+        stream.push(&mut buffer, &[], tag).map_err(|e| e.to_string())?;
+        output.write_all(&buffer)?;
     }
 
     Ok(())
@@ -94,64 +92,104 @@ pub fn decrypt<I: Read, O: Write>(
     ui: &Box<dyn Ui>,
     filesize: Option<usize>,
 ) -> Result<(), Box<dyn error::Error>> {
+
     // make sure file is at least prefix + salt + header
     if let Some(size) = filesize {
-        if size <= argon2id13::SALTBYTES + HEADERBYTES + SIGNATURE.len() {
-            return Err(CoreError::new("File not big enough to have been encrypted").into());
+        if !(size >= SALTBYTES + Header::BYTES + SIGNATURE.len()) {
+            return Err(CoreError::new("File not big enough to have been encrypted"))?;
         }
     }
     let mut total_bytes_read = 0;
 
-    let mut salt = [0u8; argon2id13::SALTBYTES];
-    input.read_exact(&mut salt)?;
-    let salt = argon2id13::Salt(salt);
+    let mut salt = [0u8; SALTBYTES];
+    let mut legacy_salt = [0u8; LEGACY_SALTBYTES];
+    let mut first_four = [0u8; 4];
+    input.read_exact(&mut first_four)?;
+    match first_four {
+        crate::SIGNATURE => input.read_exact(&mut salt)?,
+        crate::LEGACY_SIGNATURE => input.read_exact(&mut legacy_salt)?,
+        _ => {
+            // if signature was not present, and we're treating this as a cloaker 1.0 file because of the
+            // .cloaker extension or because -d was used from CLI, then use those bytes for the salt.
+            legacy_salt[..4].copy_from_slice(&first_four);
+            input.read_exact(&mut legacy_salt[4..])?;
+        },
+    }
+    let salt = SaltString::b64_encode(&salt).map_err(|e| e.to_string())?;
+    let legacy_salt = SaltString::b64_encode(&legacy_salt).map_err(|e| e.to_string())?;
 
-    let mut header = [0u8; HEADERBYTES];
+    let mut header = [0u8; Header::BYTES];
     input.read_exact(&mut header)?;
-    let header = Header(header);
+    let header = Header::from(header);
+    let key = match first_four {
+        crate::SIGNATURE => get_argon2_key(password, salt)?,
+        _ => get_scrypt_key(password, legacy_salt)?,
+    };
+    let mut stream = PullStream::init(header, &key);
 
-    let mut key = [0u8; KEYBYTES];
-    argon2id13::derive_key(
-        &mut key,
-        password.as_bytes(),
-        &salt,
-        argon2id13::OPSLIMIT_INTERACTIVE,
-        argon2id13::MEMLIMIT_INTERACTIVE,
-    )
-    .map_err(|_| CoreError::new("Deriving key failed"))?;
-    let key = Key(key);
-
-    let mut buffer = vec![0u8; CHUNKSIZE + ABYTES];
-    let mut stream =
-        Stream::init_pull(&header, &key).map_err(|_| CoreError::new("init_pull failed"))?;
-    while stream.is_not_finalized() {
-        let (_eof, bytes_read) = maybe_fill_buffer(input, &mut buffer)?;
-        total_bytes_read += bytes_read;
-        let (decrypted, _tag) = stream
-            .pull(&buffer[..bytes_read], None)
-            .map_err(|_| CoreError::new("Incorrect password"))?;
+    let mut tag = Tag::Message;
+    while tag != Tag::Final {
+        let (_eof, mut buffer) = read_up_to(input, CHUNKSIZE + ABYTES)?;
+        total_bytes_read += buffer.len();
+        tag = match stream.pull(&mut buffer, &[]) {
+            Ok(tag) => tag,
+            Err(_) => return Err("Error: Incorrect password".to_string().into())
+        };
         if let Some(size) = filesize {
             let percentage = (((total_bytes_read as f32) / (size as f32)) * 100.) as i32;
             ui.output(percentage);
         }
-        output.write_all(&decrypted)?;
+        output.write_all(&buffer)?;
     }
     ui.output(100);
     Ok(())
 }
 
-// returns Ok(true, bytes_read) if EOF, and Ok(false, bytes_read) if buffer was filled without EOF
-fn maybe_fill_buffer<R: Read>(
+// returns Ok(true, buffer) if EOF, and Ok(false, buffer) if buffer was filled without EOF
+fn read_up_to<R: Read>(
     reader: &mut R,
-    buffer: &mut Vec<u8>,
-) -> std::io::Result<(bool, usize)> {
+    limit: usize,
+) -> std::io::Result<(bool, Vec<u8>)> {
     let mut bytes_read = 0;
-    while bytes_read < buffer.len() {
+    let mut buffer = vec![0u8; limit];
+    while bytes_read < limit {
         match reader.read(&mut buffer[bytes_read..]) {
-            Ok(x) if x == 0 => return Ok((true, bytes_read)), // EOF
+            Ok(x) if x == 0 => { // EOF
+                buffer.truncate(bytes_read);
+                return Ok((true, buffer))
+            },
             Ok(x) => bytes_read += x,
             Err(e) => return Err(e),
         };
     }
-    Ok((false, bytes_read))
+    buffer.truncate(bytes_read);
+    Ok((false, buffer))
+}
+
+fn get_argon2_key(password: &str, salt: SaltString) -> Result<Key, Box <dyn error::Error>> {
+    let mut pb = ParamsBuilder::new();
+    pb.m_cost(0x10000).map_err(|e| e.to_string())?;
+    pb.t_cost(2).map_err(|e| e.to_string())?;
+    let params = pb.params().map_err(|e| e.to_string())?;
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let key = argon2.hash_password(password.as_bytes(), &salt).map_err(|e| e.to_string())?;
+    let key_hash = key.hash.ok_or_else(|| "\nno hash in key")?;
+    let key_bytes = key_hash.as_bytes();
+    let mut key_array = [0u8; KEYBYTES];
+    for i in 0..key_array.len() {
+        key_array[i] = key_bytes[i];
+    }
+    Ok(Key::from(key_array))
+}
+
+fn get_scrypt_key(password: &str, salt: SaltString) -> Result<Key, Box <dyn error::Error>> {
+    let params = scrypt::Params::new(14, 8, 1).unwrap();
+    let key = scrypt::Scrypt.hash_password_customized(password.as_bytes(), None, None, params, &salt)?;
+    let key_hash = key.hash.ok_or_else(|| "\nno hash in key")?;
+    let key_bytes = key_hash.as_bytes();
+    let mut key_array = [0u8; KEYBYTES];
+    for i in 0..key_array.len() {
+        key_array[i] = key_bytes[i];
+    }
+    Ok(Key::from(key_array))
 }

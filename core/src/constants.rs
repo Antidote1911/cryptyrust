@@ -1,4 +1,4 @@
 #![allow(dead_code)]
 
-pub const APP_NAME: &str = "Rustycrypt";
-pub const APP_VERSION: &str = "1.0.0";
+pub const APP_NAME: &str = env!("CARGO_PKG_NAME");
+pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
