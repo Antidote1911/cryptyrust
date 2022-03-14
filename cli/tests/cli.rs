@@ -43,6 +43,4 @@ fn encrypt_and_decrypt() {
     temp.close().unwrap();
 
     assert_eq!(original_bytes, decrypted_bytes);
-
-
 }

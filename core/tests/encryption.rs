@@ -86,7 +86,7 @@ mod tests {
         );
         assert!(cryptyrust_core::main_routine(&c).is_ok());
 
-        fs::remove_file("./result2".to_string()).expect("could not remove file");
+        fs::remove_file("./result2").expect("could not remove file");
         Ok(())
     }
 }

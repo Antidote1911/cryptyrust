@@ -1,15 +1,21 @@
 use cryptyrust_core::*;
 
-use clap::{Command, Arg, ArgGroup, crate_version, crate_description, crate_name};
+use clap::{crate_description, crate_name, crate_version, Arg, ArgGroup, Command};
+use const_format::concatcp;
 use std::env;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::process::exit;
-use const_format::concatcp;
 
 const FILE_EXTENSION: &str = ".crypty";
 
-const VERSIONS: &str = concatcp!("version: \"", crate_version!(), "\", Core is: \"", get_version(),"\"");
+const VERSIONS: &str = concatcp!(
+    "version: \"",
+    crate_version!(),
+    "\", Core is: \"",
+    get_version(),
+    "\""
+);
 
 const AUTHOR: &str = "
 Author : Fabrice Corraire
@@ -163,7 +169,7 @@ fn do_it() -> Result<(Option<String>, Mode), Box<dyn Error>> {
             .to_string();
         let p = Path::new(&pw_file);
         std::fs::read_to_string(p)
-            .map_err(|e| format!("could not read password file: {}", e.to_string()))?
+            .map_err(|e| format!("could not read password file: {}", e))?
     } else {
         get_password(&mode)
     };
@@ -190,7 +196,7 @@ fn get_password(mode: &Mode) -> String {
             let password = rpassword::prompt_password_stdout(
                 "Password (minimum 12 characters, longer is better): ",
             )
-                .expect("could not get password from user");
+            .expect("could not get password from user");
             if password.len() < 12 {
                 println!("Error: password must be at least 12 characters. Exiting.");
                 exit(12);
@@ -213,7 +219,7 @@ fn generate_output_path(
     input: Option<&str>,
     output: Option<&str>,
 ) -> Result<PathBuf, String> {
-    if output.is_some() {
+    if let Some(..) = output {
         // if output flag was specified,
         let p = PathBuf::from(output.unwrap());
         if p.exists() && p.is_dir() {
@@ -259,7 +265,7 @@ fn generate_default_filename(
         }
     };
     path.push(f);
-    find_filename(path).ok_or("could not generate filename".to_string())
+    find_filename(path).ok_or_else(|| "could not generate filename".to_string())
 }
 
 fn find_filename(_path: PathBuf) -> Option<PathBuf> {
@@ -295,7 +301,7 @@ fn prepend(prefix: &str, p: &str) -> Option<String> {
         parent,
         Path::new(&format!("{}{}", prefix, file.to_string_lossy())),
     ]
-        .iter()
-        .collect();
+    .iter()
+    .collect();
     Some(path.to_string_lossy().to_string())
 }

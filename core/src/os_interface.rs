@@ -66,7 +66,7 @@ pub fn main_routine(c: &Config) -> Result<(), Box<dyn Error>> {
                             format!("{}. Could not delete output file: {}.", e, e2)
                         })?;
                     }
-                    Err(e)?
+                    return Err(e)
                 }
             };
         }
@@ -79,7 +79,7 @@ pub fn main_routine(c: &Config) -> Result<(), Box<dyn Error>> {
                             format!("{}. Could not delete output file: {}.", e, e2)
                         })?;
                     }
-                    Err(e)?
+                    return Err(e)
                 }
             };
         }
