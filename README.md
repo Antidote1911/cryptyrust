@@ -1,4 +1,4 @@
-[![Build Status](https://www.travis-ci.com/Antidote1911/cryptyrust.svg?branch=master)](https://www.travis-ci.com/Antidote1911/cryptyrust)
+[![Build Status](https://app.travis-ci.com/Antidote1911/cryptyrust.svg?branch=master)](https://app.travis-ci.com/Antidote1911/cryptyrust)
 [![Build status](https://ci.appveyor.com/api/projects/status/3yludsnwm5a1jnsa/branch/master?svg=true)](https://ci.appveyor.com/project/Antidote1911/cryptyrust/branch/master)
 [![License: GPL3](https://img.shields.io/badge/License-GPL3-green.svg)](https://opensource.org/licenses/GPL-3.0)
 
