@@ -11,7 +11,7 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-find_package(QT NAMES Qt6 COMPONENTS Widgets REQUIRED)
+find_package(QT NAMES Qt6 Qt5 COMPONENTS Widgets REQUIRED)
 find_package(Qt${QT_VERSION_MAJOR} COMPONENTS Widgets REQUIRED)
 
 set(PROJECT_SOURCES
@@ -42,11 +42,11 @@ else()
 endif()
 
 if (WIN32)
-    target_link_libraries(cryptyrust PRIVATE Qt6::Widgets advapi32 user32 ws2_32 userenv ${CMAKE_CURRENT_SOURCE_DIR}/../target/release/cryptyrust_adapter.lib)
+    target_link_libraries(cryptyrust PRIVATE Qt${QT_VERSION_MAJOR}::Widgets advapi32 user32 ws2_32 userenv ${CMAKE_CURRENT_SOURCE_DIR}/../target/release/cryptyrust_adapter.lib)
 endif (WIN32)
 
 if (UNIX)
-    target_link_libraries(cryptyrust PRIVATE Qt6::Widgets dl ${CMAKE_CURRENT_SOURCE_DIR}/../target/release/libcryptyrust_adapter.a)
+    target_link_libraries(cryptyrust PRIVATE Qt${QT_VERSION_MAJOR}::Widgets dl ${CMAKE_CURRENT_SOURCE_DIR}/../target/release/libcryptyrust_adapter.a)
 endif (UNIX)
 
 
