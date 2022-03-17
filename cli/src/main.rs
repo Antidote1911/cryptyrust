@@ -194,11 +194,11 @@ fn get_password(mode: &Mode) -> String {
     match mode {
         Mode::Encrypt => {
             let password = rpassword::prompt_password_stdout(
-                "Password (minimum 12 characters, longer is better): ",
+                "Password (minimum 8 characters, longer is better): ",
             )
             .expect("could not get password from user");
-            if password.len() < 12 {
-                println!("Error: password must be at least 12 characters. Exiting.");
+            if password.len() < 8 {
+                println!("Error: password must be at least 8 characters. Exiting.");
                 exit(12);
             }
             let verified_password = rpassword::prompt_password_stdout("Confirm password: ")
