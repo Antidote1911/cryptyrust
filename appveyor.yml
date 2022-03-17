@@ -55,7 +55,7 @@ deploy:
         release: v1.0.0
         description: 'Beta release of cryptyrust v${APPVEYOR_BUILD_VERSION}'
         draft: false
-        prerelease: false
+        prerelease: true
         auth_token:
           secure: B8rHvdfQ6FSb7Vz11u1+yDaNqWC7ZmhWzLMsqqAZfx0skUxBeQhOA/M/76atx7E4
         artifact: cryptyrust_win_x64.zip
