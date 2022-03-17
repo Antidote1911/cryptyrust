@@ -5,6 +5,8 @@ branches:
     - master
 
 skip_tags: true
+init:
+  - ps: '$env:DD_TAG=''DD-''+(get-date -format "yyyyMMddHH")'
 
 image: Visual Studio 2019
 
@@ -53,3 +55,12 @@ build_script:
 artifacts:
     - path: cryptyrust_win_x64
       type: zip
+      
+deploy:
+      - provider: GitHub
+        tag: $(DD_TAG)
+        release: latest
+        auth_token:
+          secure: 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
+        artifact: cryptyrust_win_x64
+        force_update: true
