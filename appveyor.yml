@@ -53,7 +53,7 @@ artifacts:
 deploy:
       - provider: GitHub
         release: v1.0.0
-        description: 'Beta release of cryptyrust v$(appveyor_build_version)'
+        description: 'Beta release of cryptyrust v${APPVEYOR_BUILD_VERSION}'
         draft: false
         prerelease: true
         auth_token:
