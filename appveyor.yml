@@ -12,9 +12,7 @@ environment:
     CARGO_HOME: "c:\\cargo"
     RUSTUP_HOME: "c:\\rustup"
     
-#You can disable builds on new tags through UI (General tab of project settings) or in appveyor.yml:
-# skip tag building since v2.7.0 will trigger an infinite loop
-skip_tags: true
+
 
 install:
     - set QTDIR=C:\Qt\6.2.2\msvc2019_64
