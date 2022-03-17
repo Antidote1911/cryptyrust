@@ -6,7 +6,7 @@
 
 # Cryptyrust
 **Simple cross-platform gui and cli file encryption.**<br/>
-Latest release is [here](https://github.com/Antidote1911/cryptyrust/releases/latest).
+Latest Windows x64 release is [here](https://github.com/Antidote1911/cryptyrust/releases/latest).
 
 ## Usage:
 **Data Loss Disclaimer:** if you lose or forget your password, **your data cannot be recovered!** Use a password manager or another secure form of backup.<br/>
@@ -23,15 +23,15 @@ Exemples :
 ```
 
 ## Specifications:
-Cryptyrust uses the `pwhash` and `secretstream` APIs of [libsodium](https://doc.libsodium.org/) via [sodiumoxide](https://github.com/sodiumoxide/sodiumoxide).
-(Password hash use Argon2id and encryption algorithm is xchacha20poly1305.)
+Cryptyrust uses the `argon2` and `crypto_secretstream` crates of [Rust Crypto](https://github.com/RustCrypto).
+(Password hash use Argon2id variant and encryption algorithm is xchacha20poly1305.)
 
 ## Linux Compilation instructions:
 In the root folder run `cargo build --release`
 Executable will be at `target/release/cryptyrust_cli'.
 
 ## Windows Compilation instructions:
-On Windows, cryptyrust need MSVC compiler for libsodium compilation.
+
 - Install [Visual Studio Build Tools 2019](https://visualstudio.microsoft.com/fr/thank-you-downloading-visual-studio/?sku=BuildTools&rel=16)  
 - Make sure rust use msvc. Run in command line :
 `rustup default stable-x86_64-pc-windows-msvc`

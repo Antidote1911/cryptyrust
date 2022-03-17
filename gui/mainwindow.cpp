@@ -26,10 +26,10 @@ void MainWindow::slot_menuAbout() {
 
     QMessageBox::about(this, "About Cryptyrust",
                        "<h2>Cryptyrust</h2>"
-                       "Version: " + QString::fromStdString(Str) +
+                       "Core Version: " + QString::fromStdString(Str) +
                        "<p>Copyright (C) Antidote1911 2021</p>"
                        "<p>Licensed under the GNU General Public License v3.0</p>"
-                       "<p><a href=\"https://github.com/Antidote1911/arsenic\">https://github.com/Antidote1911/arsenic</a></p>"
+                       "<p><a href=\"https://github.com/Antidote1911/cryptyrust\">Cryptyrust GitHub</a></p>"
                        "<p><b>WARNING:</b> if you encrypt a file and lose or forget the password, the file cannot be recovered.</p>");
 }
 

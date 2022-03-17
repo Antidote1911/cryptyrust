@@ -24,7 +24,7 @@ Mode getMode(QString filename)
         bytes |= (unsigned int)fs.get();
     }
     fs.close();
-    if (bytes == FILE_SIGNATURE || bytes == LEGACY_FILE_SIGNATURE) {
+    if (bytes == FILE_SIGNATURE) {
         return Decrypt;
     }
     return Encrypt;

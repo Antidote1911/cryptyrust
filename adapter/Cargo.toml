@@ -1,6 +1,6 @@
 [package]
 name = "cryptyrust_adapter"
-version = "1.0.0"
+version = "1.0.1"
 authors = ["Antidote1911 <antidote1911@gmail.com>"]
 edition = "2021"
 

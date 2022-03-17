@@ -26,7 +26,6 @@ enum Outcome {
 
 static const char* FILE_EXTENSION     = ".crypty";
 static uint32_t FILE_SIGNATURE        = 0xC10A6BED;
-static uint32_t LEGACY_FILE_SIGNATURE = 0xC10A4BED;
 
 Mode getMode(QString filename);
 QString saveDialog(QString inFile, Mode mode);

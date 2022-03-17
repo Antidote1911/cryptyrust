@@ -1,4 +1,4 @@
-version: 1.0.0.{build}
+version: $(appveyor_repo_tag_name)
 
 image: Visual Studio 2019
 
