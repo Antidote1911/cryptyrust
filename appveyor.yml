@@ -11,7 +11,6 @@ environment:
     CRATE_NAME: cryptyrust
     CARGO_HOME: "c:\\cargo"
     RUSTUP_HOME: "c:\\rustup"
-    
 
 
 install:
@@ -53,7 +52,7 @@ artifacts:
 # deploy tagged releases to Github releases
 deploy:
       - provider: GitHub
-        description: 'Release of cryptyrust v${APPVEYOR_BUILD_VERSION}'
+        description: 'Release of cryptyrust v${appveyor_repo_tag}'
         draft: false
         prerelease: false
         auth_token:
