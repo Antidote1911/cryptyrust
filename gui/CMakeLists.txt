@@ -42,7 +42,7 @@ else()
 endif()
 
 if (WIN32)
-    target_link_libraries(cryptyrust PRIVATE Qt${QT_VERSION_MAJOR}::Widgets advapi32 user32 ws2_32 rust-feature-lib Bcrypt userenv ${CMAKE_CURRENT_SOURCE_DIR}/../target/release/cryptyrust_adapter.lib)
+    target_link_libraries(cryptyrust PRIVATE Qt${QT_VERSION_MAJOR}::Widgets advapi32 user32 ws2_32 userenv ${CMAKE_CURRENT_SOURCE_DIR}/../target/release/cryptyrust_adapter.lib)
 endif (WIN32)
 
 if (UNIX)
