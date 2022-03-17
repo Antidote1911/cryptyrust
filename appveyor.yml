@@ -52,7 +52,8 @@ artifacts:
 # deploy tagged releases to Github releases
 deploy:
       - provider: GitHub
-        description: 'Release of cryptyrust v${appveyor_repo_tag}'
+        release: $(appveyor_repo_tag_name)
+        description: 'Release of cryptyrust v${appveyor_repo_tag_name}'
         draft: false
         prerelease: false
         do_rel: true
