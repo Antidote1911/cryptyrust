@@ -5,7 +5,7 @@
 
 
 # Cryptyrust
-**Simple cross-platform gui and cli file encryption.**<br/>
+**Simple cross-platform cli file encryption.**<br/>
 Latest release is [here](https://github.com/Antidote1911/cryptyrust/releases/latest).
 
 ## Usage:
