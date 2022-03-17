@@ -19,7 +19,7 @@ environment:
     RUSTUP_HOME: "c:\\rustup"
 
 install:
-    - set QTDIR=C:\Qt\6.0.1\msvc2019_64
+    - set QTDIR=C:\Qt\6.2.2\msvc2019_64
     - set PATH=%PATH%;%QTDIR%\bin
     - call "C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\Build\vcvarsall.bat" amd64
     - appveyor DownloadFile https://win.rustup.rs/ -FileName rustup-init.exe
