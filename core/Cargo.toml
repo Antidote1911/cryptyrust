@@ -2,7 +2,7 @@
 name = "cryptyrust_core"
 version = "1.0.1"
 authors = ["Antidote1911 <antidote1911@gmail.com>"]
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 argon2 = "0.3.1"

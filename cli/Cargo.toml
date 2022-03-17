@@ -4,7 +4,7 @@ version = "1.0.0"
 authors = ["Antidote1911 <antidote1911@gmail.com>"]
 description = "A simple but strong file encryption utility in Rust."
 repository = "https://github.com/Antidote1911/cryptyrust/"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 cryptyrust_core = { path = "../core" }
