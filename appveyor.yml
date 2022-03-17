@@ -69,4 +69,5 @@ deploy:
         force_update: true
         branch: master                # release from master branch only
         APPVEYOR_REPO_TAG: false # deploy on tag push only
+        do_rel: true
 
