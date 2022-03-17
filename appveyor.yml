@@ -60,6 +60,7 @@ deploy:
           secure: B8rHvdfQ6FSb7Vz11u1+yDaNqWC7ZmhWzLMsqqAZfx0skUxBeQhOA/M/76atx7E4
         artifact: cryptyrust_win_x64.zip
         branch: master                # release from master branch only
+        force_update: true
         APPVEYOR_REPO_TAG: false # deploy on tag push only
         do_rel: true
 
