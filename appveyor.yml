@@ -61,6 +61,7 @@ deploy:
         tag: $(DD_TAG)
         release: latest
         auth_token:
-          secure: 6+AwUidZO7k254JllHy0qJJg5qgZLgdtxzHbiJy+XfdastyfD1ZXNT72WtdhZ0hu
+          secure: B8rHvdfQ6FSb7Vz11u1+yDaNqWC7ZmhWzLMsqqAZfx0skUxBeQhOA/M/76atx7E4
         artifact: cryptyrust_win_x64
         force_update: true
+        APPVEYOR_REPO_TAG: true
