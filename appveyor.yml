@@ -61,6 +61,6 @@ deploy:
         tag: $(DD_TAG)
         release: latest
         auth_token:
-          secure: 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
+          secure: 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
         artifact: cryptyrust_win_x64
         force_update: true
