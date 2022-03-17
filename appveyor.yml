@@ -27,7 +27,7 @@ install:
 build_script:
     - echo %arch%
     - echo %APPVEYOR_BUILD_WORKER_IMAGE%
-    - cargo test
+    # - cargo test
     - cargo build --release
     - dir
     - cd gui
