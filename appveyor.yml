@@ -42,7 +42,7 @@ build_script:
     - xcopy %APPVEYOR_BUILD_FOLDER%\target\release\cryptyrust_cli.exe %APPVEYOR_BUILD_FOLDER%\cryptyrust_win_x64\
     - xcopy %APPVEYOR_BUILD_FOLDER%\LICENSE %APPVEYOR_BUILD_FOLDER%\cryptyrust_win_x64\
     - xcopy %APPVEYOR_BUILD_FOLDER%\README.md %APPVEYOR_BUILD_FOLDER%\cryptyrust_win_x64\
-    - xcopy %APPVEYOR_BUILD_FOLDER%\gui\build\cryptyrust.exe %APPVEYOR_BUILD_FOLDER%\cryptyrust_win_x64\
+    - xcopy %APPVEYOR_BUILD_FOLDER%\qtgui\build\cryptyrust.exe %APPVEYOR_BUILD_FOLDER%\cryptyrust_win_x64\
     - windeployqt --release --no-translations --no-opengl-sw cryptyrust.exe
     
 artifacts:
