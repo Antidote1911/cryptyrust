@@ -1,0 +1,13 @@
+[package]
+name = "cryptyrustorbtk"
+version = "0.1.0"
+authors = ["Antidote1911 <antidote1911@gmail.com>"]
+edition = "2021"
+license = "MIT"
+
+[features]
+debug = ["orbtk/debug"]
+
+[dependencies]
+orbtk = { git = "https://github.com/redox-os/orbtk.git", branch= "develop" }
+cryptyrust_core = { path = "../core" }

@@ -16,7 +16,6 @@ class MainWindow : public QMainWindow {
     void updateProgress(int);
 
   private slots:
-
     void slot_menuAbout();
     void slot_Open();
 
