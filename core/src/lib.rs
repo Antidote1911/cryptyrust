@@ -1,6 +1,8 @@
 mod constants;
 mod os_interface;
 pub use os_interface::*;
+use std::time::Instant;
+use serde::{Deserialize, Serialize};
 
 use argon2::{
     password_hash::{
@@ -45,6 +47,14 @@ pub const fn get_version() -> &'static str {
     constants::APP_VERSION
 }
 
+//Struct to store ciphertext, nonce and ciphertext.len() in file and to read it from file
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct Headerfile {
+    signature: [u8; 4],
+    salt: [u8; SALTBYTES],
+    streamheader: [u8; Header::BYTES],
+}
+
 pub fn encrypt<I: Read, O: Write>(
     input: &mut I,
     output: &mut O,
@@ -54,18 +64,25 @@ pub fn encrypt<I: Read, O: Write>(
 ) -> Result<(), Box<dyn error::Error>> {
     let mut total_bytes_read = 0;
 
-    // write file signature
-    output.write_all(&SIGNATURE)?;
 
     let mut salt_bytes = [0; SALTBYTES];
     OsRng.fill_bytes(&mut salt_bytes);
-    output.write_all(&salt_bytes)?;
     let salt = SaltString::b64_encode(&salt_bytes).map_err(|e| e.to_string())?;
-    let key = get_argon2_key(password, salt)?;
+    let key = get_argon2_key(password, salt.clone(),KEYBYTES)?;
     let (header, mut stream) = PushStream::init(&mut rand_core::OsRng, &key);
-    output.write_all(header.as_ref())?;
+
+    let headerfile = Headerfile {
+        signature: SIGNATURE,
+        salt: salt_bytes,
+        streamheader: *header.as_ref()
+    };
+    let encoded: Vec<u8> = bincode::serialize(&headerfile)?;
+    output.write_all(encoded.as_ref())?;
+    //println!("{}",encoded.len());
+
 
     let mut eof = false;
+    let start = Instant::now();
     while !eof {
         let res = read_up_to(input, CHUNKSIZE)?;
         eof = res.0;
@@ -76,11 +93,12 @@ pub fn encrypt<I: Read, O: Write>(
             let percentage = (((total_bytes_read as f32) / (size as f32)) * 100.) as i32;
             ui.output(percentage);
         }
-        stream
-            .push(&mut buffer, &[], tag)
-            .map_err(|e| e.to_string())?;
+        stream.push(&mut buffer, &[], tag).map_err(|e| e.to_string())?;
         output.write_all(&buffer)?;
     }
+    let duration = start.elapsed();
+    let executiontime = duration.as_secs_f64().to_string();
+    println!("{}",executiontime);
 
     Ok(())
 }
@@ -92,29 +110,29 @@ pub fn decrypt<I: Read, O: Write>(
     ui: &Box<dyn Ui>,
     filesize: Option<usize>,
 ) -> Result<(), Box<dyn error::Error>> {
-    // make sure file is at least prefix + salt + header
-    if let Some(size) = filesize {
-        if size < SALTBYTES + Header::BYTES + SIGNATURE.len() {
-            return Err(CoreError::new("File not big enough to have been encrypted").into());
-        }
+
+    //deserialize input read from file
+    let mut rawheader = [0u8; 44];
+    input.read_exact(&mut rawheader)?;
+
+    let decoded: Headerfile = bincode::deserialize(&rawheader).map_err(|e| e.to_string())?;
+    let (signature, salt, streamheader) =
+        (decoded.signature, decoded.salt, decoded.streamheader);
+
+    match signature {
+        SIGNATURE => println!("Good signature from Cryptyrust {}",constants::APP_VERSION),
+        _=> return Err("Incorrect signature. Not a Cryptyrust encrypted file".to_string().into()),
     }
-    let mut total_bytes_read = 0;
 
-    let mut salt = [0u8; SALTBYTES];
-    let mut first_four = [0u8; 4];
-    input.read_exact(&mut first_four)?;
+    let saltstring = SaltString::b64_encode(&salt).map_err(|e| e.to_string())?;
 
-    input.read_exact(&mut salt)?;
+    //let header = Header::from(Header::try_from(&*streamheader).unwrap());
+    let header = Header::try_from(streamheader.as_ref()).unwrap();
 
-    let salt = SaltString::b64_encode(&salt).map_err(|e| e.to_string())?;
-
-    let mut header = [0u8; Header::BYTES];
-    input.read_exact(&mut header)?;
-    let header = Header::from(header);
-
-    let key = get_argon2_key(password, salt)?;
+    let key = get_argon2_key(password, saltstring,KEYBYTES)?;
     let mut stream = PullStream::init(header, &key);
 
+    let mut total_bytes_read = 0;
     let mut tag = Tag::Message;
     while tag != Tag::Final {
         let (_eof, mut buffer) = read_up_to(input, CHUNKSIZE + ABYTES)?;
@@ -152,20 +170,16 @@ fn read_up_to<R: Read>(reader: &mut R, limit: usize) -> std::io::Result<(bool, V
     Ok((false, buffer))
 }
 
-fn get_argon2_key(password: &str, salt: SaltString) -> Result<Key, Box<dyn error::Error>> {
+fn get_argon2_key(password: &str, salt: SaltString, keylen: usize) -> Result<Key, Box<dyn error::Error>> {
     let mut pb = ParamsBuilder::new();
     pb.m_cost(0x10000).map_err(|e| e.to_string())?;
     pb.t_cost(2).map_err(|e| e.to_string())?;
+    pb.output_len(keylen).map_err(|e| e.to_string())?;
     let params = pb.params().map_err(|e| e.to_string())?;
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
     let key = argon2
         .hash_password(password.as_bytes(), &salt)
         .map_err(|e| e.to_string())?;
     let key_hash = key.hash.ok_or("\nno hash in key")?;
-    let key_bytes = key_hash.as_bytes();
-    let mut key_array = [0u8; KEYBYTES];
-    for i in 0..key_array.len() {
-        key_array[i] = key_bytes[i];
-    }
-    Ok(Key::from(key_array))
+    Ok(Key::try_from(key_hash.as_ref()).unwrap())
 }
