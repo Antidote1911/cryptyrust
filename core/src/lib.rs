@@ -28,7 +28,7 @@ pub struct CoreError {
 }
 
 impl CoreError {
-    fn new(msg: &str) -> Self {
+    fn _new(msg: &str) -> Self {
         CoreError {
             message: msg.to_string(),
         }
@@ -64,7 +64,6 @@ pub fn encrypt<I: Read, O: Write>(
 ) -> Result<(), Box<dyn error::Error>> {
     let mut total_bytes_read = 0;
 
-
     let mut salt_bytes = [0; SALTBYTES];
     OsRng.fill_bytes(&mut salt_bytes);
     let salt = SaltString::b64_encode(&salt_bytes).map_err(|e| e.to_string())?;
@@ -79,7 +78,6 @@ pub fn encrypt<I: Read, O: Write>(
     let encoded: Vec<u8> = bincode::serialize(&headerfile)?;
     output.write_all(encoded.as_ref())?;
     //println!("{}",encoded.len());
-
 
     let mut eof = false;
     let start = Instant::now();

@@ -1,27 +1,13 @@
 use cryptyrust_core::*;
+mod cli;
+use cli::{Cli};
+use clap::{Args, Command, crate_name};
 
-use clap::{crate_description, crate_name, crate_version, Arg, ArgGroup, Command};
-use const_format::concatcp;
-use std::env;
-use std::error::Error;
-use std::path::{Path, PathBuf};
-use std::process::exit;
+use std::{
+    path::{Path, PathBuf},
+    env, error::Error, process::exit};
 
 const FILE_EXTENSION: &str = ".crypty";
-
-const VERSIONS: &str = concatcp!(
-    "version: \"",
-    crate_version!(),
-    "\", Core is: \"",
-    get_version(),
-    "\""
-);
-
-const AUTHOR: &str = "
-Author : Fabrice Corraire
-Email  : antidote1911@gmail.com
-Github : https://github.com/Antidote1911/
-";
 
 struct ProgressUpdater {
     mode: Mode,
@@ -41,7 +27,7 @@ impl Ui for ProgressUpdater {
 }
 
 fn main() {
-    match do_it() {
+    match run() {
         Ok((output_filename, mode)) => {
             let m = match mode {
                 Mode::Encrypt => "encrypted",
@@ -55,66 +41,14 @@ fn main() {
     };
 }
 
-fn do_it() -> Result<(Option<String>, Mode), Box<dyn Error>> {
-    let matches = Command::new(crate_name!())
-        .version(VERSIONS)
-        .author(AUTHOR)
-        .about(crate_description!())
-        .arg(Arg::new("encrypt")
-            .short('e')
-            .long("encrypt")
-            .value_name("FILE_TO_ENCRYPT")
-            .help("Specifies the file to encrypt.")
-            .takes_value(true))
-        .arg(Arg::new("decrypt")
-            .short('d')
-            .long("decrypt")
-            .value_name("FILE_TO_DECRYPT")
-            .help("Specifies the file to decrypt.")
-            .takes_value(true))
-        .arg(Arg::new("encrypt_stdin")
-            .short('E')
-            .long("encrypt-stdin")
-            .help("Encrypt from stdin instead of a file. If an output filename is not specified with -o, the default will be `./encrypted.cloaker`.")
-            .requires("password_flags"))
-        .arg(Arg::new("decrypt_stdin")
-            .short('D')
-            .long("decrypt-stdin")
-            .help("Decrypt from stdin instead of a file. If an output filename is not specified with -o, the default will be `./decrypted_stdin`.")
-            .requires("password_flags"))
-        .group(ArgGroup::new("mode")
-            .args(&["encrypt", "decrypt", "encrypt_stdin", "decrypt_stdin"])
-            .required(true))
-        .arg(Arg::new("output")
-            .short('o')
-            .long("output")
-            .value_name("PATH_TO_OUTPUT_FILE")
-            .help("Specifies a path or name for the output file. If the path to an existing directory is given, the input filename will be kept with the .cloaker extension added if encrypting or removed (if decrypting). Otherwise the file will be placed and named according to this parameter.")
-            .takes_value(true))
-        .arg(Arg::new("stdout")
-            .short('O')
-            .long("stdout")
-            .help("Encrypt or decrypt to stdout instead of to a file.")
-            .requires("password_flags"))
-        .group(ArgGroup::new("destination")
-            .args(&["output", "stdout"]))
-        .arg(Arg::new("password")
-            .short('p')
-            .long("password")
-            .value_name("PASSWORD")
-            .help("Optional, and not recommended due to the password appearing in shell history. Password for the file. This or the --password-file (-f) flag is required if using stdin and/or stdout.")
-            .takes_value(true))
-        .arg(Arg::new("password_file")
-            .short('f')
-            .long("password-file")
-            .value_name("PASSWORD_FILE")
-            .help("The password to encrypt/decrypt with will be read from a text file at the path provided. File should be valid UTF-8 and contain only the password with no newline. This or the --password (-p) flag is required if using stdin and/or stdout.")
-            .takes_value(true))
-        .group(ArgGroup::new("password_flags")
-            .args(&["password", "password_file"]))
-        .get_matches();
+fn run() -> Result<(Option<String>, Mode), Box<dyn Error>> {
+    let cli = Command::new(crate_name!());
+    // Augment built args with derived args
+    let cli = Cli::augment_args(cli);
+    let matches = cli.get_matches();
 
-    let mode = if matches.is_present("encrypt") || matches.is_present("encrypt_stdin") {
+
+    let mode = if matches.is_present("encrypt") || matches.is_present("encryptstdin") {
         Mode::Encrypt
     } else {
         Mode::Decrypt
@@ -162,9 +96,9 @@ fn do_it() -> Result<(Option<String>, Mode), Box<dyn Error>> {
             .value_of("password")
             .ok_or("couldn't get password value")?
             .to_string()
-    } else if matches.is_present("password_file") {
+    } else if matches.is_present("passwordfile") {
         let pw_file = matches
-            .value_of("password_file")
+            .value_of("passwordfile")
             .ok_or("could not get value of password file")?
             .to_string();
         let p = Path::new(&pw_file);
@@ -193,7 +127,7 @@ fn do_it() -> Result<(Option<String>, Mode), Box<dyn Error>> {
 fn get_password(mode: &Mode) -> String {
     match mode {
         Mode::Encrypt => {
-            let password = rpassword::prompt_password_stdout(
+            let password = rpassword::prompt_password(
                 "Password (minimum 8 characters, longer is better): ",
             )
             .expect("could not get password from user");
@@ -201,7 +135,7 @@ fn get_password(mode: &Mode) -> String {
                 println!("Error: password must be at least 8 characters. Exiting.");
                 exit(12);
             }
-            let verified_password = rpassword::prompt_password_stdout("Confirm password: ")
+            let verified_password = rpassword::prompt_password("Confirm password: ")
                 .expect("could not get password from user");
             if password != verified_password {
                 println!("Error: passwords do not match. Exiting.");
@@ -209,7 +143,7 @@ fn get_password(mode: &Mode) -> String {
             }
             password
         }
-        Mode::Decrypt => rpassword::prompt_password_stdout("Password: ")
+        Mode::Decrypt => rpassword::prompt_password("Password: ")
             .expect("could not get password from user"),
     }
 }

@@ -1,6 +1,6 @@
 [package]
 name = "cryptyrust_cli"
-version = "1.0.3"
+version = "1.0.4"
 authors = ["Antidote1911 <antidote1911@gmail.com>"]
 description = "A simple but strong file encryption utility in Rust."
 repository = "https://github.com/Antidote1911/cryptyrust/"
@@ -8,9 +8,8 @@ edition = "2021"
 
 [dependencies]
 cryptyrust_core = { path = "../core" }
-rpassword = "5.0.1"
-clap = { version = "3.1.3", features = ["cargo"] }
-const_format = "0.2.22"
+rpassword = "6.0.1"
+clap = { version = "3.1.9", features = ["derive","cargo"] }
 
 [dev-dependencies]
 assert_cmd = "2.0.4"
