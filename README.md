@@ -1,4 +1,3 @@
-[![Build Status](https://app.travis-ci.com/Antidote1911/cryptyrust.svg?branch=master)](https://app.travis-ci.com/Antidote1911/cryptyrust)
 [![Build status](https://ci.appveyor.com/api/projects/status/3yludsnwm5a1jnsa/branch/master?svg=true)](https://ci.appveyor.com/project/Antidote1911/cryptyrust/branch/master)
 [![License: GPL3](https://img.shields.io/badge/License-GPL3-green.svg)](https://opensource.org/licenses/GPL-3.0)
 
@@ -35,8 +34,3 @@ Executable will be at `target/release/cryptyrust_cli'.
 - Make sure rust use msvc. Run in command line :
 `rustup default stable-x86_64-pc-windows-msvc`
 - Build rust CLI App and core project : `cargo build --release`
-
-### Thanks to JetBrains for open source support
-
-<a href="https://www.jetbrains.com/"><img src="./jetbrains.png" alt="jetbrains" width="150"></a>
-<img src='https://www.gnu.org/graphics/gplv3-with-text-136x68.png'/>

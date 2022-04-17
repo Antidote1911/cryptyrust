@@ -58,7 +58,7 @@ deploy:
         prerelease: false
         do_rel: true
         auth_token:
-          secure: B8rHvdfQ6FSb7Vz11u1+yDaNqWC7ZmhWzLMsqqAZfx0skUxBeQhOA/M/76atx7E4
+          secure: +tfhnWlsWPfHXUdLqWA8LjT0q9toLiCuBZBUs+tRXLKTYOaxNpwZ/ezF25o8uvv+
         artifact: cryptyrust_win_x64.zip
         force_update: true
         on:
