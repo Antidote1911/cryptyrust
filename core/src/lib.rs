@@ -1,16 +1,13 @@
 mod constants;
 mod os_interface;
+mod keygen;
+use keygen::get_argon2_key;
+
 pub use os_interface::*;
 use std::time::Instant;
 use serde::{Deserialize, Serialize};
 
-use argon2::{
-    password_hash::{
-        rand_core::{OsRng, RngCore},
-        PasswordHasher, SaltString,
-    },
-    Algorithm, Argon2, ParamsBuilder, Version,
-};
+use argon2::{password_hash::{rand_core::{OsRng, RngCore}, SaltString}};
 
 use crypto_secretstream::*;
 use std::io::prelude::*;
@@ -47,7 +44,8 @@ pub const fn get_version() -> &'static str {
     constants::APP_VERSION
 }
 
-//Struct to store ciphertext, nonce and ciphertext.len() in file and to read it from file
+//Struct to store a file signature, the salt for password hashing (Argon2),
+// and the stream header (initial nonce)
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 struct Headerfile {
     signature: [u8; 4],
@@ -66,8 +64,8 @@ pub fn encrypt<I: Read, O: Write>(
 
     let mut salt_bytes = [0; SALTBYTES];
     OsRng.fill_bytes(&mut salt_bytes);
-    let salt = SaltString::b64_encode(&salt_bytes).map_err(|e| e.to_string())?;
-    let key = get_argon2_key(password, salt.clone(),KEYBYTES)?;
+    let saltstring = SaltString::b64_encode(&salt_bytes).map_err(|e| e.to_string())?;
+    let key = get_argon2_key(&password, &saltstring)?;
     let (header, mut stream) = PushStream::init(&mut rand_core::OsRng, &key);
 
     let headerfile = Headerfile {
@@ -124,10 +122,9 @@ pub fn decrypt<I: Read, O: Write>(
 
     let saltstring = SaltString::b64_encode(&salt).map_err(|e| e.to_string())?;
 
-    //let header = Header::from(Header::try_from(&*streamheader).unwrap());
     let header = Header::try_from(streamheader.as_ref()).unwrap();
 
-    let key = get_argon2_key(password, saltstring,KEYBYTES)?;
+    let key = get_argon2_key(&password, &saltstring)?;
     let mut stream = PullStream::init(header, &key);
 
     let mut total_bytes_read = 0;
@@ -168,16 +165,3 @@ fn read_up_to<R: Read>(reader: &mut R, limit: usize) -> std::io::Result<(bool, V
     Ok((false, buffer))
 }
 
-fn get_argon2_key(password: &str, salt: SaltString, keylen: usize) -> Result<Key, Box<dyn error::Error>> {
-    let mut pb = ParamsBuilder::new();
-    pb.m_cost(0x10000).map_err(|e| e.to_string())?;
-    pb.t_cost(2).map_err(|e| e.to_string())?;
-    pb.output_len(keylen).map_err(|e| e.to_string())?;
-    let params = pb.params().map_err(|e| e.to_string())?;
-    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let key = argon2
-        .hash_password(password.as_bytes(), &salt)
-        .map_err(|e| e.to_string())?;
-    let key_hash = key.hash.ok_or("\nno hash in key")?;
-    Ok(Key::try_from(key_hash.as_ref()).unwrap())
-}
