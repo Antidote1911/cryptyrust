@@ -1,6 +1,5 @@
 use std::error::Error;
-use std::fs::{remove_file, File};
-use std::io::prelude::*;
+use std::fs::remove_file;
 
 #[derive(Clone, Debug)]
 pub enum Mode {
@@ -40,25 +39,12 @@ impl Config {
 }
 
 pub fn main_routine(c: &Config) -> Result<(), Box<dyn Error>> {
-    let in_file = match &c.filename {
-        Some(s) => Some(File::open(s)?),
-        None => None,
-    };
-    let out_file = match &c.out_file {
-        Some(s) => Some(File::create(s)?),
-        None => None,
-    };
-    let filesize = if let Some(f) = &in_file {
-        Some(f.metadata()?.len() as usize)
-    } else {
-        None
-    };
+    let in_file = c.filename.clone().unwrap();
+    let out_file = c.out_file.clone().unwrap();
 
-    let mut input = file_or_stdin(in_file);
-    let mut output = file_or_stdout(out_file);
     match c.mode {
         Mode::Encrypt => {
-            match crate::encrypt(&mut input, &mut output, &c.password, &c.ui, filesize) {
+            match crate::encrypt(&in_file, &out_file, &c.password, &c.ui) {
                 Ok(()) => (),
                 Err(e) => {
                     if let Some(out_file) = &c.out_file {
@@ -66,12 +52,12 @@ pub fn main_routine(c: &Config) -> Result<(), Box<dyn Error>> {
                             format!("{}. Could not delete output file: {}.", e, e2)
                         })?;
                     }
-                    return Err(e)
+                    return Err(e);
                 }
             };
         }
         Mode::Decrypt => {
-            match crate::decrypt(&mut input, &mut output, &c.password, &c.ui, filesize) {
+            match crate::decrypt(&in_file, &out_file, &c.password, &c.ui) {
                 Ok(()) => (),
                 Err(e) => {
                     if let Some(out_file) = &c.out_file {
@@ -79,24 +65,10 @@ pub fn main_routine(c: &Config) -> Result<(), Box<dyn Error>> {
                             format!("{}. Could not delete output file: {}.", e, e2)
                         })?;
                     }
-                    return Err(e)
+                    return Err(e);
                 }
             };
         }
     }
     Ok(())
-}
-
-fn file_or_stdin(reader: Option<File>) -> Box<dyn Read> {
-    match reader {
-        Some(file) => Box::new(file),
-        None => Box::new(std::io::stdin()),
-    }
-}
-
-fn file_or_stdout(writer: Option<File>) -> Box<dyn Write> {
-    match writer {
-        Some(file) => Box::new(file),
-        None => Box::new(std::io::stdout()),
-    }
 }

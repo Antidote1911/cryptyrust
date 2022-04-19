@@ -1,28 +1,28 @@
 use cryptyrust_core::*;
 mod cli;
-use cli::{Cli};
-use clap::{Args, Command, crate_name};
+use clap::{crate_name, Args, Command};
+use cli::Cli;
 
 use std::{
+    env,
+    error::Error,
     path::{Path, PathBuf},
-    env, error::Error, process::exit};
+    process::exit,
+};
 
 const FILE_EXTENSION: &str = ".crypty";
 
 struct ProgressUpdater {
     mode: Mode,
-    stdout: bool,
 }
 
 impl Ui for ProgressUpdater {
     fn output(&self, percentage: i32) {
-        if !self.stdout {
-            let s = match self.mode {
-                Mode::Encrypt => "Encrypting",
-                Mode::Decrypt => "Decrypting",
-            };
-            print!("\r{}: {}%", s, percentage);
-        }
+        let s = match self.mode {
+            Mode::Encrypt => "Encrypting",
+            Mode::Decrypt => "Decrypting",
+        };
+        print!("\r{}: {}%", s, percentage);
     }
 }
 
@@ -47,8 +47,7 @@ fn run() -> Result<(Option<String>, Mode), Box<dyn Error>> {
     let cli = Cli::augment_args(cli);
     let matches = cli.get_matches();
 
-
-    let mode = if matches.is_present("encrypt") || matches.is_present("encryptstdin") {
+    let mode = if matches.is_present("encrypt") {
         Mode::Encrypt
     } else {
         Mode::Decrypt
@@ -79,15 +78,10 @@ fn run() -> Result<(Option<String>, Mode), Box<dyn Error>> {
         None // using stdin
     };
 
-    let output_path = if !matches.is_present("stdout") {
-        let s = generate_output_path(&mode, filename, matches.value_of("output"))?
-            .to_str()
-            .ok_or("could not convert output path to string")?
-            .to_string();
-        Some(s)
-    } else {
-        None
-    };
+    let output_path = generate_output_path(&mode, filename, matches.value_of("output"))?
+        .to_str()
+        .ok_or("could not convert output path to string")?
+        .to_string();
 
     // get_password needs to only happen if using neither stdin nor stdout: using requires() in clap
     // password prompting is affected by both stdin and stdout, whereas other printing is affected only by stdout
@@ -102,24 +96,20 @@ fn run() -> Result<(Option<String>, Mode), Box<dyn Error>> {
             .ok_or("could not get value of password file")?
             .to_string();
         let p = Path::new(&pw_file);
-        std::fs::read_to_string(p)
-            .map_err(|e| format!("could not read password file: {}", e))?
+        std::fs::read_to_string(p).map_err(|e| format!("could not read password file: {}", e))?
     } else {
         get_password(&mode)
     };
-    let ui = Box::new(ProgressUpdater {
-        mode: mode.clone(),
-        stdout: matches.is_present("stdout"),
-    });
+    let ui = Box::new(ProgressUpdater { mode: mode.clone() });
     let config = Config::new(
         &mode,
         password,
         filename.map(|f| f.to_string()),
-        output_path.clone(),
+        Option::from(output_path.clone()),
         ui,
     );
     match main_routine(&config) {
-        Ok(()) => Ok((output_path, mode)),
+        Ok(()) => Ok((Option::from(output_path), mode)),
         Err(e) => Err(e),
     }
 }
@@ -127,10 +117,9 @@ fn run() -> Result<(Option<String>, Mode), Box<dyn Error>> {
 fn get_password(mode: &Mode) -> String {
     match mode {
         Mode::Encrypt => {
-            let password = rpassword::prompt_password(
-                "Password (minimum 8 characters, longer is better): ",
-            )
-            .expect("could not get password from user");
+            let password =
+                rpassword::prompt_password("Password (minimum 8 characters, longer is better): ")
+                    .expect("could not get password from user");
             if password.len() < 8 {
                 println!("Error: password must be at least 8 characters. Exiting.");
                 exit(12);
@@ -143,8 +132,9 @@ fn get_password(mode: &Mode) -> String {
             }
             password
         }
-        Mode::Decrypt => rpassword::prompt_password("Password: ")
-            .expect("could not get password from user"),
+        Mode::Decrypt => {
+            rpassword::prompt_password("Password: ").expect("could not get password from user")
+        }
     }
 }
 
