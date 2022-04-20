@@ -17,3 +17,4 @@ assert_fs = "1.0.7"
 
 [[bin]]
 name = "cryptyrust_cli"
+

@@ -4,7 +4,7 @@ mod keygen;
 use keygen::get_argon2_key;
 
 pub use os_interface::*;
-use std::time::Instant;
+
 use serde::{Deserialize, Serialize};
 
 use argon2::{password_hash::{rand_core::{OsRng, RngCore}, SaltString}};
@@ -78,7 +78,6 @@ pub fn encrypt<I: Read, O: Write>(
     //println!("{}",encoded.len());
 
     let mut eof = false;
-    let start = Instant::now();
     while !eof {
         let res = read_up_to(input, CHUNKSIZE)?;
         eof = res.0;
@@ -92,9 +91,6 @@ pub fn encrypt<I: Read, O: Write>(
         stream.push(&mut buffer, &[], tag).map_err(|e| e.to_string())?;
         output.write_all(&buffer)?;
     }
-    let duration = start.elapsed();
-    let executiontime = duration.as_secs_f64().to_string();
-    println!("{}",executiontime);
 
     Ok(())
 }
@@ -115,9 +111,8 @@ pub fn decrypt<I: Read, O: Write>(
     let (signature, salt, streamheader) =
         (decoded.signature, decoded.salt, decoded.streamheader);
 
-    match signature {
-        SIGNATURE => println!("Good signature from Cryptyrust {}",constants::APP_VERSION),
-        _=> return Err("Incorrect signature. Not a Cryptyrust encrypted file".to_string().into()),
+    if signature != SIGNATURE{
+        return Err("Incorrect signature. Not a Cryptyrust encrypted file.".to_string().into());
     }
 
     let saltstring = SaltString::b64_encode(&salt).map_err(|e| e.to_string())?;

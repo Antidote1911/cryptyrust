@@ -55,14 +55,14 @@ pub extern "C" fn get_version2() -> *mut c_char {
 pub unsafe extern "C" fn start(ptr: *mut Config) -> *mut c_char {
     let config = { &mut *ptr };
     let msg = match main_routine(config) {
-        Ok(_) => match config.mode {
+        Ok(duration) => match config.mode {
             Mode::Encrypt => format!(
-                "Success! File {} has been encrypted.",
-                config.out_file.as_ref().unwrap()
+                "Success! File {} has been encrypted in {} s",
+                config.out_file.as_ref().unwrap(),duration
             ),
             Mode::Decrypt => format!(
-                "Success! File {} has been decrypted.",
-                config.out_file.as_ref().unwrap()
+                "Success! File {} has been decrypted in {} s",
+                config.out_file.as_ref().unwrap(),duration
             ),
         },
         Err(e) => format!("{}", e),

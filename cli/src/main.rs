@@ -2,7 +2,6 @@ use cryptyrust_core::*;
 mod cli;
 use cli::{Cli};
 use clap::{Args, Command, crate_name};
-
 use std::{
     path::{Path, PathBuf},
     env, error::Error, process::exit};
@@ -28,20 +27,20 @@ impl Ui for ProgressUpdater {
 
 fn main() {
     match run() {
-        Ok((output_filename, mode)) => {
+        Ok((output_filename, mode, time)) => {
             let m = match mode {
                 Mode::Encrypt => "encrypted",
                 Mode::Decrypt => "decrypted",
             };
             if let Some(name) = output_filename {
-                println!("\nSuccess! {} has been {}.", name, m);
+                println!("\nSuccess! {} has been {} in {} s", name, m, time);
             }
         }
         Err(e) => eprintln!("\n{}", e),
     };
 }
 
-fn run() -> Result<(Option<String>, Mode), Box<dyn Error>> {
+fn run() -> Result<(Option<String>, Mode, f64), Box<dyn Error>> {
     let cli = Command::new(crate_name!());
     // Augment built args with derived args
     let cli = Cli::augment_args(cli);
@@ -111,6 +110,7 @@ fn run() -> Result<(Option<String>, Mode), Box<dyn Error>> {
         mode: mode.clone(),
         stdout: matches.is_present("stdout"),
     });
+
     let config = Config::new(
         &mode,
         password,
@@ -118,8 +118,11 @@ fn run() -> Result<(Option<String>, Mode), Box<dyn Error>> {
         output_path.clone(),
         ui,
     );
+
+
+
     match main_routine(&config) {
-        Ok(()) => Ok((output_path, mode)),
+        Ok(duration) =>{ Ok((output_path, mode,duration))},
         Err(e) => Err(e),
     }
 }

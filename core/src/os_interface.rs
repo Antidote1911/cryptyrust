@@ -1,6 +1,7 @@
 use std::error::Error;
 use std::fs::{remove_file, File};
 use std::io::prelude::*;
+use std::time::Instant;
 
 #[derive(Clone, Debug)]
 pub enum Mode {
@@ -39,7 +40,7 @@ impl Config {
     }
 }
 
-pub fn main_routine(c: &Config) -> Result<(), Box<dyn Error>> {
+pub fn main_routine(c: &Config) -> Result<f64, Box<dyn Error>> {
     let in_file = match &c.filename {
         Some(s) => Some(File::open(s)?),
         None => None,
@@ -56,6 +57,7 @@ pub fn main_routine(c: &Config) -> Result<(), Box<dyn Error>> {
 
     let mut input = file_or_stdin(in_file);
     let mut output = file_or_stdout(out_file);
+    let start = Instant::now();
     match c.mode {
         Mode::Encrypt => {
             match crate::encrypt(&mut input, &mut output, &c.password, &c.ui, filesize) {
@@ -84,7 +86,8 @@ pub fn main_routine(c: &Config) -> Result<(), Box<dyn Error>> {
             };
         }
     }
-    Ok(())
+    let duration = start.elapsed().as_secs_f64();
+    Ok(duration)
 }
 
 fn file_or_stdin(reader: Option<File>) -> Box<dyn Read> {

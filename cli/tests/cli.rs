@@ -17,7 +17,7 @@ fn encrypt_and_decrypt() {
     let encrypted_path = encrypted.path();
     let decrypted_path = decrypted.path();
 
-    let mut encrypt_cmd = Command::cargo_bin("cryptyrust_cli").unwrap();
+    let mut encrypt_cmd = Command::cargo_bin("cryptyrust_cli").expect("Invalid command");
     encrypt_cmd
         .arg("-e")
         .arg(original)
@@ -27,7 +27,7 @@ fn encrypt_and_decrypt() {
 
     encrypt_cmd.assert().success();
 
-    let mut decrypt_cmd = Command::cargo_bin("cryptyrust_cli").unwrap();
+    let mut decrypt_cmd = Command::cargo_bin("cryptyrust_cli").expect("Invalid command");
     decrypt_cmd
         .arg("-d")
         .arg(encrypted_path)

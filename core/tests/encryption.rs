@@ -15,7 +15,7 @@ mod tests {
     #[test]
     fn wrong_password_decryption_test() -> Result<(), Box<dyn std::error::Error>> {
         // generate random file, write to temp location
-        let mut random_data = vec![0; (1 << 10) * 100]; // 100KiB
+        let mut random_data = vec![0; (1 << 10) * 1000]; // 100KiB
         thread_rng().fill_bytes(&mut random_data);
         let mut temp_file = std::env::temp_dir();
         temp_file.push("rand.txt");

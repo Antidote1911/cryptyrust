@@ -7,7 +7,9 @@
 Latest Windows x64 release is [here](https://github.com/Antidote1911/cryptyrust/releases/latest).
 
 ## Usage:
-**Data Loss Disclaimer:** if you lose or forget your password, **your data cannot be recovered!** Use a password manager or another secure form of backup.<br/>
+**Data Loss Disclaimer:**  
+if you lose or forget your password, **your data cannot be recovered !**  
+Use a password manager or another secure form of backup.<br/>
 
 Exemples :
 ```bash
@@ -18,6 +20,10 @@ Exemples :
 # Or you can enter an output file name with -o flag if you want:
   ./cryptyrust_cli -e test.mp4 -p 12345678 -o myEncryptedFile
   ./cryptyrust_cli -d myEncryptedFile -p 12345678 -o myDecryptedFile
+  
+# Or use stdout
+./cryptyrust_cli -e test.mp4 -p 12345678 -O > test.enc
+./cryptyrust_cli -d test.enc -p 12345678 -O > test.mp4
 ```
 
 ## Specifications:
