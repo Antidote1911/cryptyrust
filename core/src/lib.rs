@@ -1,162 +1,78 @@
+mod errors;
+mod crypto;
 mod constants;
-mod os_interface;
 mod keygen;
-use keygen::get_argon2_key;
+mod config;
 
-pub use os_interface::*;
+pub use crate::errors::CoreErr;
+pub use crate::constants::*;
+pub use crate::config::*;
+pub use crate::crypto::*;
 
-use serde::{Deserialize, Serialize};
-
-use argon2::{password_hash::{rand_core::{OsRng, RngCore}, SaltString}};
-
-use crypto_secretstream::*;
+use std::fs::{remove_file, File};
 use std::io::prelude::*;
-use std::{error, fmt};
-
-const CHUNKSIZE: usize = 1024 * 512;
-const SIGNATURE: [u8; 4] = [0xC1, 0x0A, 0x6B, 0xED];
-const SALTBYTES: usize = 16;
-const KEYBYTES: usize = 32;
-const ABYTES: usize = 17;
-
-#[derive(Debug)]
-pub struct CoreError {
-    message: String,
-}
-
-impl CoreError {
-    fn _new(msg: &str) -> Self {
-        CoreError {
-            message: msg.to_string(),
-        }
-    }
-}
-
-impl fmt::Display for CoreError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Error: {}", self.message)
-    }
-}
-
-impl error::Error for CoreError {}
+use std::time::Instant;
 
 pub const fn get_version() -> &'static str {
-    constants::APP_VERSION
+    APP_VERSION
 }
 
-//Struct to store a file signature, the salt for password hashing (Argon2),
-// and the stream header (initial nonce)
-#[derive(Serialize, Deserialize, PartialEq, Debug)]
-struct Headerfile {
-    signature: [u8; 4],
-    salt: [u8; SALTBYTES],
-    streamheader: [u8; Header::BYTES],
-}
-
-pub fn encrypt<I: Read, O: Write>(
-    input: &mut I,
-    output: &mut O,
-    password: &str,
-    ui: &Box<dyn Ui>,
-    filesize: Option<usize>,
-) -> Result<(), Box<dyn error::Error>> {
-    let mut total_bytes_read = 0;
-
-    let mut salt_bytes = [0; SALTBYTES];
-    OsRng.fill_bytes(&mut salt_bytes);
-    let saltstring = SaltString::b64_encode(&salt_bytes).map_err(|e| e.to_string())?;
-    let key = get_argon2_key(&password, &saltstring)?;
-    let (header, mut stream) = PushStream::init(&mut rand_core::OsRng, &key);
-
-    let headerfile = Headerfile {
-        signature: SIGNATURE,
-        salt: salt_bytes,
-        streamheader: *header.as_ref()
+pub fn main_routine(c: &Config) -> Result<f64, CoreErr> {
+    let in_file = match &c.filename {
+        Some(s) => Some(File::open(s)?),
+        None => None,
     };
-    let encoded: Vec<u8> = bincode::serialize(&headerfile)?;
-    output.write_all(encoded.as_ref())?;
-    //println!("{}",encoded.len());
+    let out_file = match &c.out_file {
+        Some(s) => Some(File::create(s)?),
+        None => None,
+    };
+    let filesize = if let Some(f) = &in_file {
+        Some(f.metadata()?.len() as usize)
+    } else {
+        None
+    };
 
-    let mut eof = false;
-    while !eof {
-        let res = read_up_to(input, CHUNKSIZE)?;
-        eof = res.0;
-        let mut buffer = res.1;
-        total_bytes_read += buffer.len();
-        let tag = if eof { Tag::Final } else { Tag::Message };
-        if let Some(size) = filesize {
-            let percentage = (((total_bytes_read as f32) / (size as f32)) * 100.) as i32;
-            ui.output(percentage);
+    let mut input = file_or_stdin(in_file);
+    let mut output = file_or_stdout(out_file);
+    let start = Instant::now();
+    match c.mode {
+        Mode::Encrypt => {
+            match crate::encrypt(&mut input, &mut output,&c.password, &c.ui, filesize) {
+                Ok(()) => (),
+                Err(e) => {
+                    if let Some(out_file) = &c.out_file {
+                        remove_file(&out_file).map_err( |e2|CoreErr::DeleteFail(e.to_string(),e2.to_string()))?;
+                    }
+                    return Err(errors::CoreErr::DecryptionError)
+                }
+            };
         }
-        stream.push(&mut buffer, &[], tag).map_err(|e| e.to_string())?;
-        output.write_all(&buffer)?;
-    }
-
-    Ok(())
-}
-
-pub fn decrypt<I: Read, O: Write>(
-    input: &mut I,
-    output: &mut O,
-    password: &str,
-    ui: &Box<dyn Ui>,
-    filesize: Option<usize>,
-) -> Result<(), Box<dyn error::Error>> {
-
-    //deserialize input read from file
-    let mut rawheader = [0u8; 44];
-    input.read_exact(&mut rawheader)?;
-
-    let decoded: Headerfile = bincode::deserialize(&rawheader).map_err(|e| e.to_string())?;
-    let (signature, salt, streamheader) =
-        (decoded.signature, decoded.salt, decoded.streamheader);
-
-    if signature != SIGNATURE{
-        return Err("Incorrect signature. Not a Cryptyrust encrypted file.".to_string().into());
-    }
-
-    let saltstring = SaltString::b64_encode(&salt).map_err(|e| e.to_string())?;
-
-    let header = Header::try_from(streamheader.as_ref()).unwrap();
-
-    let key = get_argon2_key(&password, &saltstring)?;
-    let mut stream = PullStream::init(header, &key);
-
-    let mut total_bytes_read = 0;
-    let mut tag = Tag::Message;
-    while tag != Tag::Final {
-        let (_eof, mut buffer) = read_up_to(input, CHUNKSIZE + ABYTES)?;
-        total_bytes_read += buffer.len();
-        tag = match stream.pull(&mut buffer, &[]) {
-            Ok(tag) => tag,
-            Err(_) => return Err("Error: Incorrect password".to_string().into()),
-        };
-        if let Some(size) = filesize {
-            let percentage = (((total_bytes_read as f32) / (size as f32)) * 100.) as i32;
-            ui.output(percentage);
+        Mode::Decrypt => {
+            match crate::decrypt(&mut input, &mut output,&c.password, &c.ui, filesize) {
+                Ok(()) => (),
+                Err(e) => {
+                    if let Some(out_file) = &c.out_file {
+                        remove_file(&out_file).map_err( |e2|CoreErr::DeleteFail(e.to_string(),e2.to_string()))?;
+                    }
+                    return Err(e)
+                }
+            };
         }
-        output.write_all(&buffer)?;
     }
-    ui.output(100);
-    Ok(())
+    let duration = start.elapsed().as_secs_f64();
+    Ok(duration)
 }
 
-// returns Ok(true, buffer) if EOF, and Ok(false, buffer) if buffer was filled without EOF
-fn read_up_to<R: Read>(reader: &mut R, limit: usize) -> std::io::Result<(bool, Vec<u8>)> {
-    let mut bytes_read = 0;
-    let mut buffer = vec![0u8; limit];
-    while bytes_read < limit {
-        match reader.read(&mut buffer[bytes_read..]) {
-            Ok(x) if x == 0 => {
-                // EOF
-                buffer.truncate(bytes_read);
-                return Ok((true, buffer));
-            }
-            Ok(x) => bytes_read += x,
-            Err(e) => return Err(e),
-        };
+fn file_or_stdin(reader: Option<File>) -> Box<dyn Read> {
+    match reader {
+        Some(file) => Box::new(file),
+        None => Box::new(std::io::stdin()),
     }
-    buffer.truncate(bytes_read);
-    Ok((false, buffer))
 }
 
+fn file_or_stdout(writer: Option<File>) -> Box<dyn Write> {
+    match writer {
+        Some(file) => Box::new(file),
+        None => Box::new(std::io::stdout()),
+    }
+}

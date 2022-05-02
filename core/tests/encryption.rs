@@ -2,9 +2,7 @@ extern crate cryptyrust_core;
 
 #[cfg(test)]
 mod tests {
-    use rand::{thread_rng, RngCore};
     use std::fs;
-    use std::io::Write;
 
     struct ProgressUpdater {}
 
@@ -13,80 +11,42 @@ mod tests {
     }
 
     #[test]
-    fn wrong_password_decryption_test() -> Result<(), Box<dyn std::error::Error>> {
-        // generate random file, write to temp location
-        let mut random_data = vec![0; (1 << 10) * 1000]; // 100KiB
-        thread_rng().fill_bytes(&mut random_data);
-        let mut temp_file = std::env::temp_dir();
-        temp_file.push("rand.txt");
-        let mut file = std::fs::File::create(&temp_file)?;
-        file.write_all(&random_data)?;
+    fn compare_decrypted_to_original() -> Result<(), Box<dyn std::error::Error>> {
+        let source_file_path = "filetest.bin";
+        let dest_file_path = "filetest.bin.encrypted";
+        let password = "a very secure password!";
+        let decrypted_file_path = "filetest.bin.decrypted";
 
-        // encrypt file with 10-char password "mypassword"
-        let pw = "mypassword".to_string();
-        let in_file = temp_file.to_str().unwrap().to_string();
-        let mut out_path = std::env::temp_dir();
-        out_path.push("encrypted.txt");
-        let out_file = out_path.to_str().unwrap().to_string();
+        // encrypt filetest.bin to filetest.bin.encrypted
         let config = cryptyrust_core::Config::new(
             &cryptyrust_core::Mode::Encrypt,
-            pw,
-            Some(in_file),
-            Some(out_file.clone()),
+            password.to_string(),
+            Some(source_file_path.parse().unwrap()),
+            Some(dest_file_path.clone().parse().unwrap()),
             Box::new(ProgressUpdater {}),
         );
         cryptyrust_core::main_routine(&config)?;
+        assert!(cryptyrust_core::main_routine(&config).is_ok());
 
-        // decrypt with an invald password. Test be ok if decryption fail.
-        let pw2 = "wrongpassword".to_string();
-        let c = cryptyrust_core::Config::new(
-            &cryptyrust_core::Mode::Decrypt,
-            pw2,
-            Some(out_file),
-            Some("./result".to_string()),
-            Box::new(ProgressUpdater {}),
-        );
-        assert!(cryptyrust_core::main_routine(&c).is_err());
-        Ok(())
-    }
-
-    #[test]
-    fn good_password_decryption_test() -> Result<(), Box<dyn std::error::Error>> {
-        // generate random file, write to temp location
-        let mut random_data = vec![0; (1 << 10) * 100]; // 100KiB
-        thread_rng().fill_bytes(&mut random_data);
-        let mut temp_file = std::env::temp_dir();
-        temp_file.push("rand2.txt");
-        let mut file = std::fs::File::create(&temp_file)?;
-        file.write_all(&random_data)?;
-
-        // encrypt file with 12-char password
-        let pw = "mypassword".to_string();
-        let in_file = temp_file.to_str().unwrap().to_string();
-        let mut out_path = std::env::temp_dir();
-        out_path.push("encrypted2.txt");
-        let out_file = out_path.to_str().unwrap().to_string();
+        // decrypt filetest.bin.encrypted to filetest.bin.decrypted
         let config = cryptyrust_core::Config::new(
-            &cryptyrust_core::Mode::Encrypt,
-            pw,
-            Some(in_file),
-            Some(out_file.clone()),
+            &cryptyrust_core::Mode::Decrypt,
+            password.to_string(),
+            Some(dest_file_path.parse().unwrap()),
+            Some(decrypted_file_path.clone().parse().unwrap()),
             Box::new(ProgressUpdater {}),
         );
         cryptyrust_core::main_routine(&config)?;
+        assert!(cryptyrust_core::main_routine(&config).is_ok());
 
-        // decrypt with the correct password. Test be ok if decryption is ok.
-        let pw2 = "mypassword".to_string();
-        let c = cryptyrust_core::Config::new(
-            &cryptyrust_core::Mode::Decrypt,
-            pw2,
-            Some(out_file),
-            Some("./result2".to_string()),
-            Box::new(ProgressUpdater {}),
+        assert_eq!(
+            std::fs::read(source_file_path).unwrap(),
+            std::fs::read(decrypted_file_path).unwrap()
         );
-        assert!(cryptyrust_core::main_routine(&c).is_ok());
-
-        fs::remove_file("./result2").expect("could not remove file");
+        fs::remove_file(dest_file_path).expect("could not remove file");
+        fs::remove_file(decrypted_file_path).expect("could not remove file");
         Ok(())
     }
+
 }
+

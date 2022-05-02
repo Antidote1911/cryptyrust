@@ -119,11 +119,9 @@ fn run() -> Result<(Option<String>, Mode, f64), Box<dyn Error>> {
         ui,
     );
 
-
-
     match main_routine(&config) {
         Ok(duration) =>{ Ok((output_path, mode,duration))},
-        Err(e) => Err(e),
+        Err(e) => Err(Box::new(e)),
     }
 }
 
