@@ -4,6 +4,7 @@
 #include "QMainWindow"
 #include <QMessageBox>
 #include <QProgressBar>
+#include <QActionGroup>
 #include <QDebug>
 #include "adapter.h"
 #include "Config.h"
