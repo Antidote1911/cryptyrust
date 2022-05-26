@@ -68,3 +68,22 @@ Executable will be at `target/release/cryptyrust_cli'.
 - Make sure rust use msvc. Run in command line :
 `rustup default stable-x86_64-pc-windows-msvc`
 - Build rust CLI App and core project : `cargo build --release`
+
+## C++ GUI Compilation instructions:
+C++ GUI require Qt5 or Qt6 and Cryptyrust core build with `cargo build --release`.
+After building the Rust cli and core with `cargo build --release`, Open qtgui/CMakeLists.txt with your IDE and build it. If You use qt creator, you can open project cryptyrust.pro to build it.
+
+
+```bash
+# With Linux command-line, open a terminal in qtgui folder
+qmake cryptyrust.pro
+make
+```
+```bash
+# For Windows
+cd qtgui
+mkdir build
+cd build
+cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ..
+nmake
+```
