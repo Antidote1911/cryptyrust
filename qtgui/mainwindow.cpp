@@ -6,12 +6,17 @@
 #include <QProgressBar>
 #include <QDebug>
 #include "adapter.h"
+#include "Config.h"
+#include "skin/skin.h"
 
 MainWindow::MainWindow(QWidget *parent)
         : QMainWindow(parent),
           m_ui(std::make_unique<Ui::MainWindow>()) {
-    m_ui->setupUi(this);
-    m_ui->progBar->setVisible(false);
+          m_ui->setupUi(this);
+          m_ui->progBar->setVisible(false);
+          loadPreferences();
+          initViewMenu();
+          applyTheme();
 
     connect(m_ui->menu_About, &QAction::triggered, this, [=] { slot_menuAbout(); });
     connect(m_ui->menu_AboutQt, &QAction::triggered, this, [=] { QMessageBox::aboutQt(this); });
@@ -20,6 +25,97 @@ MainWindow::MainWindow(QWidget *parent)
 }
 
 MainWindow::~MainWindow() = default;
+
+void MainWindow::closeEvent(QCloseEvent *event)
+{
+    Q_UNUSED(event);
+    // save prefs before quitting
+    savePreferences();
+
+}
+
+void MainWindow::initViewMenu()
+{
+    setContextMenuPolicy(Qt::NoContextMenu);
+
+    m_ui->actionDark->setData("dark");
+    m_ui->actionLight->setData("classic");
+
+    auto themeActions = new QActionGroup(this);
+    themeActions->addAction(m_ui->actionDark);
+    themeActions->addAction(m_ui->actionLight);
+
+    auto theme = config()->get(Config::GUI_ApplicationTheme).toString();
+    for (auto action : themeActions->actions()) {
+        if (action->data() == theme) {
+            action->setChecked(true);
+            break;
+        }
+    }
+
+    connect(themeActions, &QActionGroup::triggered, this, [this](QAction *action) {
+        if (action->data() != config()->get(Config::GUI_ApplicationTheme)) {
+            config()->set(Config::GUI_ApplicationTheme, action->data());
+            restartApp();
+        }
+    });
+}
+
+void MainWindow::restartApp()
+{
+    int ret = QMessageBox::question(this, tr("Restart Application ?"),
+                                    tr("To take effect, Arsenic need to be restarted.\n"
+                                       "Do you want to restart now ?"),
+                                    QMessageBox::No | QMessageBox::Yes,
+                                    QMessageBox::Yes);
+
+    if (ret == QMessageBox::Yes) {
+        close();
+        reboot();
+    }
+}
+
+void MainWindow::reboot()
+{
+    qDebug() << "Performing application reboot...";
+    qApp->exit(-123456789);
+}
+
+void MainWindow::loadPreferences()
+{
+    if (config()->hasAccessError()) {
+        auto warn_text = QString(tr("Access error for config file %1").arg(config()->getFileName()));
+        QMessageBox::warning(this, tr("Could not load configuration"), warn_text);
+    }
+
+    restoreGeometry(config()->get(Config::GUI_MainWindowGeometry).toByteArray());
+    restoreState(config()->get(Config::GUI_MainWindowState).toByteArray());
+
+}
+
+void MainWindow::savePreferences()
+{
+
+        config()->set(Config::GUI_MainWindowGeometry, saveGeometry());
+        config()->set(Config::GUI_MainWindowState,    saveState());
+
+    // clang-format on
+}
+
+void MainWindow::applyTheme()
+{
+    QString appTheme = config()->get(Config::GUI_ApplicationTheme).toString();
+    if (appTheme == "classic") {
+        skin()->setSkin("classic");
+    }
+    else if (appTheme == "dark") {
+        skin()->setSkin("dark");
+    }
+    else {
+    }
+
+    //setPalette(style()->standardPalette());
+}
 
 void MainWindow::slot_menuAbout() {
     auto Str = get_version2();
@@ -51,7 +147,7 @@ void MainWindow::slot_Open()
         return;
     }
     m_ui->label->setBackgroundRole(QPalette::Highlight);
-    Mode mode = getMode(filename);
+    Direction mode = getDirection(filename);
 
     Outcome o;
     do {
@@ -81,16 +177,16 @@ void MainWindow::slot_Open()
     } while (o);
 
     m_ui->label->setText("Working...");
-    config = makeConfig(mode, password.toUtf8().data(), filename.toUtf8().data(), outFilename.toUtf8().data(), output);
-    if (config == nullptr) {
+    cryptoConfig = makeConfig(mode, password.toUtf8().data(), filename.toUtf8().data(), outFilename.toUtf8().data(), output);
+    if (cryptoConfig == nullptr) {
         msgBox.setText("Could not start transfer, possibly due to malformed password or filename.");
         msgBox.exec();
         return;
     }
-    ret_msg = start(config);
+    ret_msg = start(cryptoConfig);
     msgBox.setText(ret_msg);
     msgBox.exec();
-    destroyConfig(config);
+    destroyConfig(cryptoConfig);
     destroyCString(ret_msg);
     m_ui->label->clear();
 }

@@ -1,10 +1,10 @@
-mod errors;
 mod crypto;
 mod constants;
 mod keygen;
 mod config;
 
-pub use crate::errors::CoreErr;
+use anyhow::Result;
+
 pub use crate::constants::*;
 pub use crate::config::*;
 pub use crate::crypto::*;
@@ -17,7 +17,7 @@ pub const fn get_version() -> &'static str {
     APP_VERSION
 }
 
-pub fn main_routine(c: &Config) -> Result<f64, CoreErr> {
+pub fn main_routine(c: &Config) -> Result<f64> {
     let in_file = match &c.filename {
         Some(s) => Some(File::open(s)?),
         None => None,
@@ -35,24 +35,24 @@ pub fn main_routine(c: &Config) -> Result<f64, CoreErr> {
     let mut input = file_or_stdin(in_file);
     let mut output = file_or_stdout(out_file);
     let start = Instant::now();
-    match c.mode {
-        Mode::Encrypt => {
-            match crate::encrypt(&mut input, &mut output,&c.password, &c.ui, filesize) {
+    match c.direction {
+        Direction::Encrypt => {
+            match encrypt(&mut input, &mut output,&c.password, &c.ui, filesize, &c.cipher_type) {
                 Ok(()) => (),
                 Err(e) => {
                     if let Some(out_file) = &c.out_file {
-                        remove_file(&out_file).map_err( |e2|CoreErr::DeleteFail(e.to_string(),e2.to_string()))?;
+                        remove_file(&out_file)?;
                     }
-                    return Err(errors::CoreErr::DecryptionError)
+                    return Err(e)
                 }
             };
         }
-        Mode::Decrypt => {
-            match crate::decrypt(&mut input, &mut output,&c.password, &c.ui, filesize) {
+        Direction::Decrypt => {
+            match decrypt(&mut input, &mut output,&c.password, &c.ui, filesize) {
                 Ok(()) => (),
                 Err(e) => {
                     if let Some(out_file) = &c.out_file {
-                        remove_file(&out_file).map_err( |e2|CoreErr::DeleteFail(e.to_string(),e2.to_string()))?;
+                        remove_file(&out_file)?;
                     }
                     return Err(e)
                 }

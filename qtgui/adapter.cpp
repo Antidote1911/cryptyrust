@@ -9,13 +9,13 @@ extern "C" void output(int32_t progress)
     gMainWindow->updateProgress(progress);
 }
 
-Mode getMode(QString filename)
+Direction getDirection(const QString& filename)
 {
     // if it ends with file extension, return decrypting
     if (filename.endsWith(FILE_EXTENSION, Qt::CaseInsensitive)) {
         return Decrypt;
     }
-    // check first bytes for signatue. if present, return decrypt, else return encrypt
+    // check first bytes for signature. if present, return decrypt, else return encrypt
     std::fstream fs;
     fs.open(filename.toUtf8().constData(), std::fstream::in);
     uint32_t bytes = 0;
@@ -30,9 +30,9 @@ Mode getMode(QString filename)
     return Encrypt;
 }
 
-QString saveDialog(QString inFile, Mode mode)
+QString saveDialog(QString inFile, Direction direction)
 {
-    if (mode == Encrypt) { // encrypt, append extension
+    if (direction == Encrypt) { // encrypt, append extension
         inFile += QString::fromUtf8(FILE_EXTENSION);
         return QFileDialog::getSaveFileName(nullptr, "Save encrypted file", inFile, "", nullptr, QFileDialog::DontConfirmOverwrite);
     }
@@ -48,12 +48,12 @@ QString saveDialog(QString inFile, Mode mode)
     }
 }
 
-Outcome passwordPrompts(Mode mode, QString* password)
+Outcome passwordPrompts(Direction direction, QString* password)
 {
     QString passwordConfirm;
     bool okPw, okConfirm;
     QMessageBox msgBox;
-    if (mode == Encrypt) {
+    if (direction == Encrypt) {
         *password = QInputDialog::getText(nullptr, "Enter password", "Must be at least 8 characters", QLineEdit::Password, "", &okPw);
         if (!okPw) {
             return cancel;
@@ -81,7 +81,7 @@ Outcome passwordPrompts(Mode mode, QString* password)
             }
         }
     }
-    else if (mode == Decrypt) {
+    else if (direction == Decrypt) {
         *password = QInputDialog::getText(nullptr, "Decrypt password", "Enter the password that was used to encrypt this file", QLineEdit::Password, "", &okPw);
         if (!okPw) {
             return cancel;

@@ -2,7 +2,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr::null_mut;
 
-use cryptyrust_core::{get_version, main_routine, Config, Mode, Ui};
+use cryptyrust_core::{get_version, main_routine, Config, Direction, Ui, CipherType};
 
 struct ProgressUpdater {
     output_func: extern "C" fn(i32),
@@ -23,8 +23,8 @@ pub extern "C" fn makeConfig(
     output_func: extern "C" fn(i32),
 ) -> *mut Config {
     let m = match mode {
-        0 => Mode::Encrypt,
-        1 => Mode::Decrypt,
+        0 => Direction::Encrypt,
+        1 => Direction::Decrypt,
         _ => panic!("received invalid mode enum from c++"),
     };
     let p = match c_to_rust_string(password) {
@@ -40,7 +40,7 @@ pub extern "C" fn makeConfig(
         Err(_) => return null_mut(),
     };
     let ui = Box::new(ProgressUpdater { output_func });
-    Box::into_raw(Box::new(Config::new(&m, p, Some(f), Some(o), ui)))
+    Box::into_raw(Box::new(Config::new(m,CipherType::AesGcm ,p, Some(f), Some(o), ui)))
 }
 
 #[no_mangle]
@@ -55,12 +55,12 @@ pub extern "C" fn get_version2() -> *mut c_char {
 pub unsafe extern "C" fn start(ptr: *mut Config) -> *mut c_char {
     let config = { &mut *ptr };
     let msg = match main_routine(config) {
-        Ok(duration) => match config.mode {
-            Mode::Encrypt => format!(
+        Ok(duration) => match config.direction {
+            Direction::Encrypt => format!(
                 "Success! File {} has been encrypted in {} s",
                 config.out_file.as_ref().unwrap(),duration
             ),
-            Mode::Decrypt => format!(
+            Direction::Decrypt => format!(
                 "Success! File {} has been decrypted in {} s",
                 config.out_file.as_ref().unwrap(),duration
             ),

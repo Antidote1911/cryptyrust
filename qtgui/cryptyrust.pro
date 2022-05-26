@@ -28,12 +28,16 @@ SOURCES += \
         main.cpp \
         mainwindow.cpp \
     droparea.cpp \
-    adapter.cpp
+    adapter.cpp \
+    skin/skin.cpp \
+    Config.cpp
 
 HEADERS += \
         mainwindow.h \
     droparea.h \
-    adapter.h
+    adapter.h \
+    skin/skin.h \
+    Config.h
 
 FORMS += \
         mainwindow.ui

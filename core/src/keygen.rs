@@ -1,14 +1,14 @@
 use crate::constants::*;
-use std::error;
 use argon2::{Algorithm, Argon2, ParamsBuilder, Version, Params};
+use anyhow::Result;
 
-pub fn get_argon2_key(password: &str, salt: &[u8; SALTLEN]) -> Result<[u8; KEYLEN], Box<dyn error::Error>> {
+pub fn get_argon2_key(password: &str, salt: &[u8; SALTLEN]) -> Result<[u8; KEYLEN]> {
     let params = argon2_params();
     let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
 
-    let mut buffer = [0u8; KEYLEN];
-    argon2.hash_password_into(&password.as_bytes(), salt, &mut buffer).map_err(|e| e.to_string())?;
-    Ok(buffer)
+    let mut key = [0u8; KEYLEN];
+    argon2.hash_password_into(&password.as_bytes(), salt, &mut key).expect("HASH PASSWORD ERROR");
+    Ok(key)
 }
 
 fn argon2_params() -> Params {
@@ -19,3 +19,5 @@ fn argon2_params() -> Params {
     builder.output_len(KEYLEN).expect("INVALID ARGON2 KEYLEN");
     builder.params().unwrap()
 }
+
+

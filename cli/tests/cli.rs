@@ -22,6 +22,8 @@ fn encrypt_and_decrypt() {
         .arg("-e")
         .arg(original)
         .arg("-p mypassword")
+        .arg("-a")
+        .arg("chacha")
         .arg("-o")
         .arg(encrypted_path);
 

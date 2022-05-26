@@ -107,11 +107,11 @@ void DropArea::dropEvent(QDropEvent *event)
         return;
     }
 
-    Mode mode = getMode(filename);
+    Direction direction = getDirection(filename);
 
     Outcome o;
     do {
-        o = passwordPrompts(mode, &password);
+        o = passwordPrompts(direction, &password);
         if (o == cancel) {
             this->setBackgroundRole(QPalette::Dark);
             event->acceptProposedAction();
@@ -120,7 +120,7 @@ void DropArea::dropEvent(QDropEvent *event)
     } while (o);
 
     do {
-        outFilename = saveDialog(filename, mode);
+        outFilename = saveDialog(filename, direction);
         if (outFilename == "") {
             // user hit cancel
             this->setBackgroundRole(QPalette::Dark);
@@ -139,7 +139,7 @@ void DropArea::dropEvent(QDropEvent *event)
     } while (o);
 
     setText("Working...");
-    config = makeConfig(mode, password.toUtf8().data(), filename.toUtf8().data(), outFilename.toUtf8().data(), output);
+    config = makeConfig(direction, password.toUtf8().data(), filename.toUtf8().data(), outFilename.toUtf8().data(), output);
     if (config == nullptr) {
         msgBox.setText("Could not start transfer, possibly due to malformed password or filename.");
         msgBox.exec();

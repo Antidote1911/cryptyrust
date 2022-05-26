@@ -3,6 +3,7 @@ extern crate cryptyrust_core;
 #[cfg(test)]
 mod tests {
     use std::fs;
+    use cryptyrust_core::CipherType;
 
     struct ProgressUpdater {}
 
@@ -19,7 +20,8 @@ mod tests {
 
         // encrypt filetest.bin to filetest.bin.encrypted
         let config = cryptyrust_core::Config::new(
-            &cryptyrust_core::Mode::Encrypt,
+            cryptyrust_core::Direction::Encrypt,
+            CipherType::AesGcm,
             password.to_string(),
             Some(source_file_path.parse().unwrap()),
             Some(dest_file_path.clone().parse().unwrap()),
@@ -30,7 +32,8 @@ mod tests {
 
         // decrypt filetest.bin.encrypted to filetest.bin.decrypted
         let config = cryptyrust_core::Config::new(
-            &cryptyrust_core::Mode::Decrypt,
+            cryptyrust_core::Direction::Decrypt,
+            CipherType::AesGcm,
             password.to_string(),
             Some(dest_file_path.parse().unwrap()),
             Some(decrypted_file_path.clone().parse().unwrap()),
@@ -40,8 +43,8 @@ mod tests {
         assert!(cryptyrust_core::main_routine(&config).is_ok());
 
         assert_eq!(
-            std::fs::read(source_file_path).unwrap(),
-            std::fs::read(decrypted_file_path).unwrap()
+            fs::read(source_file_path).unwrap(),
+            fs::read(decrypted_file_path).unwrap()
         );
         fs::remove_file(dest_file_path).expect("could not remove file");
         fs::remove_file(decrypted_file_path).expect("could not remove file");

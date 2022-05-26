@@ -72,7 +72,7 @@ or an encrypted file to decrypt</string>
      <x>0</x>
      <y>0</y>
      <width>417</width>
-     <height>20</height>
+     <height>22</height>
     </rect>
    </property>
    <widget class="QMenu" name="menuAbout">
@@ -89,7 +89,21 @@ or an encrypted file to decrypt</string>
     <addaction name="menu_Open"/>
     <addaction name="menu_Quit"/>
    </widget>
+   <widget class="QMenu" name="menuConfig">
+    <property name="title">
+     <string>Config</string>
+    </property>
+    <widget class="QMenu" name="menuSkin">
+     <property name="title">
+      <string>Skin</string>
+     </property>
+     <addaction name="actionDark"/>
+     <addaction name="actionLight"/>
+    </widget>
+    <addaction name="menuSkin"/>
+   </widget>
    <addaction name="menuFile"/>
+   <addaction name="menuConfig"/>
    <addaction name="menuAbout"/>
   </widget>
   <action name="menu_About">
@@ -113,6 +127,22 @@ or an encrypted file to decrypt</string>
   <action name="menu_AboutQt">
    <property name="text">
     <string>About Qt</string>
+   </property>
+  </action>
+  <action name="actionDark">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Dark</string>
+   </property>
+  </action>
+  <action name="actionLight">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Light</string>
    </property>
   </action>
  </widget>

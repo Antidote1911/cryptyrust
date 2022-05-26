@@ -13,7 +13,7 @@ extern "C" void destroyConfig(void*);
 extern "C" void destroyCString(char*);
 extern "C" char* get_version2();
 
-enum Mode {
+enum Direction {
     Encrypt = 0,
     Decrypt = 1,
 };
@@ -25,11 +25,11 @@ enum Outcome {
 };
 
 static const char* FILE_EXTENSION     = ".crypty";
-static uint32_t FILE_SIGNATURE        = 0xC10A6BED;
+static uint32_t FILE_SIGNATURE        = 0x43525950;
 
-Mode getMode(QString filename);
-QString saveDialog(QString inFile, Mode mode);
-Outcome passwordPrompts(Mode mode, QString* password);
+Direction getDirection(const QString& filename);
+QString saveDialog(QString inFile, Direction mode);
+Outcome passwordPrompts(Direction mode, QString* password);
 extern "C" void output(int32_t progress);
 
 #endif // ADAPTER_H

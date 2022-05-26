@@ -1,15 +1,20 @@
 use cryptyrust_core::*;
 mod cli;
 use cli::{Cli};
-use clap::{Args, Command, crate_name};
+use clap::{Parser};
 use std::{
     path::{Path, PathBuf},
-    env, error::Error, process::exit};
+    env, process::exit};
+
+use anyhow::anyhow;
+use anyhow::Result;
+use std::result::Result::Ok;
+use crate::cli::Algorithm;
 
 const FILE_EXTENSION: &str = ".crypty";
 
 struct ProgressUpdater {
-    mode: Mode,
+    mode: Direction,
     stdout: bool,
 }
 
@@ -17,8 +22,8 @@ impl Ui for ProgressUpdater {
     fn output(&self, percentage: i32) {
         if !self.stdout {
             let s = match self.mode {
-                Mode::Encrypt => "Encrypting",
-                Mode::Decrypt => "Decrypting",
+                Direction::Encrypt => "Encrypting",
+                Direction::Decrypt => "Decrypting",
             };
             print!("\r{}: {}%", s, percentage);
         }
@@ -29,8 +34,8 @@ fn main() {
     match run() {
         Ok((output_filename, mode, time)) => {
             let m = match mode {
-                Mode::Encrypt => "encrypted",
-                Mode::Decrypt => "decrypted",
+                Direction::Encrypt => "encrypted",
+                Direction::Decrypt => "decrypted",
             };
             if let Some(name) = output_filename {
                 println!("\nSuccess! {} has been {} in {} s", name, m, time);
@@ -40,35 +45,28 @@ fn main() {
     };
 }
 
-fn run() -> Result<(Option<String>, Mode, f64), Box<dyn Error>> {
-    let cli = Command::new(crate_name!());
+fn run() -> Result<(Option<String>, Direction, f64)> {
     // Augment built args with derived args
-    let cli = Cli::augment_args(cli);
-    let matches = cli.get_matches();
+    let app = Cli::parse();
 
-
-    let mode = if matches.is_present("encrypt") || matches.is_present("encryptstdin") {
-        Mode::Encrypt
+    let direction = if app.encrypt().is_some() || app.encryptstdin() {
+        Direction::Encrypt
     } else {
-        Mode::Decrypt
+        Direction::Decrypt
     };
 
-    let filename = if matches.is_present("encrypt") {
-        let f = matches
-            .value_of("encrypt")
-            .ok_or("file to encrypt not given")?;
+    let filename = if app.encrypt().is_some() {
+        let f = app.encrypt().ok_or("file to encrypt not given").unwrap();
         // make sure input file exists
-        let p = Path::new(f);
+        let p = Path::new(&f);
         if !(p.exists() && p.is_file()) {
             println!("Invalid filename: {}", f);
             exit(1);
         }
         Some(f)
-    } else if matches.is_present("decrypt") {
-        let f = matches
-            .value_of("decrypt")
-            .ok_or("file to decrypt not given")?;
-        let p = Path::new(f);
+    } else if app.decrypt().is_some() {
+        let f = app.decrypt().ok_or("file to decrypt not given").unwrap();
+        let p = Path::new(&f);
         if !(p.exists() && p.is_file()) {
             println!("Invalid filename: {}", f);
             exit(1);
@@ -78,10 +76,10 @@ fn run() -> Result<(Option<String>, Mode, f64), Box<dyn Error>> {
         None // using stdin
     };
 
-    let output_path = if !matches.is_present("stdout") {
-        let s = generate_output_path(&mode, filename, matches.value_of("output"))?
+    let output_path = if !app.stdout() {
+        let s = generate_output_path(&direction, filename.as_deref(), app.output()).unwrap()
             .to_str()
-            .ok_or("could not convert output path to string")?
+            .ok_or("could not convert output path to string").unwrap()
             .to_string();
         Some(s)
     } else {
@@ -90,29 +88,28 @@ fn run() -> Result<(Option<String>, Mode, f64), Box<dyn Error>> {
 
     // get_password needs to only happen if using neither stdin nor stdout: using requires() in clap
     // password prompting is affected by both stdin and stdout, whereas other printing is affected only by stdout
-    let password = if matches.is_present("password") {
-        matches
-            .value_of("password")
-            .ok_or("couldn't get password value")?
-            .to_string()
-    } else if matches.is_present("passwordfile") {
-        let pw_file = matches
-            .value_of("passwordfile")
-            .ok_or("could not get value of password file")?
-            .to_string();
+    let password = if app.password().is_some() {
+        app.password().unwrap()
+    } else if app.passwordfile().is_some() {
+        let pw_file = app.passwordfile().unwrap();
         let p = Path::new(&pw_file);
-        std::fs::read_to_string(p)
-            .map_err(|e| format!("could not read password file: {}", e))?
+        std::fs::read_to_string(p).unwrap()
     } else {
-        get_password(&mode)
+        get_password(&direction)
     };
     let ui = Box::new(ProgressUpdater {
-        mode: mode.clone(),
-        stdout: matches.is_present("stdout"),
+        mode: direction.clone(),
+        stdout: app.stdout(),
     });
 
+    let cipher_type = match app.algo() {
+        Algorithm::Aessiv => CipherType::AesGcm,
+        Algorithm::Chacha => CipherType::XChaCha20Poly1305,
+    };
+
     let config = Config::new(
-        &mode,
+        direction.clone(),
+        cipher_type,
         password,
         filename.map(|f| f.to_string()),
         output_path.clone(),
@@ -120,14 +117,16 @@ fn run() -> Result<(Option<String>, Mode, f64), Box<dyn Error>> {
     );
 
     match main_routine(&config) {
-        Ok(duration) =>{ Ok((output_path, mode,duration))},
-        Err(e) => Err(Box::new(e)),
+        Ok(duration) =>{ Ok((output_path, direction, duration))},
+        Err(e) => {
+            return Err(anyhow!(e))
+        }
     }
 }
 
-fn get_password(mode: &Mode) -> String {
+fn get_password(mode: &Direction) -> String {
     match mode {
-        Mode::Encrypt => {
+        Direction::Encrypt => {
             let password = rpassword::prompt_password(
                 "Password (minimum 8 characters, longer is better): ",
             )
@@ -144,13 +143,13 @@ fn get_password(mode: &Mode) -> String {
             }
             password
         }
-        Mode::Decrypt => rpassword::prompt_password("Password: ")
+        Direction::Decrypt => rpassword::prompt_password("Password: ")
             .expect("could not get password from user"),
     }
 }
 
 fn generate_output_path(
-    mode: &Mode,
+    mode: &Direction,
     input: Option<&str>,
     output: Option<&str>,
 ) -> Result<PathBuf, String> {
@@ -174,13 +173,13 @@ fn generate_output_path(
 }
 
 fn generate_default_filename(
-    mode: &Mode,
+    mode: &Direction,
     _path: PathBuf,
     name: Option<&str>,
 ) -> Result<PathBuf, String> {
     let mut path = _path;
     let f = match mode {
-        Mode::Encrypt => {
+        Direction::Encrypt => {
             let mut with_ext = if let Some(n) = name {
                 n.to_string()
             } else {
@@ -189,12 +188,12 @@ fn generate_default_filename(
             with_ext.push_str(FILE_EXTENSION);
             with_ext
         }
-        Mode::Decrypt => {
+        Direction::Decrypt => {
             let name = if let Some(n) = name { n } else { "stdin" };
             if name.ends_with(FILE_EXTENSION) {
                 name[..name.len() - FILE_EXTENSION.len()].to_string()
             } else {
-                prepend("decrypted_", name)
+                prepend("decrypted_".to_string(), name)
                     .ok_or(format!("could not prepend decrypted_ to filename {}", name))?
             }
         }
@@ -228,7 +227,7 @@ fn find_filename(_path: PathBuf) -> Option<PathBuf> {
     Some(path)
 }
 
-fn prepend(prefix: &str, p: &str) -> Option<String> {
+fn prepend(prefix: String, p: &str) -> Option<String> {
     let mut path = PathBuf::from(p);
     let file = path.file_name()?;
     let parent = path.parent()?;

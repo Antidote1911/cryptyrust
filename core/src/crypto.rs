@@ -1,16 +1,16 @@
-use crate::errors::*;
 use crate::keygen::*;
 use crate::constants::*;
-use crate::Ui;
-
+use crate::{CipherType, DecryptStreamCiphers, EncryptStreamCiphers, Ui};
 use rand::{rngs::OsRng, Rng};
-use aes_gcm_siv::{Aes256GcmSiv};
-use aead::{stream, NewAead};
-use zeroize::Zeroize;
-
-use std::{
-    io::{Read, Write}
-};
+use aes_gcm_siv::Aes256GcmSiv;
+use chacha20poly1305::XChaCha20Poly1305;
+use aead::{NewAead};
+use std::{io::{Read, Write}};
+use aead::generic_array::GenericArray;
+use aead::stream::{DecryptorBE32, EncryptorBE32};
+use anyhow::anyhow;
+use anyhow::Context;
+use anyhow::Result;
 
 pub fn encrypt<I: Read, O: Write>(
     input: &mut I,
@@ -18,44 +18,113 @@ pub fn encrypt<I: Read, O: Write>(
     password: &str,
     ui: &Box<dyn Ui>,
     filesize: Option<usize>,
-) -> Result<(), CoreErr> {
+    cipher_type: &CipherType,
+) -> Result<()> {
+    let bench=false;
+    let (mut streams, salt, nonce_bytes): (EncryptStreamCiphers, [u8; SALTLEN], Vec<u8>) =
+        match cipher_type {
+            CipherType::AesGcm => {
+                let salt: [u8; SALTLEN] = OsRng.gen();
+                let nonce_bytes:[u8; NONCELEN] = OsRng.gen();
+                let nonce = GenericArray::from_slice(&nonce_bytes);
+
+                let key = get_argon2_key(&password, &salt ).expect("Argon derivation failed");
+
+                let cipher = match Aes256GcmSiv::new_from_slice(&key) {
+                    Ok(cipher) => {
+                        drop(key);
+                        cipher
+                    }
+                    Err(_) => {
+                        return Err(anyhow!("Unable to create cipher with argon2id hashed key."))
+
+                    }
+                };
+
+                let stream = EncryptorBE32::from_aead(cipher, &nonce);
+                (
+                    EncryptStreamCiphers::AesGcm(Box::new(stream)),
+                    salt,
+                    nonce.to_vec(),
+                )
+            }
+            CipherType::XChaCha20Poly1305 => {
+                let salt: [u8; SALTLEN] = OsRng.gen();
+                let nonce_bytes:[u8; XNONCELEN] = OsRng.gen();
+
+                let key = get_argon2_key(&password,&salt).expect("Argon derivation failed");
+                let cipher = match XChaCha20Poly1305::new_from_slice(&key) {
+                    Ok(cipher) => {
+                        drop(key);
+                        cipher
+                    }
+                    Err(_) => {
+                        return Err(anyhow!("Unable to create cipher with argon2id hashed key."))
+                    }
+                };
+
+                let stream = EncryptorBE32::from_aead(cipher, nonce_bytes.as_slice().into());
+                (
+                    EncryptStreamCiphers::XChaCha(Box::new(stream)),
+                    salt,
+                    nonce_bytes.to_vec(),
+                )
+            }
+        };
+
+    if !bench {
+        output.write_all(&SIGNATURE).context("Unable to write signature to the output file")?;
+        output.write_all(&salt).context("Unable to write salt to the output file")?;
+
+        match cipher_type {
+            CipherType::XChaCha20Poly1305 => {
+                output
+                    .write_all("CHACHA".as_ref())
+                    .context("Unable to write Ciphertype to the output file")?;
+            }
+            CipherType::AesGcm => {
+                output
+                    .write_all("AESGCM".as_ref())
+                    .context("Unable to write Ciphertype to the output file")?;
+            }
+        }
+        output
+            .write_all(&nonce_bytes)
+            .context("Unable to write nonce to the output file")?;
+    }
+
+    let mut buffer = [0u8; MSGLEN];
 
     let mut total_bytes_read = 0;
-
-    let mut salt: [u8; SALTLEN] = OsRng.gen();
-    let mut nonce:[u8; NONCELEN] = OsRng.gen();
-
-    let mut key = get_argon2_key(&password, &salt).expect("Argon derivation failed");
-
-    let aead = Aes256GcmSiv::new(key[..KEYLEN].as_ref().into());
-    let mut stream_encryptor=stream::EncryptorBE32::from_aead(aead, &nonce.into());
-
-    output.write_all(&SIGNATURE)?;
-    output.write_all(&salt)?;
-    output.write_all(&nonce)?;
-
-    let mut buffer = vec![0; MSGLEN + TAGLEN];
-    let mut filled = 0;
-
     loop {
-        // We leave space for the tag
-        let read_count = input.read(&mut buffer[filled..MSGLEN])?;
-        filled += read_count;
+        let read_count = input
+            .read(&mut buffer)
+            .context("Unable to read from the input file")?;
         total_bytes_read += buffer.len();
 
-        if filled == MSGLEN {
-            buffer.truncate(MSGLEN);
-            stream_encryptor
-                .encrypt_next_in_place(&[], &mut buffer)
-                .map_err(|e| CoreErr::EncryptFail(e.to_string()))?;
-            output.write_all(&buffer)?;
-            filled = 0;
-        } else if read_count == 0 {
-            buffer.truncate(filled);
-            stream_encryptor
-                .encrypt_last_in_place(&[], &mut buffer)
-                .map_err(|e| CoreErr::EncryptFail(e.to_string()))?;
-            output.write_all(&buffer).map_err(|e| CoreErr::EncryptFail(e.to_string()))?;
+        if read_count == MSGLEN {
+            let encrypted_data = match streams.encrypt_next(buffer.as_slice()) {
+                Ok(bytes) => bytes,
+                Err(_) => return Err(anyhow!("Unable to encrypt data."))
+            };
+
+            if !bench {
+                output
+                    .write_all(&encrypted_data)
+                    .context("Unable to write to the output file")?;
+            }
+        } else {
+            // if we read something less than BLOCK_SIZE, and have hit the end of the file
+            let encrypted_data = match streams.encrypt_last(&buffer[..read_count]) {
+                Ok(bytes) => bytes,
+                Err(_) => return Err(anyhow!("Unable to encrypt data."))
+            };
+
+            if !bench {
+                output
+                    .write_all(&encrypted_data)
+                    .context("Unable to write to the output file")?;
+            }
             break;
         }
         if let Some(size) = filesize {
@@ -63,11 +132,12 @@ pub fn encrypt<I: Read, O: Write>(
             ui.output(percentage);
         }
     }
-    salt.zeroize();
-    nonce.zeroize();
-    key.zeroize();
+    if !bench {
+        output.flush().context("Unable to flush the output file")?;
+    }
     Ok(())
 }
+
 
 pub fn decrypt<I: Read, O: Write>(
     input: &mut I,
@@ -75,48 +145,83 @@ pub fn decrypt<I: Read, O: Write>(
     password: &str,
     ui: &Box<dyn Ui>,
     filesize: Option<usize>,
-) -> Result<(), CoreErr> {
-
-    let mut total_bytes_read = 0;
-
+) -> Result<()> {
+    let bench=false;
     let mut signature = [0u8; SIGNATURE.len()];
-    let mut salt = [0u8; SALTLEN];
-    let mut nonce = [0u8; NONCELEN];
-
-    input.read_exact(&mut signature).map_err(|_| CoreErr::ReadSignature)?;
-    input.read_exact(&mut salt).map_err(|_| CoreErr::ReadSalt)?;
-    input.read_exact(&mut nonce).map_err(|_| CoreErr::ReadNonce)?;
-
+    input.read_exact(&mut signature).context("Unable to read signature from the file")?;
     if signature != SIGNATURE{
-        return Err(CoreErr::BadSignature);
+        return Err(anyhow!("Bad signature."))
     }
 
-    let mut key = get_argon2_key(&password, &salt).expect("Argon derivation failed");
-    let aead = Aes256GcmSiv::new(key[..KEYLEN].as_ref().into());
-    let mut stream_decryptor = stream::DecryptorBE32::from_aead(aead, &nonce.into());
+    let mut salt = [0u8; SALTLEN];
+    input.read(&mut salt).context("Unable to read salt from the file")?;
 
-    let mut buffer = vec![0u8; MSGLEN + TAGLEN];
-    let mut filled = 0;
+    let mut cipher_type = [0u8; 6];
+    input.read(&mut cipher_type).context("Unable to read cipher type from the file")?;
+
+    let key = get_argon2_key(&password,&salt).expect("Argon derivation failed");
+
+    let mut streams: DecryptStreamCiphers = match cipher_type.as_ref() {
+        b"AESGCM" => {
+            let cipher = match Aes256GcmSiv::new_from_slice(&key) {
+                Ok(cipher) => {
+                    drop(key);
+                    cipher
+                }
+                Err(_) => return Err(anyhow!("Unable to create cipher with argon2id hashed key.")),
+            };
+
+            let mut nonce_bytes = [0u8; NONCELEN];
+            input.read(&mut nonce_bytes).context("Unable to read nonce from the file")?;
+
+            let nonce = GenericArray::from_slice(&nonce_bytes);
+
+            let stream = DecryptorBE32::from_aead(cipher, nonce);
+
+            DecryptStreamCiphers::AesGcm(Box::new(stream))
+        }
+        b"CHACHA" => {
+            let cipher = match XChaCha20Poly1305::new_from_slice(&key) {
+                Ok(cipher) => {
+                    drop(key);
+                    cipher
+                }
+                Err(_) => return Err(anyhow!("Unable to create cipher with argon2id hashed key.")),
+            };
+
+            let mut nonce_bytes = [0u8; XNONCELEN];
+            input.read(&mut nonce_bytes).context("Unable to read nonce from the file")?;
+
+            let stream = DecryptorBE32::from_aead(cipher, nonce_bytes.as_slice().into());
+            DecryptStreamCiphers::XChaCha(Box::new(stream))
+        }
+        _ => unreachable!()
+    };
+
+    let mut buffer = [0u8; MSGLEN + TAGLEN]; // 16 bytes is the length of the AEAD tag
+    let mut total_bytes_read = 0;
     loop {
-        // here we fill all the way to MSG_LEN + TAG_LEN, so we can omit the range end
-        let read_count = input.read(&mut buffer[filled..])?;
-        filled += read_count;
-        total_bytes_read += buffer.len();
+        let read_count = input.read(&mut buffer)?;
+        total_bytes_read += read_count;
+        if read_count == (MSGLEN + TAGLEN) {
+            let decrypted_data = match streams.decrypt_next(buffer.as_slice()) {
+                Ok(bytes) => bytes,
+                Err(_) => return Err(anyhow!("Unable to decrypt the data. Maybe it's the wrong key, or it's not an encrypted file.")),
+            };
+            if !bench {
+                output.write_all(&decrypted_data).context("Unable to write to the output file")?;
+            }
+        } else {
+            // if we read something less than BLOCK_SIZE+16, and have hit the end of the file
+            let decrypted_data = match streams.decrypt_last(&buffer[..read_count]) {
+                Ok(bytes) => bytes,
+                Err(_) => return Err(anyhow!("Unable to decrypt the final block of data. Maybe it's the wrong key, or it's not an encrypted file.")),
+            };
 
-        if filled == MSGLEN + TAGLEN {
-            stream_decryptor
-                .decrypt_next_in_place(&[], &mut buffer)
-                .map_err(|_| CoreErr::DecryptionError)?;
-
-            output.write_all(&buffer)?;
-            filled = 0;
-            buffer.resize(MSGLEN + TAGLEN, 0);
-        } else if read_count == 0 {
-            buffer.truncate(filled);
-            stream_decryptor
-                .decrypt_last_in_place(&[], &mut buffer)
-                .map_err(|_| CoreErr::DecryptionError)?;
-            output.write_all(&buffer)?;
+            if !bench {
+                output.write_all(&decrypted_data).context("Unable to write to the output file")?;
+                output.flush().context("Unable to flush the output file")?;
+            }
             break;
         }
         if let Some(size) = filesize {
@@ -124,8 +229,6 @@ pub fn decrypt<I: Read, O: Write>(
             ui.output(percentage);
         }
     }
-    salt.zeroize();
-    nonce.zeroize();
-    key.zeroize();
     Ok(())
 }
+

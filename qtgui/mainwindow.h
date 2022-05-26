@@ -14,15 +14,24 @@ class MainWindow : public QMainWindow {
     explicit MainWindow(QWidget *parent = nullptr);
     ~MainWindow() override;
     void updateProgress(int);
+    void restartApp();
 
   private slots:
     void slot_menuAbout();
     void slot_Open();
+    void reboot();
+
+  protected:
+    void closeEvent(QCloseEvent *event) Q_DECL_OVERRIDE;
 
   private:
     const std::unique_ptr<Ui::MainWindow> m_ui;
-    void* config;
-    char* ret_msg;
+    void applyTheme();
+    void loadPreferences();
+    void initViewMenu();
+    void savePreferences();
+    void* cryptoConfig{};
+    char* ret_msg{};
 };
 
 extern MainWindow *gMainWindow;

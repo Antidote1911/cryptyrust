@@ -23,6 +23,11 @@ set(PROJECT_SOURCES
         adapter.cpp
         droparea.h
         adapter.h
+        skin/skin.h
+        skin/skin.cpp
+        Config.h
+        Config.cpp
+        
 )
 
 if(${QT_VERSION_MAJOR} GREATER_EQUAL 6)
