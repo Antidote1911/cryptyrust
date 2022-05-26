@@ -6,7 +6,9 @@
 **Simple cross-platform gui and cli file encryption.**<br/>
 Latest Windows x64 release is [here](https://github.com/Antidote1911/cryptyrust/releases/latest).
 
-## Usage:
+![Demo](demo.gif)
+
+## Usage for CLI:
 **Data Loss Disclaimer:**  
 if you lose or forget your password, **your data cannot be recovered !**  
 Use a password manager or another secure form of backup.<br/>
