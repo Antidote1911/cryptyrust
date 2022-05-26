@@ -1,0 +1,11 @@
+/opt/clion/bin/cmake/linux/bin/cmake -DCMAKE_BUILD_TYPE=Debug -DCMAKE_MAKE_PROGRAM=/opt/clion/bin/ninja/linux/ninja -G Ninja -S /home/antidote/Documents/cryptyrust/qtgui -B /home/antidote/Documents/cryptyrust/qtgui/cmake-build-debug
+-- The CXX compiler identification is GNU 12.1.0
+-- Detecting CXX compiler ABI info
+-- Detecting CXX compiler ABI info - done
+-- Check for working CXX compiler: /usr/bin/c++ - skipped
+-- Detecting CXX compile features
+-- Detecting CXX compile features - done
+-- >>> Linux
+-- Configuring done
+-- Generating done
+-- Build files have been written to: /home/antidote/Documents/cryptyrust/qtgui/cmake-build-debug
