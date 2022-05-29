@@ -3,7 +3,7 @@ extern crate cryptyrust_core;
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use cryptyrust_core::CipherType;
+    use cryptyrust_core::Algorithm;
 
     struct ProgressUpdater {}
 
@@ -21,7 +21,7 @@ mod tests {
         // encrypt filetest.bin to filetest.bin.encrypted
         let config = cryptyrust_core::Config::new(
             cryptyrust_core::Direction::Encrypt,
-            CipherType::AesGcm,
+            Algorithm::AesGcm,
             password.to_string(),
             Some(source_file_path.parse().unwrap()),
             Some(dest_file_path.clone().parse().unwrap()),
@@ -33,7 +33,7 @@ mod tests {
         // decrypt filetest.bin.encrypted to filetest.bin.decrypted
         let config = cryptyrust_core::Config::new(
             cryptyrust_core::Direction::Decrypt,
-            CipherType::AesGcm,
+            Algorithm::AesGcm,
             password.to_string(),
             Some(dest_file_path.parse().unwrap()),
             Some(decrypted_file_path.clone().parse().unwrap()),

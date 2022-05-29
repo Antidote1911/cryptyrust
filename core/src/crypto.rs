@@ -1,6 +1,6 @@
 use crate::keygen::*;
 use crate::constants::*;
-use crate::{CipherType, DecryptStreamCiphers, EncryptStreamCiphers, Ui};
+use crate::{Algorithm, DecryptStreamCiphers, EncryptStreamCiphers, Ui};
 use rand::{rngs::OsRng, Rng};
 use aes_gcm_siv::Aes256GcmSiv;
 use chacha20poly1305::XChaCha20Poly1305;
@@ -18,12 +18,12 @@ pub fn encrypt<I: Read, O: Write>(
     password: &str,
     ui: &Box<dyn Ui>,
     filesize: Option<usize>,
-    cipher_type: &CipherType,
+    algorithm: Algorithm,
 ) -> Result<()> {
     let bench=false;
     let (mut streams, salt, nonce_bytes): (EncryptStreamCiphers, [u8; SALTLEN], Vec<u8>) =
-        match cipher_type {
-            CipherType::AesGcm => {
+        match algorithm {
+            Algorithm::AesGcm => {
                 let salt: [u8; SALTLEN] = OsRng.gen();
                 let nonce_bytes:[u8; NONCELEN] = OsRng.gen();
                 let nonce = GenericArray::from_slice(&nonce_bytes);
@@ -48,7 +48,7 @@ pub fn encrypt<I: Read, O: Write>(
                     nonce.to_vec(),
                 )
             }
-            CipherType::XChaCha20Poly1305 => {
+            Algorithm::XChaCha20Poly1305 => {
                 let salt: [u8; SALTLEN] = OsRng.gen();
                 let nonce_bytes:[u8; XNONCELEN] = OsRng.gen();
 
@@ -70,19 +70,20 @@ pub fn encrypt<I: Read, O: Write>(
                     nonce_bytes.to_vec(),
                 )
             }
+
         };
 
     if !bench {
         output.write_all(&SIGNATURE).context("Unable to write signature to the output file")?;
         output.write_all(&salt).context("Unable to write salt to the output file")?;
 
-        match cipher_type {
-            CipherType::XChaCha20Poly1305 => {
+        match algorithm {
+            Algorithm::XChaCha20Poly1305 => {
                 output
                     .write_all("CHACHA".as_ref())
                     .context("Unable to write Ciphertype to the output file")?;
             }
-            CipherType::AesGcm => {
+            Algorithm::AesGcm => {
                 output
                     .write_all("AESGCM".as_ref())
                     .context("Unable to write Ciphertype to the output file")?;

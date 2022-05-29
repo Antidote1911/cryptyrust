@@ -9,7 +9,7 @@ use std::{
 use anyhow::anyhow;
 use anyhow::Result;
 use std::result::Result::Ok;
-use crate::cli::Algorithm;
+use crate::cli::Algo;
 
 const FILE_EXTENSION: &str = ".crypty";
 
@@ -102,14 +102,14 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
         stdout: app.stdout(),
     });
 
-    let cipher_type = match app.algo() {
-        Algorithm::Aessiv => CipherType::AesGcm,
-        Algorithm::Chacha => CipherType::XChaCha20Poly1305,
+    let algo = match app.algo() {
+        Algo::Aessiv => Algorithm::AesGcm,
+        Algo::Chacha => Algorithm::XChaCha20Poly1305,
     };
 
     let config = Config::new(
         direction.clone(),
-        cipher_type,
+        algo,
         password,
         filename.map(|f| f.to_string()),
         output_path.clone(),

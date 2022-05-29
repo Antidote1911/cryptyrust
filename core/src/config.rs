@@ -13,22 +13,22 @@ pub enum Direction {
 }
 
 #[derive(Copy, Clone)]
-pub enum CipherType {
+pub enum Algorithm {
     AesGcm,
     XChaCha20Poly1305,
 }
-impl std::fmt::Display for CipherType {
+impl std::fmt::Display for Algorithm {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match *self {
-            CipherType::AesGcm => write!(f, "AESGCM"),
-            CipherType::XChaCha20Poly1305 => write!(f, "CHACHA"),
+            Algorithm::AesGcm => write!(f, "AESGCM"),
+            Algorithm::XChaCha20Poly1305 => write!(f, "CHACHA"),
         }
     }
 }
 
 pub struct Config {
     pub direction: Direction,
-    pub cipher_type: CipherType,
+    pub algorithm: Algorithm,
     pub password: String,
     pub filename: Option<String>,
     pub out_file: Option<String>,
@@ -97,7 +97,7 @@ pub trait Ui {
 impl Config {
     pub fn new(
         _direction: Direction,
-        cipher_type: CipherType,
+        algorithm: Algorithm,
         password: String,
         filename: Option<String>,
         out_file: Option<String>,
@@ -106,7 +106,7 @@ impl Config {
         let direction: Direction = _direction.clone();
         Config {
             direction,
-            cipher_type,
+            algorithm,
             password,
             filename,
             out_file,

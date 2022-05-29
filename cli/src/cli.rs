@@ -52,7 +52,7 @@ pub struct Cli {
 
     /// Optional, choose algorithm aessiv or chacha. Ignored in decryption mode
     #[clap(short, long, arg_enum,value_name = "ALGO", default_value = "aessiv")]
-    algo: Algorithm,
+    algo: Algo,
 
     /// The password to encrypt/decrypt with will be read from a text file at the path provided. File should be valid UTF-8 and contain only the password with no newline. This or the --password (-p) flag is required if using stdin and/or stdout.
     #[clap(short='f', long, value_name = "PASSWORD_FILE")]
@@ -61,13 +61,13 @@ pub struct Cli {
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ArgEnum)]
-pub enum Algorithm {
+pub enum Algo {
     Aessiv,
     Chacha,
 }
 
 impl Cli {
-    pub fn algo(&self) -> Algorithm {
+    pub fn algo(&self) -> Algo {
         self.algo
     }
     pub fn password(&self) -> Option<String> {

@@ -2,7 +2,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr::null_mut;
 
-use cryptyrust_core::{get_version, main_routine, Config, Direction, Ui, CipherType};
+use cryptyrust_core::{get_version, main_routine, Config, Direction, Ui, Algorithm};
 
 struct ProgressUpdater {
     output_func: extern "C" fn(i32),
@@ -40,7 +40,7 @@ pub extern "C" fn makeConfig(
         Err(_) => return null_mut(),
     };
     let ui = Box::new(ProgressUpdater { output_func });
-    Box::into_raw(Box::new(Config::new(m,CipherType::AesGcm ,p, Some(f), Some(o), ui)))
+    Box::into_raw(Box::new(Config::new(m,Algorithm::AesGcm ,p, Some(f), Some(o), ui)))
 }
 
 #[no_mangle]

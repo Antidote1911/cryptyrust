@@ -37,7 +37,7 @@ pub fn main_routine(c: &Config) -> Result<f64> {
     let start = Instant::now();
     match c.direction {
         Direction::Encrypt => {
-            match encrypt(&mut input, &mut output,&c.password, &c.ui, filesize, &c.cipher_type) {
+            match encrypt(&mut input, &mut output,&c.password, &c.ui, filesize, c.algorithm) {
                 Ok(()) => (),
                 Err(e) => {
                     if let Some(out_file) = &c.out_file {
