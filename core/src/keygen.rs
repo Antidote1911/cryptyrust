@@ -19,13 +19,13 @@ pub fn argon2_hash(
     password: &Secret<String>,
     salt: &[u8; SALTLEN],
     version: &HeaderVersion,
-) -> Result<Secret<[u8; 32]>, CoreErr> {
-    let mut key = [0u8; 32];
+) -> Result<Secret<[u8; KEYLEN]>, CoreErr> {
+    let mut key = [0u8; KEYLEN];
 
     let params = match version {
         HeaderVersion::V1 => {
-            // 8192KiB of memory, 8 iterations, 4 levels of parallelism
-            let params = Params::new(8192, 8, 4, Some(Params::DEFAULT_OUTPUT_LEN));
+            // 512 MiB of memory, 8 iterations, 4 levels of parallelism
+            let params = Params::new(524288, 8, 4, Some(Params::DEFAULT_OUTPUT_LEN));
             match params {
                 Ok(parameters) => parameters,
                 Err(_) => return Err(CoreErr::Argon2Params),
