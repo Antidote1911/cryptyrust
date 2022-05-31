@@ -11,7 +11,7 @@ Latest Windows x64 release is [here](https://github.com/Antidote1911/cryptyrust/
 ## Usage for CLI:
 
 Exemples :
-You can choose algorithm encryption with `-a aesgcm` for aes256Gcm `-a chacha` for XChacha20Poly1305, or `-a aesgcmsiv` for aes256GcmSiv. If not specified, cryptyrust use XChacha20Poly1305. Decryption automatically detect the good algorithm. No need to specify `-a aesgcm` or `-a chacha`.
+You can choose algorithm encryption with `-a aesgcm` for aes256Gcm `-a chacha` for XChacha20Poly1305, `-a aesgcmsiv` for aes256GcmSiv or `-a deoxys` for DeoxysII256. If not specified, cryptyrust use XChacha20Poly1305. Decryption automatically detect the good algorithm. `-a` parameter is ignored if it's specified.
 
 If no output file is specified with `-o`, Cryptyrust generate an incremental unique file name with .crypty extension.
 
