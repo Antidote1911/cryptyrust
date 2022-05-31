@@ -103,6 +103,7 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
         Algo::Aesgcm => Algorithm::Aes256Gcm,
         Algo::Chacha => Algorithm::XChaCha20Poly1305,
         Algo::Deoxys => Algorithm::DeoxysII256,
+        Algo::Aesgcmsiv => Algorithm::Aes256GcmSiv,
     };
 
     let config = Config::new(

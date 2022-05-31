@@ -101,6 +101,7 @@ fn calc_nonce_len(header_info: &HeaderType) -> usize {
         Algorithm::XChaCha20Poly1305 => 24,
         Algorithm::Aes256Gcm => 12,
         Algorithm::DeoxysII256 => 15,
+        Algorithm::Aes256GcmSiv => 12,
     };
     nonce_len -= 4; // the last 4 bytes are dynamic in streamLE mode
     nonce_len
@@ -128,6 +129,10 @@ fn serialize(header_info: &HeaderType) -> ([u8; 2], [u8; 2]) {
             let info: [u8; 2] = [0x0E, 0x03];
             info
         }
+        Algorithm::Aes256GcmSiv => {
+            let info: [u8; 2] = [0x0E, 0x04];
+            info
+        }
     };
 
     (version_info, algorithm_info)
@@ -148,6 +153,7 @@ fn deserialize(
         [0x0E, 0x01] => Algorithm::XChaCha20Poly1305,
         [0x0E, 0x02] => Algorithm::Aes256Gcm,
         [0x0E, 0x03] => Algorithm::DeoxysII256,
+        [0x0E, 0x04] => Algorithm::Aes256GcmSiv,
         _ => return Err(CoreErr::DecryptFail("Invalid algorithm".to_string())),
     };
 

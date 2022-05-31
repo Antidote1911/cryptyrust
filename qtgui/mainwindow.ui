@@ -68,17 +68,22 @@ or an encrypted file to decrypt</string>
      <widget class="QComboBox" name="comboAlgo">
       <item>
        <property name="text">
-        <string>XChaCha20Poly1305</string>
+        <string>XChaCha20-Poly1305</string>
        </property>
       </item>
       <item>
        <property name="text">
-        <string>Aes256Gcm</string>
+        <string>Aes-256-Gcm</string>
        </property>
       </item>
       <item>
        <property name="text">
-        <string>DeoxysII256</string>
+        <string>Deoxys II-256</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>Aes-256-Gcm-Siv</string>
        </property>
       </item>
      </widget>

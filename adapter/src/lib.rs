@@ -31,6 +31,7 @@ pub extern "C" fn makeConfig(
         0 => Algorithm::XChaCha20Poly1305,
         1 => Algorithm::Aes256Gcm,
         2 => Algorithm::DeoxysII256,
+        3 => Algorithm::Aes256GcmSiv,
         _ => panic!("received invalid algorithm enum from c++"),
     };
 

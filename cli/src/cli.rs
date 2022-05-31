@@ -35,7 +35,7 @@ pub struct Cli {
     #[clap(short, long, value_name = "PASSWORD")]
     password: Option<String>,
 
-    /// Optional, choose algorithm aesgcm ,chacha or deoxys. Ignored in decryption mode
+    /// Optional, choose algorithm aesgcm ,aesgcmsiv, chacha or deoxys. Ignored in decryption mode
     #[clap(short, long, arg_enum,value_name = "ALGO", default_value = "aesgcm")]
     algo: Algo,
 
@@ -50,6 +50,7 @@ pub enum Algo {
     Aesgcm,
     Chacha,
     Deoxys,
+    Aesgcmsiv,
 }
 
 impl Cli {
