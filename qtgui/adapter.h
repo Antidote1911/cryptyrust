@@ -7,7 +7,7 @@
 #include "mainwindow.h"
 
 // rust functions
-extern "C" void* makeConfig(int, char*, char*, char*, void (*output)(int32_t));
+extern "C" void* makeConfig(int,int,char*, char*, char*, void (*output)(int32_t));
 extern "C" char* start(void*);
 extern "C" void destroyConfig(void*);
 extern "C" void destroyCString(char*);

@@ -1,23 +1,42 @@
 use crate::constants::*;
-use argon2::{Algorithm, Argon2, ParamsBuilder, Version, Params};
-use anyhow::Result;
+use argon2::{Argon2, Params};
+use crate::errors::*;
+use crate::secret::*;
+use rand::prelude::StdRng;
+use rand::Rng;
+use rand::SeedableRng;
+use crate::header::HeaderVersion;
 
-pub fn get_argon2_key(password: &str, salt: &[u8; SALTLEN]) -> Result<[u8; KEYLEN]> {
-    let params = argon2_params();
-    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-
-    let mut key = [0u8; KEYLEN];
-    argon2.hash_password_into(&password.as_bytes(), salt, &mut key).expect("HASH PASSWORD ERROR");
-    Ok(key)
+// this generates a salt for password hashing
+pub fn gen_salt() -> [u8; SALTLEN] {
+    StdRng::from_entropy().gen::<[u8; SALTLEN]>()
 }
 
-fn argon2_params() -> Params {
-    let mut builder = ParamsBuilder::new();
-    builder.m_cost(ARGON2MEMORY).expect("INVALID ARGON2 MEMORY");
-    builder.t_cost(ARGON2ITERATIONS).expect("INVALID ARGON2 ITERATION");
-    builder.p_cost(ARGON2PARALELISM).expect("INVALID ARGON2 PARALELISM");
-    builder.output_len(KEYLEN).expect("INVALID ARGON2 KEYLEN");
-    builder.params().unwrap()
+// this handles argon2 hashing with the provided key
+// it returns the key hashed with a specified salt
+// it also ensures that raw_key is zeroed out
+pub fn argon2_hash(
+    password: &Secret<String>,
+    salt: &[u8; SALTLEN],
+    version: &HeaderVersion,
+) -> Result<Secret<[u8; 32]>, CoreErr> {
+    let mut key = [0u8; 32];
+
+    let params = match version {
+        HeaderVersion::V1 => {
+            // 8192KiB of memory, 8 iterations, 4 levels of parallelism
+            let params = Params::new(8192, 8, 4, Some(Params::DEFAULT_OUTPUT_LEN));
+            match params {
+                Ok(parameters) => parameters,
+                Err(_) => return Err(CoreErr::Argon2Params),
+            }
+        }
+    };
+
+    let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
+    let result = argon2.hash_password_into(password.expose().as_ref(), salt, &mut key);
+    if result.is_err() {
+        return Err(CoreErr::Argon2Hash);
+    }
+    Ok(Secret::new(key))
 }
-
-

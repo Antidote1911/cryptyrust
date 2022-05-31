@@ -3,6 +3,7 @@
 
 #include "QMainWindow"
 #include <QMessageBox>
+#include <QComboBox>
 #include <QProgressBar>
 #include <QActionGroup>
 #include <QDebug>
@@ -23,6 +24,7 @@ MainWindow::MainWindow(QWidget *parent)
     connect(m_ui->menu_AboutQt, &QAction::triggered, this, [=] { QMessageBox::aboutQt(this); });
     connect(m_ui->menu_Open, &QAction::triggered, this, [=] { slot_Open(); });
     connect(m_ui->menu_Quit, &QAction::triggered, this, [=] { QApplication::quit(); });
+    connect(m_ui->comboAlgo, SIGNAL(currentIndexChanged(int)), this, SLOT(savePreferences()));
 }
 
 MainWindow::~MainWindow() = default;
@@ -92,6 +94,9 @@ void MainWindow::loadPreferences()
     restoreGeometry(config()->get(Config::GUI_MainWindowGeometry).toByteArray());
     restoreState(config()->get(Config::GUI_MainWindowState).toByteArray());
 
+    auto algo=config()->get(Config::CRYPTO_algorithm).toInt();
+    m_ui->comboAlgo->setCurrentIndex(algo);
+
 }
 
 void MainWindow::savePreferences()
@@ -99,7 +104,7 @@ void MainWindow::savePreferences()
 
         config()->set(Config::GUI_MainWindowGeometry, saveGeometry());
         config()->set(Config::GUI_MainWindowState,    saveState());
-
+        config()->set(Config::CRYPTO_algorithm,m_ui->comboAlgo->currentIndex());
     // clang-format on
 }
 
@@ -114,8 +119,6 @@ void MainWindow::applyTheme()
     }
     else {
     }
-
-    //setPalette(style()->standardPalette());
 }
 
 void MainWindow::slot_menuAbout() {
@@ -178,7 +181,7 @@ void MainWindow::slot_Open()
     } while (o);
 
     m_ui->label->setText("Working...");
-    cryptoConfig = makeConfig(mode, password.toUtf8().data(), filename.toUtf8().data(), outFilename.toUtf8().data(), output);
+    cryptoConfig = makeConfig(mode,m_ui->comboAlgo->currentIndex(),password.toUtf8().data(), filename.toUtf8().data(), outFilename.toUtf8().data(), output);
     if (cryptoConfig == nullptr) {
         msgBox.setText("Could not start transfer, possibly due to malformed password or filename.");
         msgBox.exec();

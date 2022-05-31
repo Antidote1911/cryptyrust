@@ -2,8 +2,7 @@ use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr::null_mut;
 
-use cryptyrust_core::{get_version, main_routine, Config, Direction, Ui, Algorithm};
-
+use cryptyrust_core::{get_version, main_routine, Config, Direction, Ui, Algorithm, Secret};
 struct ProgressUpdater {
     output_func: extern "C" fn(i32),
 }
@@ -16,17 +15,25 @@ impl Ui for ProgressUpdater {
 
 #[no_mangle]
 pub extern "C" fn makeConfig(
-    mode: u8,
+    direction: u8,
+    algorithm: u8,
     password: *mut c_char,
     filename: *mut c_char,
     out_filename: *mut c_char,
     output_func: extern "C" fn(i32),
 ) -> *mut Config {
-    let m = match mode {
+    let dir = match direction {
         0 => Direction::Encrypt,
         1 => Direction::Decrypt,
-        _ => panic!("received invalid mode enum from c++"),
+        _ => panic!("received invalid direction enum from c++"),
     };
+    let algo = match algorithm {
+        0 => Algorithm::XChaCha20Poly1305,
+        1 => Algorithm::Aes256Gcm,
+        2 => Algorithm::DeoxysII256,
+        _ => panic!("received invalid algorithm enum from c++"),
+    };
+
     let p = match c_to_rust_string(password) {
         Ok(s) => s,
         Err(_) => return null_mut(),
@@ -40,7 +47,7 @@ pub extern "C" fn makeConfig(
         Err(_) => return null_mut(),
     };
     let ui = Box::new(ProgressUpdater { output_func });
-    Box::into_raw(Box::new(Config::new(m,Algorithm::AesGcm ,p, Some(f), Some(o), ui)))
+    Box::into_raw(Box::new(Config::new(dir,algo ,Secret::new(p), Some(f), Some(o), ui)))
 }
 
 #[no_mangle]
@@ -57,8 +64,8 @@ pub unsafe extern "C" fn start(ptr: *mut Config) -> *mut c_char {
     let msg = match main_routine(config) {
         Ok(duration) => match config.direction {
             Direction::Encrypt => format!(
-                "Success! File {} has been encrypted in {} s",
-                config.out_file.as_ref().unwrap(),duration
+                "Success! File {} has been encrypted in {} s with {}",
+                config.out_file.as_ref().unwrap(),duration,config.algorithm
             ),
             Direction::Decrypt => format!(
                 "Success! File {} has been decrypted in {} s",

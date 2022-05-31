@@ -15,18 +15,15 @@ const FILE_EXTENSION: &str = ".crypty";
 
 struct ProgressUpdater {
     mode: Direction,
-    stdout: bool,
 }
 
 impl Ui for ProgressUpdater {
     fn output(&self, percentage: i32) {
-        if !self.stdout {
             let s = match self.mode {
                 Direction::Encrypt => "Encrypting",
                 Direction::Decrypt => "Decrypting",
             };
-            print!("\r{}: {}%", s, percentage);
-        }
+            //print!("\r{}: {}%", s, percentage);
     }
 }
 
@@ -48,8 +45,7 @@ fn main() {
 fn run() -> Result<(Option<String>, Direction, f64)> {
     // Augment built args with derived args
     let app = Cli::parse();
-
-    let direction = if app.encrypt().is_some() || app.encryptstdin() {
+    let direction = if app.encrypt().is_some() {
         Direction::Encrypt
     } else {
         Direction::Decrypt
@@ -76,35 +72,37 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
         None // using stdin
     };
 
-    let output_path = if !app.stdout() {
+    let output_path =  {
         let s = generate_output_path(&direction, filename.as_deref(), app.output()).unwrap()
             .to_str()
             .ok_or("could not convert output path to string").unwrap()
             .to_string();
         Some(s)
-    } else {
-        None
+
     };
 
     // get_password needs to only happen if using neither stdin nor stdout: using requires() in clap
     // password prompting is affected by both stdin and stdout, whereas other printing is affected only by stdout
-    let password = if app.password().is_some() {
-        app.password().unwrap()
+    let password: Secret<String>= if app.password().is_some() {
+        let tmp=app.password().unwrap();
+        Secret::new(tmp)
     } else if app.passwordfile().is_some() {
         let pw_file = app.passwordfile().unwrap();
         let p = Path::new(&pw_file);
-        std::fs::read_to_string(p).unwrap()
+        drop(pw_file);
+        let tmp=std::fs::read_to_string(p).unwrap();
+        Secret::new(tmp)
     } else {
         get_password(&direction)
     };
     let ui = Box::new(ProgressUpdater {
         mode: direction.clone(),
-        stdout: app.stdout(),
     });
 
     let algo = match app.algo() {
-        Algo::Aessiv => Algorithm::AesGcm,
+        Algo::Aesgcm => Algorithm::Aes256Gcm,
         Algo::Chacha => Algorithm::XChaCha20Poly1305,
+        Algo::Deoxys => Algorithm::DeoxysII256,
     };
 
     let config = Config::new(
@@ -124,7 +122,7 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
     }
 }
 
-fn get_password(mode: &Direction) -> String {
+fn get_password(mode: &Direction) -> Secret<String> {
     match mode {
         Direction::Encrypt => {
             let password = rpassword::prompt_password(
@@ -141,10 +139,12 @@ fn get_password(mode: &Direction) -> String {
                 println!("Error: passwords do not match. Exiting.");
                 exit(1);
             }
-            password
+            Secret::new(password)
         }
-        Direction::Decrypt => rpassword::prompt_password("Password: ")
-            .expect("could not get password from user"),
+        Direction::Decrypt => {
+            let password= rpassword::prompt_password("Password: ").expect("could not get password from user");
+            Secret::new(password)
+        },
     }
 }
 

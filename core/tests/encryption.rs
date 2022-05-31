@@ -4,6 +4,7 @@ extern crate cryptyrust_core;
 mod tests {
     use std::fs;
     use cryptyrust_core::Algorithm;
+    use cryptyrust_core::Secret;
 
     struct ProgressUpdater {}
 
@@ -12,17 +13,17 @@ mod tests {
     }
 
     #[test]
-    fn compare_decrypted_to_original() -> Result<(), Box<dyn std::error::Error>> {
+    fn compare_decrypted_to_original_with_aes() -> Result<(), Box<dyn std::error::Error>> {
         let source_file_path = "filetest.bin";
-        let dest_file_path = "filetest.bin.encrypted";
+        let dest_file_path = "filetest.bin.encrypted.aes";
         let password = "a very secure password!";
-        let decrypted_file_path = "filetest.bin.decrypted";
+        let decrypted_file_path = "filetest.bin.decrypted.aes";
 
         // encrypt filetest.bin to filetest.bin.encrypted
         let config = cryptyrust_core::Config::new(
             cryptyrust_core::Direction::Encrypt,
-            Algorithm::AesGcm,
-            password.to_string(),
+            Algorithm::Aes256Gcm,
+            Secret::new(password.to_string()),
             Some(source_file_path.parse().unwrap()),
             Some(dest_file_path.clone().parse().unwrap()),
             Box::new(ProgressUpdater {}),
@@ -33,8 +34,47 @@ mod tests {
         // decrypt filetest.bin.encrypted to filetest.bin.decrypted
         let config = cryptyrust_core::Config::new(
             cryptyrust_core::Direction::Decrypt,
-            Algorithm::AesGcm,
-            password.to_string(),
+            Algorithm::Aes256Gcm,
+            Secret::new(password.to_string()),
+            Some(dest_file_path.parse().unwrap()),
+            Some(decrypted_file_path.clone().parse().unwrap()),
+            Box::new(ProgressUpdater {}),
+        );
+        cryptyrust_core::main_routine(&config)?;
+        assert!(cryptyrust_core::main_routine(&config).is_ok());
+
+        assert_eq!(
+            fs::read(source_file_path).unwrap(),
+            fs::read(decrypted_file_path).unwrap()
+        );
+        fs::remove_file(dest_file_path).expect("could not remove file");
+        fs::remove_file(decrypted_file_path).expect("could not remove file");
+        Ok(())
+    }
+    #[test]
+    fn compare_decrypted_to_original_with_xchacha() -> Result<(), Box<dyn std::error::Error>> {
+        let source_file_path = "filetest.bin";
+        let dest_file_path = "filetest.bin.encrypted.xchacha";
+        let password = "a very secure password!";
+        let decrypted_file_path = "filetest.bin.decrypted.xchacha";
+
+        // encrypt filetest.bin to filetest.bin.encrypted
+        let config = cryptyrust_core::Config::new(
+            cryptyrust_core::Direction::Encrypt,
+            Algorithm::XChaCha20Poly1305,
+            Secret::new(password.to_string()),
+            Some(source_file_path.parse().unwrap()),
+            Some(dest_file_path.clone().parse().unwrap()),
+            Box::new(ProgressUpdater {}),
+        );
+        cryptyrust_core::main_routine(&config)?;
+        assert!(cryptyrust_core::main_routine(&config).is_ok());
+
+        // decrypt filetest.bin.encrypted to filetest.bin.decrypted
+        let config = cryptyrust_core::Config::new(
+            cryptyrust_core::Direction::Decrypt,
+            Algorithm::XChaCha20Poly1305,
+            Secret::new(password.to_string()),
             Some(dest_file_path.parse().unwrap()),
             Some(decrypted_file_path.clone().parse().unwrap()),
             Box::new(ProgressUpdater {}),
@@ -51,5 +91,44 @@ mod tests {
         Ok(())
     }
 
+    #[test]
+    fn compare_decrypted_to_original_with_deoxys() -> Result<(), Box<dyn std::error::Error>> {
+        let source_file_path = "filetest.bin";
+        let dest_file_path = "filetest.bin.encrypted.deoxys";
+        let password = "a very secure password!";
+        let decrypted_file_path = "filetest.bin.decrypted.deoxys";
+
+        // encrypt filetest.bin to filetest.bin.encrypted
+        let config = cryptyrust_core::Config::new(
+            cryptyrust_core::Direction::Encrypt,
+            Algorithm::DeoxysII256,
+            Secret::new(password.to_string()),
+            Some(source_file_path.parse().unwrap()),
+            Some(dest_file_path.clone().parse().unwrap()),
+            Box::new(ProgressUpdater {}),
+        );
+        cryptyrust_core::main_routine(&config)?;
+        assert!(cryptyrust_core::main_routine(&config).is_ok());
+
+        // decrypt filetest.bin.encrypted to filetest.bin.decrypted
+        let config = cryptyrust_core::Config::new(
+            cryptyrust_core::Direction::Decrypt,
+            Algorithm::DeoxysII256,
+            Secret::new(password.to_string()),
+            Some(dest_file_path.parse().unwrap()),
+            Some(decrypted_file_path.clone().parse().unwrap()),
+            Box::new(ProgressUpdater {}),
+        );
+        cryptyrust_core::main_routine(&config)?;
+        assert!(cryptyrust_core::main_routine(&config).is_ok());
+
+        assert_eq!(
+            fs::read(source_file_path).unwrap(),
+            fs::read(decrypted_file_path).unwrap()
+        );
+        fs::remove_file(dest_file_path).expect("could not remove file");
+        fs::remove_file(decrypted_file_path).expect("could not remove file");
+        Ok(())
+    }
 }
 

@@ -1,0 +1,14 @@
+# ninja log v5
+0	334	1653985161953251097	cryptyrust_autogen/timestamp	3cf42d68f91eac05
+0	334	1653985161953251097	cryptyrust_autogen/mocs_compilation.cpp	3cf42d68f91eac05
+0	334	1653985161953251097	/home/antidote/Documents/cryptyrust/qtgui/cmake-build-release/cryptyrust_autogen/timestamp	3cf42d68f91eac05
+0	334	1653985161953251097	/home/antidote/Documents/cryptyrust/qtgui/cmake-build-release/cryptyrust_autogen/mocs_compilation.cpp	3cf42d68f91eac05
+335	1683	1653985163306610504	CMakeFiles/cryptyrust.dir/cryptyrust_autogen/mocs_compilation.cpp.o	5c90d159a6ce9473
+336	1722	1653985163343277877	CMakeFiles/cryptyrust.dir/skin/skin.cpp.o	6a72665b3077f8b4
+335	1759	1653985163383278648	CMakeFiles/cryptyrust.dir/main.cpp.o	ce94819447e43753
+336	1907	1653985163529948140	CMakeFiles/cryptyrust.dir/adapter.cpp.o	e76621ba00d21a3b
+335	1948	1653985163569948911	CMakeFiles/cryptyrust.dir/droparea.cpp.o	31064b6028ef19c1
+336	1957	1653985163579949104	CMakeFiles/cryptyrust.dir/Config.cpp.o	e9f5a9b528ff6ae4
+335	2479	1653985164099959124	CMakeFiles/cryptyrust.dir/mainwindow.cpp.o	77cfc40309073aa9
+2479	3132	1653985164749971653	cryptyrust	4232adc23f7488fd
+1	647	1653987904928056777	cryptyrust	4232adc23f7488fd

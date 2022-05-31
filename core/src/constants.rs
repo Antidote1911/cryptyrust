@@ -1,4 +1,5 @@
 #![allow(dead_code)]
+use crate::header::HeaderVersion;
 
 pub const APP_NAME: &str = env!("CARGO_PKG_NAME");
 pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -11,6 +12,8 @@ pub const NONCELEN:usize = 7;
 pub const XNONCELEN:usize = 19;
 pub const KEYLEN: usize = 32;
 pub const TAGLEN: usize = 16;
+
+pub const VERSION: HeaderVersion = HeaderVersion::V1;
 
 // keygen constants
 pub const ARGON2PARALELISM:u32 = 4;

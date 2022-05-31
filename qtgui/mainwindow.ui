@@ -57,11 +57,30 @@ or an encrypted file to decrypt</string>
       </property>
      </widget>
     </item>
-    <item row="1" column="0">
+    <item row="2" column="0">
      <widget class="QProgressBar" name="progBar">
       <property name="value">
        <number>24</number>
       </property>
+     </widget>
+    </item>
+    <item row="1" column="0">
+     <widget class="QComboBox" name="comboAlgo">
+      <item>
+       <property name="text">
+        <string>XChaCha20Poly1305</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>Aes256Gcm</string>
+       </property>
+      </item>
+      <item>
+       <property name="text">
+        <string>DeoxysII256</string>
+       </property>
+      </item>
      </widget>
     </item>
    </layout>
@@ -143,6 +162,35 @@ or an encrypted file to decrypt</string>
    </property>
    <property name="text">
     <string>Light</string>
+   </property>
+  </action>
+  <action name="actionCrypto">
+   <property name="text">
+    <string>Crypto</string>
+   </property>
+  </action>
+  <action name="actionAes256Gcm">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Aes256Gcm</string>
+   </property>
+  </action>
+  <action name="actiondeoxys">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>deoxys</string>
+   </property>
+  </action>
+  <action name="actionChacha20Poly1305">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Chacha20Poly1305</string>
    </property>
   </action>
  </widget>

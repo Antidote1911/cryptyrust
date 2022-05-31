@@ -1,9 +1,11 @@
-use aes_gcm_siv::Aes256GcmSiv;
-use chacha20poly1305::XChaCha20Poly1305;
 use aead::{
-    stream::{DecryptorBE32, EncryptorBE32},
-    Payload, Result,
+    stream::{DecryptorLE31, EncryptorLE31},
+    Payload,
 };
+use aes_gcm::Aes256Gcm;
+use chacha20poly1305::XChaCha20Poly1305;
+use deoxys::DeoxysII256;
+use crate::secret::Secret;
 
 
 #[derive(Clone, Debug)]
@@ -14,14 +16,17 @@ pub enum Direction {
 
 #[derive(Copy, Clone)]
 pub enum Algorithm {
-    AesGcm,
+    Aes256Gcm,
     XChaCha20Poly1305,
+    DeoxysII256,
 }
+
 impl std::fmt::Display for Algorithm {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         match *self {
-            Algorithm::AesGcm => write!(f, "AESGCM"),
-            Algorithm::XChaCha20Poly1305 => write!(f, "CHACHA"),
+            Algorithm::Aes256Gcm => write!(f, "AES-256-GCM"),
+            Algorithm::XChaCha20Poly1305 => write!(f, "XChaCha20-Poly1305"),
+            Algorithm::DeoxysII256 => write!(f, "Deoxys-II-256"),
         }
     }
 }
@@ -29,40 +34,44 @@ impl std::fmt::Display for Algorithm {
 pub struct Config {
     pub direction: Direction,
     pub algorithm: Algorithm,
-    pub password: String,
+    pub password: Secret<String>,
     pub filename: Option<String>,
     pub out_file: Option<String>,
     pub ui: Box<dyn Ui>,
 }
 
 pub enum EncryptStreamCiphers {
-    AesGcm(Box<EncryptorBE32<Aes256GcmSiv>>),
-    XChaCha(Box<EncryptorBE32<XChaCha20Poly1305>>),
+    Aes256Gcm(Box<EncryptorLE31<Aes256Gcm>>),
+    XChaCha(Box<EncryptorLE31<XChaCha20Poly1305>>),
+    DeoxysII(Box<EncryptorLE31<DeoxysII256>>),
 }
 
 pub enum DecryptStreamCiphers {
-    AesGcm(Box<DecryptorBE32<Aes256GcmSiv>>),
-    XChaCha(Box<DecryptorBE32<XChaCha20Poly1305>>),
+    Aes256Gcm(Box<DecryptorLE31<Aes256Gcm>>),
+    XChaCha(Box<DecryptorLE31<XChaCha20Poly1305>>),
+    DeoxysII(Box<DecryptorLE31<DeoxysII256>>),
 }
 
 impl EncryptStreamCiphers {
     pub fn encrypt_next<'msg, 'aad>(
         &mut self,
         payload: impl Into<Payload<'msg, 'aad>>,
-    ) -> Result<Vec<u8>> {
+    ) -> aead::Result<Vec<u8>> {
         match self {
-            EncryptStreamCiphers::AesGcm(s) => s.encrypt_next(payload),
+            EncryptStreamCiphers::Aes256Gcm(s) => s.encrypt_next(payload),
             EncryptStreamCiphers::XChaCha(s) => s.encrypt_next(payload),
+            EncryptStreamCiphers::DeoxysII(s) => s.encrypt_next(payload),
         }
     }
 
     pub fn encrypt_last<'msg, 'aad>(
         self,
         payload: impl Into<Payload<'msg, 'aad>>,
-    ) -> Result<Vec<u8>> {
+    ) -> aead::Result<Vec<u8>> {
         match self {
-            EncryptStreamCiphers::AesGcm(s) => s.encrypt_last(payload),
+            EncryptStreamCiphers::Aes256Gcm(s) => s.encrypt_last(payload),
             EncryptStreamCiphers::XChaCha(s) => s.encrypt_last(payload),
+            EncryptStreamCiphers::DeoxysII(s) => s.encrypt_last(payload),
         }
     }
 }
@@ -73,8 +82,9 @@ impl DecryptStreamCiphers {
         payload: impl Into<Payload<'msg, 'aad>>,
     ) -> aead::Result<Vec<u8>> {
         match self {
-            DecryptStreamCiphers::AesGcm(s) => s.decrypt_next(payload),
+            DecryptStreamCiphers::Aes256Gcm(s) => s.decrypt_next(payload),
             DecryptStreamCiphers::XChaCha(s) => s.decrypt_next(payload),
+            DecryptStreamCiphers::DeoxysII(s) => s.decrypt_next(payload),
         }
     }
 
@@ -83,12 +93,12 @@ impl DecryptStreamCiphers {
         payload: impl Into<Payload<'msg, 'aad>>,
     ) -> aead::Result<Vec<u8>> {
         match self {
-            DecryptStreamCiphers::AesGcm(s) => s.decrypt_last(payload),
+            DecryptStreamCiphers::Aes256Gcm(s) => s.decrypt_last(payload),
             DecryptStreamCiphers::XChaCha(s) => s.decrypt_last(payload),
+            DecryptStreamCiphers::DeoxysII(s) => s.decrypt_last(payload),
         }
     }
 }
-
 
 pub trait Ui {
     fn output(&self, percentage: i32);
@@ -98,7 +108,7 @@ impl Config {
     pub fn new(
         _direction: Direction,
         algorithm: Algorithm,
-        password: String,
+        password: Secret<String>,
         filename: Option<String>,
         out_file: Option<String>,
         ui: Box<dyn Ui>,

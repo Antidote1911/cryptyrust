@@ -50,6 +50,7 @@
 
 #include "adapter.h"
 #include "droparea.h"
+#include "Config.h"
 
 #include <QDragEnterEvent>
 #include <QFileInfo>
@@ -139,18 +140,20 @@ void DropArea::dropEvent(QDropEvent *event)
     } while (o);
 
     setText("Working...");
-    config = makeConfig(direction, password.toUtf8().data(), filename.toUtf8().data(), outFilename.toUtf8().data(), output);
-    if (config == nullptr) {
+    auto algo = config()->get(Config::CRYPTO_algorithm).toInt();
+
+    crypto = makeConfig(direction,algo ,password.toUtf8().data(), filename.toUtf8().data(), outFilename.toUtf8().data(), output);
+    if (crypto == nullptr) {
         msgBox.setText("Could not start transfer, possibly due to malformed password or filename.");
         msgBox.exec();
         this->setBackgroundRole(QPalette::Dark);
         event->acceptProposedAction();
         return;
     }
-    ret_msg = start(config);
+    ret_msg = start(crypto);
     msgBox.setText(ret_msg);
     msgBox.exec();
-    destroyConfig(config);
+    destroyConfig(crypto);
     destroyCString(ret_msg);
     this->clear();
 }

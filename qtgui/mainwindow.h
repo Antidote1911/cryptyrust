@@ -18,6 +18,7 @@ class MainWindow : public QMainWindow {
 
   private slots:
     void slot_menuAbout();
+    void savePreferences();
     void slot_Open();
     void reboot();
 
@@ -29,7 +30,6 @@ class MainWindow : public QMainWindow {
     void applyTheme();
     void loadPreferences();
     void initViewMenu();
-    void savePreferences();
     void* cryptoConfig{};
     char* ret_msg{};
 };
