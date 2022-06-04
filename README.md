@@ -20,6 +20,10 @@ If no output file is specified with `-o`, Cryptyrust generate an incremental uni
 ./cryptyrust_cli -e test.mp4 -p 12345678
 ./cryptyrust_cli -d test.mp4.crypty -p 12345678
 
+# encrypt the file test.mp4 with password 12345678 and show the hash of the output file, and décrypt it:
+./cryptyrust_cli -e test.mp4 -p 12345678 -h
+./cryptyrust_cli -d test.mp4.crypty -p 12345678 -h
+
 # encrypt the file test.mp4 with password 12345678, with moderate key derivation, and décrypt it:
 ./cryptyrust_cli -e test.mp4 -p 12345678 -s moderate
 ./cryptyrust_cli -d test.mp4.crypty -p 12345678
@@ -68,6 +72,8 @@ the output file is :
 - encrypted chunk_1  ( BUFFER_SIZE + 16 bytes Authentication tag )
 - encrypted chunk_2  ( BUFFER_SIZE + 16 bytes Authentication tag )
 - ....etc
+
+You can have a look at a more detailled header format [here](FORMAT.md)
 
 
 ## Linux Compilation instructions:
