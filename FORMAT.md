@@ -28,7 +28,7 @@ Padding 16 bytes of 0 for future usage.
 The random nonce. Example with Aes256Gcm (8 bytes):
 - 4B 11 E7 68 4E 51 FF 25
 
-Padding some 0 to always have a 64 bytes header. With this example 64-(4+2+2+2+16+16+8)=16 bytes:
+Padding some 0 to always have a 64 bytes header. With this example 64-(4+2+2+2+16+16+8)= 14 bytes:
 - 00 00 00 00 00 00 00 00 00 00 00 00 00 00
 
 In this file we use Aes256Gcm (0E 02) with Sensitive derivation (BE 03). The nonce is 8 bytes with Aes256Gcm. For a 64 bytes header, 14 bytes of 0 are padded. The file look like:    
