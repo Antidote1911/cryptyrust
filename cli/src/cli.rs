@@ -31,17 +31,29 @@ pub struct Cli {
     #[clap(long, short, value_name = "PATH_TO_OUTPUT_FILE")]
     output: Option<String>,
 
-    /// Optional, and not recommended due to the password appearing in shell history. Password for the file. This or the --password-file (-f) flag is required if using stdin and/or stdout.
+    /// Not recommended due to the password appearing in shell history.
     #[clap(short, long, value_name = "PASSWORD")]
     password: Option<String>,
 
-    /// Optional, choose algorithm aesgcm ,aesgcmsiv, chacha or deoxys. Ignored in decryption mode
+    /// Choose algorithm. Ignored in decryption mode
     #[clap(short, long, arg_enum,value_name = "ALGO", default_value = "aesgcm")]
     algo: Algo,
 
-    /// The password to encrypt/decrypt with will be read from a text file at the path provided. File should be valid UTF-8 and contain only the password with no newline. This or the --password (-p) flag is required if using stdin and/or stdout.
+    /// Choose password derivation strength
+    #[clap(short, long, arg_enum,value_name = "STRENGTH", default_value = "interactive")]
+    strength: Strength,
+
+    /// File should be valid UTF-8 and contain only the password with no newline.
     #[clap(short='f', long, value_name = "PASSWORD_FILE")]
     passwordfile: Option<String>,
+
+    /// Optional, output hash
+    #[clap(short, long)]
+    hash: bool,
+
+    /// Optional, bench mode
+    #[clap(short, long)]
+    bench: bool,
 
 }
 
@@ -53,9 +65,19 @@ pub enum Algo {
     Aesgcmsiv,
 }
 
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ArgEnum)]
+pub enum Strength {
+    Interactive,
+    Moderate,
+    Sensitive,
+}
+
 impl Cli {
     pub fn algo(&self) -> Algo {
         self.algo
+    }
+    pub fn strength(&self) -> Strength {
+        self.strength
     }
     pub fn password(&self) -> Option<String> {
         self.password.clone()
@@ -71,5 +93,11 @@ impl Cli {
     }
     pub fn decrypt(&self) -> Option<&str> {
         self.decrypt.as_deref()
+    }
+    pub fn hash(&self) -> bool {
+        self.hash
+    }
+    pub fn bench(&self) -> bool {
+        self.bench
     }
 }

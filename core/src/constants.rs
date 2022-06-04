@@ -6,7 +6,7 @@ pub const APP_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 //// Crypto constants
 pub const MSGLEN: usize = 10*1024;
-pub const SIGNATURE: [u8; 4] = [0x43, 0x52, 0x59, 0x50];
+pub const MAGICNUMBER: [u8; 4] = [0x43, 0x52, 0x59, 0x50];
 pub const SALTLEN: usize = 16;
 pub const NONCELEN:usize = 7;
 pub const XNONCELEN:usize = 19;

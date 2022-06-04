@@ -24,8 +24,8 @@ pub fn argon2_hash(
 
     let params = match version {
         HeaderVersion::V1 => {
-            // 512 MiB of memory, 8 iterations, 4 levels of parallelism
-            let params = Params::new(524288, 8, 4, Some(Params::DEFAULT_OUTPUT_LEN));
+            // 1024*10 KiB of memory, 8 iterations, 4 levels of parallelism
+            let params = Params::new(1024*10, 8, 4, Some(Params::DEFAULT_OUTPUT_LEN));
             match params {
                 Ok(parameters) => parameters,
                 Err(_) => return Err(CoreErr::Argon2Params),

@@ -8,6 +8,17 @@ use chacha20poly1305::XChaCha20Poly1305;
 use deoxys::DeoxysII256;
 use crate::secret::Secret;
 
+#[derive(PartialEq, Clone, Copy)]
+pub enum HashMode {
+    CalculateHash,
+    NoHash,
+}
+
+#[derive(PartialEq, Copy, Clone)]
+pub enum BenchMode {
+    WriteToFilesystem,
+    BenchmarkInMemory,
+}
 
 #[derive(Clone, Debug)]
 pub enum Direction {
@@ -21,6 +32,13 @@ pub enum Algorithm {
     XChaCha20Poly1305,
     DeoxysII256,
     Aes256GcmSiv
+}
+
+#[derive(Copy, Clone)]
+pub enum DeriveStrength {
+    Interactive,
+    Moderate,
+    Sensitive,
 }
 
 impl std::fmt::Display for Algorithm {
@@ -37,10 +55,13 @@ impl std::fmt::Display for Algorithm {
 pub struct Config {
     pub direction: Direction,
     pub algorithm: Algorithm,
+    pub derivestrength:DeriveStrength,
     pub password: Secret<String>,
     pub filename: Option<String>,
     pub out_file: Option<String>,
     pub ui: Box<dyn Ui>,
+    pub hashmode:HashMode,
+    pub benchmode:BenchMode,
 }
 
 pub enum EncryptStreamCiphers {
@@ -117,19 +138,25 @@ impl Config {
     pub fn new(
         _direction: Direction,
         algorithm: Algorithm,
+        derivestrength:DeriveStrength,
         password: Secret<String>,
         filename: Option<String>,
         out_file: Option<String>,
         ui: Box<dyn Ui>,
+        hashmode:HashMode,
+        benchmode:BenchMode,
     ) -> Self {
         let direction: Direction = _direction.clone();
         Config {
             direction,
             algorithm,
+            derivestrength,
             password,
             filename,
             out_file,
             ui,
+            hashmode,
+            benchmode,
         }
     }
 }

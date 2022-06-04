@@ -106,14 +106,19 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
         Algo::Aesgcmsiv => Algorithm::Aes256GcmSiv,
     };
 
-    let config = Config::new(
-        direction.clone(),
-        algo,
-        password,
-        filename.map(|f| f.to_string()),
-        output_path.clone(),
-        ui,
-    );
+    let hash = match app.hash() {
+        true => HashMode::CalculateHash,
+        false => HashMode::NoHash,
+    };
+
+    let bench = match app.bench() {
+        true => BenchMode::BenchmarkInMemory,
+        false => BenchMode::WriteToFilesystem,
+    };
+
+
+
+    let config = Config::new(direction.clone(), algo,DeriveStrength::Interactive ,password, filename.map(|f| f.to_string()), output_path.clone(), ui, hash, bench);
 
     match main_routine(&config) {
         Ok(duration) =>{ Ok((output_path, direction, duration))},

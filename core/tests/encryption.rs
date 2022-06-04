@@ -3,7 +3,7 @@ extern crate cryptyrust_core;
 #[cfg(test)]
 mod tests {
     use std::fs;
-    use cryptyrust_core::Algorithm;
+    use cryptyrust_core::{Algorithm, BenchMode, DeriveStrength, HashMode};
     use cryptyrust_core::Secret;
 
     struct ProgressUpdater {}
@@ -23,22 +23,28 @@ mod tests {
         let config = cryptyrust_core::Config::new(
             cryptyrust_core::Direction::Encrypt,
             Algorithm::Aes256Gcm,
+            DeriveStrength::Interactive,
             Secret::new(password.to_string()),
             Some(source_file_path.parse().unwrap()),
             Some(dest_file_path.clone().parse().unwrap()),
             Box::new(ProgressUpdater {}),
+            HashMode::NoHash,
+            BenchMode::WriteToFilesystem,
         );
-        cryptyrust_core::main_routine(&config)?;
-        assert!(cryptyrust_core::main_routine(&config).is_ok());
+        cryptyrust_core::main_routine(&config).unwrap();
+        //assert!(cryptyrust_core::main_routine(&config).is_ok());
 
         // decrypt filetest.bin.encrypted to filetest.bin.decrypted
         let config = cryptyrust_core::Config::new(
             cryptyrust_core::Direction::Decrypt,
             Algorithm::Aes256Gcm,
+            DeriveStrength::Interactive,
             Secret::new(password.to_string()),
             Some(dest_file_path.parse().unwrap()),
             Some(decrypted_file_path.clone().parse().unwrap()),
             Box::new(ProgressUpdater {}),
+            HashMode::NoHash,
+            BenchMode::WriteToFilesystem,
         );
         cryptyrust_core::main_routine(&config)?;
         assert!(cryptyrust_core::main_routine(&config).is_ok());
@@ -62,10 +68,13 @@ mod tests {
         let config = cryptyrust_core::Config::new(
             cryptyrust_core::Direction::Encrypt,
             Algorithm::XChaCha20Poly1305,
+            DeriveStrength::Interactive,
             Secret::new(password.to_string()),
             Some(source_file_path.parse().unwrap()),
             Some(dest_file_path.clone().parse().unwrap()),
             Box::new(ProgressUpdater {}),
+            HashMode::NoHash,
+            BenchMode::WriteToFilesystem,
         );
         cryptyrust_core::main_routine(&config)?;
         assert!(cryptyrust_core::main_routine(&config).is_ok());
@@ -74,10 +83,13 @@ mod tests {
         let config = cryptyrust_core::Config::new(
             cryptyrust_core::Direction::Decrypt,
             Algorithm::XChaCha20Poly1305,
+            DeriveStrength::Interactive,
             Secret::new(password.to_string()),
             Some(dest_file_path.parse().unwrap()),
             Some(decrypted_file_path.clone().parse().unwrap()),
             Box::new(ProgressUpdater {}),
+            HashMode::NoHash,
+            BenchMode::WriteToFilesystem,
         );
         cryptyrust_core::main_routine(&config)?;
         assert!(cryptyrust_core::main_routine(&config).is_ok());
@@ -102,10 +114,13 @@ mod tests {
         let config = cryptyrust_core::Config::new(
             cryptyrust_core::Direction::Encrypt,
             Algorithm::DeoxysII256,
+            DeriveStrength::Interactive,
             Secret::new(password.to_string()),
             Some(source_file_path.parse().unwrap()),
             Some(dest_file_path.clone().parse().unwrap()),
             Box::new(ProgressUpdater {}),
+            HashMode::NoHash,
+            BenchMode::WriteToFilesystem,
         );
         cryptyrust_core::main_routine(&config)?;
         assert!(cryptyrust_core::main_routine(&config).is_ok());
@@ -114,10 +129,13 @@ mod tests {
         let config = cryptyrust_core::Config::new(
             cryptyrust_core::Direction::Decrypt,
             Algorithm::DeoxysII256,
+            DeriveStrength::Interactive,
             Secret::new(password.to_string()),
             Some(dest_file_path.parse().unwrap()),
             Some(decrypted_file_path.clone().parse().unwrap()),
             Box::new(ProgressUpdater {}),
+            HashMode::NoHash,
+            BenchMode::WriteToFilesystem,
         );
         cryptyrust_core::main_routine(&config)?;
         assert!(cryptyrust_core::main_routine(&config).is_ok());
@@ -142,10 +160,13 @@ mod tests {
         let config = cryptyrust_core::Config::new(
             cryptyrust_core::Direction::Encrypt,
             Algorithm::Aes256GcmSiv,
+            DeriveStrength::Interactive,
             Secret::new(password.to_string()),
             Some(source_file_path.parse().unwrap()),
             Some(dest_file_path.clone().parse().unwrap()),
             Box::new(ProgressUpdater {}),
+            HashMode::NoHash,
+            BenchMode::WriteToFilesystem,
         );
         cryptyrust_core::main_routine(&config)?;
         assert!(cryptyrust_core::main_routine(&config).is_ok());
@@ -154,10 +175,13 @@ mod tests {
         let config = cryptyrust_core::Config::new(
             cryptyrust_core::Direction::Decrypt,
             Algorithm::Aes256GcmSiv,
+            DeriveStrength::Interactive,
             Secret::new(password.to_string()),
             Some(dest_file_path.parse().unwrap()),
             Some(decrypted_file_path.clone().parse().unwrap()),
             Box::new(ProgressUpdater {}),
+            HashMode::NoHash,
+            BenchMode::WriteToFilesystem,
         );
         cryptyrust_core::main_routine(&config)?;
         assert!(cryptyrust_core::main_routine(&config).is_ok());

@@ -20,24 +20,17 @@ pub const fn get_version() -> &'static str {
 }
 
 pub fn main_routine(c: &Config) -> Result<f64, CoreErr> {
-    let in_file = match &c.filename {
-        Some(s) => Some(File::open(s)?),
-        None => None,
-    };
-    let out_file = match &c.out_file {
-        Some(s) => Some(File::create(s)?),
-        None => None,
-    };
-    let filesize = if let Some(f) = &in_file {
-        Some(f.metadata()?.len() as usize)
-    } else {
-        None
-    };
+    let mut in_file =  File::open(&c.filename.as_ref().unwrap()).unwrap();
+
+    let mut out_file = File::create(c.out_file.as_ref().unwrap()).unwrap();
+
+
+    let filesize = in_file.metadata().unwrap().len() as u64;
 
     let start = Instant::now();
     match c.direction {
         Direction::Encrypt => {
-            match encrypt(&mut in_file.unwrap(), &mut out_file.unwrap(),&c.password, &c.ui, filesize, c.algorithm) {
+            match encrypt(&mut in_file, &mut out_file,&c.password, &c.ui, filesize, c.algorithm,c.hashmode,c.benchmode) {
                 Ok(()) => (),
                 Err(e) => {
                     if let Some(out_file) = &c.out_file {
@@ -48,7 +41,7 @@ pub fn main_routine(c: &Config) -> Result<f64, CoreErr> {
             };
         }
         Direction::Decrypt => {
-            match decrypt(&mut in_file.unwrap(), &mut out_file.unwrap(),&c.password, &c.ui, filesize) {
+            match decrypt(&mut in_file, &mut out_file,&c.password, &c.ui, filesize,c.hashmode,c.benchmode) {
                 Ok(()) => (),
                 Err(e) => {
                     if let Some(out_file) = &c.out_file {

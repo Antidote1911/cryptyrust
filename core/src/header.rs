@@ -1,8 +1,8 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use crate::errors::*;
-use crate::{Algorithm, SALTLEN, SIGNATURE};
-
+use crate::{Algorithm, SALTLEN, MAGICNUMBER};
+use blake3::Hasher;
 
 pub enum HeaderVersion {
     V1,
@@ -29,10 +29,10 @@ pub fn write_to_file(file: &mut File, header: &Header) -> Result<(), CoreErr> {
 
     match &header.header_type.header_version {
         HeaderVersion::V1 => {
-            let padding = vec![0u8; 20 - nonce_len];
+            let padding = vec![0u8; 24 - nonce_len];
             let (version_info, algorithm_info) = serialize(&header.header_type);
 
-            file.write_all(&SIGNATURE)
+            file.write_all(&MAGICNUMBER)
                 .map_err(|e| CoreErr::IOError(e))?; // 4
             file.write_all(&version_info)
                 .map_err(|e| CoreErr::IOError(e))?; // 2
@@ -48,24 +48,24 @@ pub fn write_to_file(file: &mut File, header: &Header) -> Result<(), CoreErr> {
                 .map_err(|e| CoreErr::IOError(e))?; // 20 - nonce_len. This has reached the 64 bytes
         }
     }
-
     Ok(())
 }
 
 // this takes an input file, and gets all of the data necessary from the header of the file
 // it ensures that the buffer starts at 64 bytes, so that other functions can just read encrypted data immediately
-pub fn read_from_file(file: &mut File) -> Result<Header, CoreErr> {
-    let mut signature = [0u8; 4];
+pub fn read_from_file(file: &mut File) -> Result<(Header, Vec<u8>), CoreErr> {
+    let mut magicnumber = [0u8; 4];
     let mut version_info = [0u8; 2];
     let mut algorithm_info = [0u8; 2];
     let mut salt = [0u8; SALTLEN];
 
-    file.read_exact(&mut signature)
+    file.read_exact(&mut magicnumber)
         .map_err(|e| CoreErr::IOError(e))?;
 
-    if signature != SIGNATURE{
+    if magicnumber != MAGICNUMBER{
         return Err(CoreErr::BadSignature)
     }
+
     file.read_exact(&mut version_info)
         .map_err(|e| CoreErr::IOError(e))?;
     file.read_exact(&mut algorithm_info)
@@ -76,21 +76,27 @@ pub fn read_from_file(file: &mut File) -> Result<Header, CoreErr> {
         HeaderVersion::V1 => {
             let nonce_len = calc_nonce_len(&header_info);
             let mut nonce = vec![0u8; nonce_len];
+            let mut padding1 = [0u8; 16];
+            let mut padding2 = vec![0u8; 24 - nonce_len];
 
             file.read_exact(&mut salt)
                 .map_err(|e| CoreErr::IOError(e))?;
-            file.read_exact(&mut [0; 16])
-                .map_err(|e| CoreErr::IOError(e))?; // read and subsequently discard the next 16 bytes
+            file.read_exact(&mut padding1)
+                .map_err(|e| CoreErr::IOError(e))?;
             file.read_exact(&mut nonce)
                 .map_err(|e| CoreErr::IOError(e))?;
-            file.read_exact(&mut vec![0u8; 20 - nonce_len])
-                .map_err(|e| CoreErr::IOError(e))?; // read and discard the final padding
+            file.read_exact(&mut padding2)
+                .map_err(|e| CoreErr::IOError(e))?;
 
-            Ok(Header {
+            let header = Header {
                 header_type: header_info,
                 nonce,
                 salt,
-            })
+            };
+
+            let aad = get_aad(&header, Some(padding1), Some(padding2));
+            Ok((header, aad))
+
         }
     }
 }
@@ -161,4 +167,59 @@ fn deserialize(
         header_version,
         algorithm,
     })
+}
+
+
+// this hashes a header with the salt, nonce, and info provided
+pub fn hash(hasher: &mut Hasher, header: &Header) {
+    match &header.header_type.header_version {
+        HeaderVersion::V1 => {
+            let nonce_len = calc_nonce_len(&header.header_type);
+            let padding = vec![0u8; 24 - nonce_len];
+            let (version_info, algorithm_info) = serialize(&header.header_type);
+
+            hasher.update(&MAGICNUMBER);
+            hasher.update(&version_info);
+            hasher.update(&algorithm_info);
+            hasher.update(&header.salt);
+            hasher.update(&[0; 16]);
+            hasher.update(&header.nonce);
+            hasher.update(&padding);
+        }
+    }
+}
+
+pub fn get_aad(header: &Header, padding1: Option<[u8; 16]>, padding2: Option<Vec<u8>>) -> Vec<u8> {
+    match header.header_type.header_version {
+        HeaderVersion::V1 => {
+            let (version_info, algorithm_info) = serialize(&header.header_type);
+
+            let mut header_bytes = version_info.to_vec();
+            header_bytes.extend_from_slice(&MAGICNUMBER);
+            header_bytes.extend_from_slice(&algorithm_info);
+            header_bytes.extend_from_slice(&header.salt);
+            header_bytes.extend_from_slice(&padding1.unwrap());
+            header_bytes.extend_from_slice(&header.nonce);
+            header_bytes.extend_from_slice(&padding2.unwrap());
+            header_bytes
+        }
+    }
+}
+
+pub fn create_aad(header: &Header) -> Vec<u8> {
+    match header.header_type.header_version {
+        HeaderVersion::V1 => {
+            let nonce_len = calc_nonce_len(&header.header_type);
+            let (version_info, algorithm_info) = serialize(&header.header_type);
+
+            let mut header_bytes = version_info.to_vec();
+            header_bytes.extend_from_slice(&MAGICNUMBER);
+            header_bytes.extend_from_slice(&algorithm_info);
+            header_bytes.extend_from_slice(&header.salt);
+            header_bytes.extend_from_slice(&[0; 16]);
+            header_bytes.extend_from_slice(&header.nonce);
+            header_bytes.extend_from_slice(&vec![0; 24 - nonce_len]);
+            header_bytes
+        }
+    }
 }
