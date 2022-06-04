@@ -1,10 +1,11 @@
 use crate::constants::*;
-use argon2::{Argon2, Params};
+use argon2::{Algorithm, Argon2, Params, ParamsBuilder, Version};
 use crate::errors::*;
 use crate::secret::*;
 use rand::prelude::StdRng;
 use rand::Rng;
 use rand::SeedableRng;
+use crate::DeriveStrength;
 use crate::header::HeaderVersion;
 
 // this generates a salt for password hashing
@@ -18,25 +19,45 @@ pub fn gen_salt() -> [u8; SALTLEN] {
 pub fn argon2_hash(
     password: &Secret<String>,
     salt: &[u8; SALTLEN],
-    version: &HeaderVersion,
+    _version: &HeaderVersion,
+    derivestrength: &DeriveStrength
 ) -> Result<Secret<[u8; KEYLEN]>, CoreErr> {
-    let mut key = [0u8; KEYLEN];
 
-    let params = match version {
-        HeaderVersion::V1 => {
-            // 1024*10 KiB of memory, 8 iterations, 4 levels of parallelism
-            let params = Params::new(1024*10, 8, 4, Some(Params::DEFAULT_OUTPUT_LEN));
-            match params {
-                Ok(parameters) => parameters,
-                Err(_) => return Err(CoreErr::Argon2Params),
-            }
-        }
+    let params = match derivestrength {
+        DeriveStrength::Interactive => argon2_params_interactive(),
+        DeriveStrength::Moderate    => argon2_params_moderate(),
+        DeriveStrength::Sensitive   => argon2_params_sensitive(),
     };
 
-    let argon2 = Argon2::new(argon2::Algorithm::Argon2id, argon2::Version::V0x13, params);
-    let result = argon2.hash_password_into(password.expose().as_ref(), salt, &mut key);
-    if result.is_err() {
-        return Err(CoreErr::Argon2Hash);
-    }
+    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut key = [0u8; KEYLEN];
+    argon2.hash_password_into(password.expose().as_ref(), salt, &mut key).map_err(|_|CoreErr::Argon2Hash)?;
     Ok(Secret::new(key))
+}
+
+fn argon2_params_interactive() -> Params {
+    let mut builder = ParamsBuilder::new();
+    builder.m_cost(ARGON2_INTERACTIVE_MEMORY).expect("INVALID ARGON2 MEMORY");
+    builder.t_cost(ARGON2_INTERACTIVE_ITERATIONS).expect("INVALID ARGON2 ITERATION");
+    builder.p_cost(ARGON2_INTERACTIVE_PARALELISM).expect("INVALID ARGON2 PARALELISM");
+    builder.output_len(KEYLEN).expect("INVALID ARGON2 KEYLEN");
+    builder.params().unwrap()
+}
+
+fn argon2_params_moderate() -> Params {
+    let mut builder = ParamsBuilder::new();
+    builder.m_cost(ARGON2_MODERATE_MEMORY).expect("INVALID ARGON2 MEMORY");
+    builder.t_cost(ARGON2_MODERATE_ITERATIONS).expect("INVALID ARGON2 ITERATION");
+    builder.p_cost(ARGON2_MODERATE_PARALELISM).expect("INVALID ARGON2 PARALELISM");
+    builder.output_len(KEYLEN).expect("INVALID ARGON2 KEYLEN");
+    builder.params().unwrap()
+}
+
+fn argon2_params_sensitive() -> Params {
+    let mut builder = ParamsBuilder::new();
+    builder.m_cost(ARGON2_SENSITIVE_MEMORY).expect("INVALID ARGON2 MEMORY");
+    builder.t_cost(ARGON2_SENSITIVE_ITERATIONS).expect("INVALID ARGON2 ITERATION");
+    builder.p_cost(ARGON2_SENSITIVE_PARALELISM).expect("INVALID ARGON2 PARALELISM");
+    builder.output_len(KEYLEN).expect("INVALID ARGON2 KEYLEN");
+    builder.params().unwrap()
 }

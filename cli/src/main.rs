@@ -9,7 +9,6 @@ use std::{
 use anyhow::anyhow;
 use anyhow::Result;
 use std::result::Result::Ok;
-use crate::cli::Algo;
 
 const FILE_EXTENSION: &str = ".crypty";
 
@@ -18,8 +17,8 @@ struct ProgressUpdater {
 }
 
 impl Ui for ProgressUpdater {
-    fn output(&self, percentage: i32) {
-            let s = match self.mode {
+    fn output(&self, _percentage: i32) {
+            let _s = match self.mode {
                 Direction::Encrypt => "Encrypting",
                 Direction::Decrypt => "Decrypting",
             };
@@ -99,26 +98,16 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
         mode: direction.clone(),
     });
 
-    let algo = match app.algo() {
-        Algo::Aesgcm => Algorithm::Aes256Gcm,
-        Algo::Chacha => Algorithm::XChaCha20Poly1305,
-        Algo::Deoxys => Algorithm::DeoxysII256,
-        Algo::Aesgcmsiv => Algorithm::Aes256GcmSiv,
-    };
-
-    let hash = match app.hash() {
-        true => HashMode::CalculateHash,
-        false => HashMode::NoHash,
-    };
-
-    let bench = match app.bench() {
-        true => BenchMode::BenchmarkInMemory,
-        false => BenchMode::WriteToFilesystem,
-    };
-
-
-
-    let config = Config::new(direction.clone(), algo,DeriveStrength::Interactive ,password, filename.map(|f| f.to_string()), output_path.clone(), ui, hash, bench);
+    let config = Config::new(
+        direction.clone(),
+        app.algo(),
+        app.strength(),
+        password,
+        filename.map(|f| f.to_string()),
+        output_path.clone(),
+        ui,
+        app.hash(),
+        app.bench());
 
     match main_routine(&config) {
         Ok(duration) =>{ Ok((output_path, direction, duration))},

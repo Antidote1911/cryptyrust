@@ -31,48 +31,13 @@ class Config : public QObject {
     Q_DISABLE_COPY(Config)
 
     enum ConfigKey {
-        GUI_showPassword,
-        GUI_deleteFinished,
-        GUI_Language,
-        GUI_showToolbar,
-        GUI_lastDirectory,
-        GUI_currentIndexTab,
-        GUI_AddEncrypted,
         GUI_ApplicationTheme,
 
         GUI_MainWindowGeometry,
         GUI_MainWindowState,
 
-        CRYPTO_argonMemory,
-        CRYPTO_argonItr,
+        CRYPTO_Strength,
         CRYPTO_algorithm,
-
-        SECURITY_clearclipboard,
-        SECURITY_clearclipboardtimeout,
-
-        PasswordGenerator_LowerCase,
-        PasswordGenerator_UpperCase,
-        PasswordGenerator_Numbers,
-        PasswordGenerator_EASCII,
-        PasswordGenerator_AdvancedMode,
-        PasswordGenerator_SpecialChars,
-        PasswordGenerator_AdditionalChars,
-        PasswordGenerator_Braces,
-        PasswordGenerator_Punctuation,
-        PasswordGenerator_Quotes,
-        PasswordGenerator_Dashes,
-        PasswordGenerator_Math,
-        PasswordGenerator_Logograms,
-        PasswordGenerator_ExcludedChars,
-        PasswordGenerator_ExcludeAlike,
-        PasswordGenerator_EnsureEvery,
-        PasswordGenerator_Length,
-        PasswordGenerator_WordCount,
-        PasswordGenerator_WordSeparator,
-        PasswordGenerator_WordList,
-        PasswordGenerator_WordCase,
-        PasswordGenerator_Type,
-        PasswordGenerator_ViewPassword,
 
         // Special internal value
         Deleted

@@ -1,4 +1,5 @@
 use clap::{AppSettings, ArgGroup, ArgEnum, Parser};
+use cryptyrust_core::{Algorithm, BenchMode, DeriveStrength, HashMode};
 
 const AUTHOR: &str = "
 Author : Fabrice Corraire <antidote1911@gmail.com>
@@ -73,12 +74,6 @@ pub enum Strength {
 }
 
 impl Cli {
-    pub fn algo(&self) -> Algo {
-        self.algo
-    }
-    pub fn strength(&self) -> Strength {
-        self.strength
-    }
     pub fn password(&self) -> Option<String> {
         self.password.clone()
     }
@@ -94,10 +89,35 @@ impl Cli {
     pub fn decrypt(&self) -> Option<&str> {
         self.decrypt.as_deref()
     }
-    pub fn hash(&self) -> bool {
-        self.hash
+
+    pub fn algo(&self) -> Algorithm {
+        match self.algo {
+            Algo::Aesgcm => Algorithm::Aes256Gcm,
+            Algo::Aesgcmsiv => Algorithm::Aes256GcmSiv,
+            Algo::Chacha => Algorithm::XChaCha20Poly1305,
+            Algo::Deoxys => Algorithm::DeoxysII256,
+        }
     }
-    pub fn bench(&self) -> bool {
-        self.bench
+
+    pub fn strength(&self) -> DeriveStrength {
+         match self.strength {
+            Strength::Interactive => DeriveStrength::Interactive,
+            Strength::Moderate    => DeriveStrength::Moderate,
+            Strength::Sensitive   => DeriveStrength::Sensitive,
+        }
+    }
+
+    pub fn hash(&self) -> HashMode {
+        match self.hash {
+            true => HashMode::CalculateHash,
+            false => HashMode::NoHash,
+        }
+    }
+
+    pub fn bench(&self) -> BenchMode {
+        match self.bench {
+            true => BenchMode::BenchmarkInMemory,
+            false => BenchMode::WriteToFilesystem,
+        }
     }
 }

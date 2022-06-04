@@ -18,6 +18,7 @@ class MainWindow : public QMainWindow {
 
   private slots:
     void slot_menuAbout();
+    void configuration();
     void savePreferences();
     void slot_Open();
     void reboot();

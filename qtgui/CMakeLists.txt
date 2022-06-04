@@ -27,6 +27,9 @@ set(PROJECT_SOURCES
         skin/skin.cpp
         Config.h
         Config.cpp
+        configDialog.cpp
+        configDialog.h
+        configDialog.ui
         
 )
 

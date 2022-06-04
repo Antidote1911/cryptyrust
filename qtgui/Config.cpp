@@ -47,50 +47,15 @@ struct ConfigDirective {
  */
 static const QHash<Config::ConfigKey, ConfigDirective> configStrings = {
     //cryptyrust
-
-    {Config::GUI_showPassword, {QS("GUI/showPassword"), Roaming, true}},
-    {Config::GUI_deleteFinished, {QS("GUI/deleteFinished"), Roaming, true}},
-    {Config::GUI_Language, {QS("GUI/Language"), Roaming, QS("en")}},
-    {Config::GUI_showToolbar, {QS("GUI/showToolbar"), Roaming, true}},
-    {Config::GUI_lastDirectory, {QS("GUI/lastDirectory"), Roaming, QDir::homePath()}},
-    {Config::GUI_currentIndexTab, {QS("GUI/currentIndexTab"), Roaming, 0}},
-    {Config::GUI_AddEncrypted, {QS("GUI/AddEncrypted"), Roaming, true}},
     {Config::GUI_ApplicationTheme, {QS("GUI/ApplicationTheme"), Roaming, QS("classic")}},
 
     {Config::GUI_MainWindowGeometry, {QS("GUI/MainWindowGeometry"), Local, {}}},
     {Config::GUI_MainWindowState, {QS("GUI/MainWindowState"), Local, {}}},
 
-    {Config::CRYPTO_argonMemory, {QS("CRYPTO/argonMemory"), Roaming, 0}},
-    {Config::CRYPTO_argonItr, {QS("CRYPTO/argonItr"), Roaming, 0}},
+    {Config::CRYPTO_Strength, {QS("CRYPTO/argonMemory"), Roaming, 0}},
     {Config::CRYPTO_algorithm, {QS("CRYPTO/cryptoAlgo"), Roaming, 0}},
 
-    {Config::SECURITY_clearclipboard, {QS("SECURITY/clearclipboard"), Roaming, true}},
-    {Config::SECURITY_clearclipboardtimeout, {QS("SECURITY/clearclipboardtimeout"), Roaming, 10}},
-
-    // PasswordGenerator
-    {Config::PasswordGenerator_LowerCase, {QS("PasswordGenerator/LowerCase"), Roaming, true}},
-    {Config::PasswordGenerator_UpperCase, {QS("PasswordGenerator/UpperCase"), Roaming, true}},
-    {Config::PasswordGenerator_Numbers, {QS("PasswordGenerator/Numbers"), Roaming, true}},
-    {Config::PasswordGenerator_EASCII, {QS("PasswordGenerator/EASCII"), Roaming, false}},
-    {Config::PasswordGenerator_AdvancedMode, {QS("PasswordGenerator/AdvancedMode"), Roaming, false}},
-    {Config::PasswordGenerator_SpecialChars, {QS("PasswordGenerator/SpecialChars"), Roaming, true}},
-    {Config::PasswordGenerator_Braces, {QS("PasswordGenerator/Braces"), Roaming, false}},
-    {Config::PasswordGenerator_Punctuation, {QS("PasswordGenerator/Punctuation"), Roaming, false}},
-    {Config::PasswordGenerator_Quotes, {QS("PasswordGenerator/Quotes"), Roaming, false}},
-    {Config::PasswordGenerator_Dashes, {QS("PasswordGenerator/Dashes"), Roaming, false}},
-    {Config::PasswordGenerator_Math, {QS("PasswordGenerator/Math"), Roaming, false}},
-    {Config::PasswordGenerator_Logograms, {QS("PasswordGenerator/Logograms"), Roaming, false}},
-    {Config::PasswordGenerator_AdditionalChars, {QS("PasswordGenerator/AdditionalChars"), Roaming, {}}},
-    {Config::PasswordGenerator_ExcludedChars, {QS("PasswordGenerator/ExcludedChars"), Roaming, {}}},
-    {Config::PasswordGenerator_ExcludeAlike, {QS("PasswordGenerator/ExcludeAlike"), Roaming, true}},
-    {Config::PasswordGenerator_EnsureEvery, {QS("PasswordGenerator/EnsureEvery"), Roaming, true}},
-    {Config::PasswordGenerator_Length, {QS("PasswordGenerator/Length"), Roaming, 20}},
-    {Config::PasswordGenerator_WordCount, {QS("PasswordGenerator/WordCount"), Roaming, 7}},
-    {Config::PasswordGenerator_WordSeparator, {QS("PasswordGenerator/WordSeparator"), Roaming, QS(" ")}},
-    {Config::PasswordGenerator_WordList, {QS("PasswordGenerator/WordList"), Roaming, QS("eff_large.wordlist")}},
-    {Config::PasswordGenerator_WordCase, {QS("PasswordGenerator/WordCase"), Roaming, 0}},
-    {Config::PasswordGenerator_Type, {QS("PasswordGenerator/Type"), Roaming, 0}},
-    {Config::PasswordGenerator_ViewPassword, {QS("PasswordGenerator/ViewPassword"), Roaming, false}}};
+    };
 
 // clang-format on
 

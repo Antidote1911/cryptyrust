@@ -20,6 +20,10 @@ If no output file is specified with `-o`, Cryptyrust generate an incremental uni
 ./cryptyrust_cli -e test.mp4 -p 12345678
 ./cryptyrust_cli -d test.mp4.crypty -p 12345678
 
+# encrypt the file test.mp4 with password 12345678, with moderate key derivation, and décrypt it:
+./cryptyrust_cli -e test.mp4 -p 12345678 -s moderate
+./cryptyrust_cli -d test.mp4.crypty -p 12345678
+
 # encrypt the file test.mp4 with password 12345678 with xchacha20poly1305 and décrypt it:
 ./cryptyrust_cli -e test.mp4 -a chacha -p 12345678
 ./cryptyrust_cli -d test.mp4.crypty -p 12345678  
@@ -56,10 +60,11 @@ the output file is :
 - Signature (a simple signature to check if it's a Cryptyrust file. 4 bytes)
 - Version (2 bytes)
 - Algorithm (2 bytes)
+- Argon strength (2 bytes)
 - The Argon2 Salt (16 bytes)
 - Padding some 0 for future usage (16 bytes)
 - Nonce (8 bytes for aes, 20 for chacha, 14 for deoxys)
-- Padding some 0 (20 bytes - noncelen for always have a 64 bytes header)
+- Padding some 0 for always have a 64 bytes header
 - encrypted chunk_1  ( BUFFER_SIZE + 16 bytes Authentication tag )
 - encrypted chunk_2  ( BUFFER_SIZE + 16 bytes Authentication tag )
 - ....etc

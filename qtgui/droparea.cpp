@@ -141,8 +141,9 @@ void DropArea::dropEvent(QDropEvent *event)
 
     setText("Working...");
     auto algo = config()->get(Config::CRYPTO_algorithm).toInt();
+    auto derive_strength = config()->get(Config::CRYPTO_Strength).toInt();
 
-    crypto = makeConfig(direction,algo ,password.toUtf8().data(), filename.toUtf8().data(), outFilename.toUtf8().data(), output);
+    crypto = makeConfig(direction,algo,derive_strength,password.toUtf8().data(), filename.toUtf8().data(), outFilename.toUtf8().data(), output);
     if (crypto == nullptr) {
         msgBox.setText("Could not start transfer, possibly due to malformed password or filename.");
         msgBox.exec();

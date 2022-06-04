@@ -30,17 +30,20 @@ SOURCES += \
     droparea.cpp \
     adapter.cpp \
     skin/skin.cpp \
-    Config.cpp
+    Config.cpp \
+    configDialog.cpp
 
 HEADERS += \
         mainwindow.h \
     droparea.h \
     adapter.h \
     skin/skin.h \
-    Config.h
+    Config.h \
+    configDialog.h
 
 FORMS += \
-        mainwindow.ui
+        mainwindow.ui \
+        configDialog.ui
 
 # Default rules for deployment.
 qnx: target.path = /tmp/$${TARGET}/bin

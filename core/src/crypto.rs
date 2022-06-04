@@ -1,7 +1,7 @@
 use crate::keygen::*;
 use crate::constants::*;
 use crate::errors::*;
-use crate::{Algorithm, BenchMode, DecryptStreamCiphers, EncryptStreamCiphers, HashMode, Ui};
+use crate::{Algorithm, BenchMode, DecryptStreamCiphers, DeriveStrength, EncryptStreamCiphers, HashMode, Ui};
 use crate::header::{create_aad, Header, HeaderType};
 use crate::secret::*;
 use rand::{Rng, SeedableRng};
@@ -21,7 +21,7 @@ pub fn init_encryption_stream(
     header_type: HeaderType,
 ) -> Result<(EncryptStreamCiphers, Header), CoreErr> {
     let salt = gen_salt();
-    let key = argon2_hash(password, &salt, &header_type.header_version)?;
+    let key = argon2_hash(password, &salt, &header_type.header_version, &header_type.derive)?;
 
     match header_type.algorithm {
         Algorithm::Aes256Gcm => {
@@ -113,7 +113,7 @@ pub fn init_decryption_stream(
     password: &Secret<String>,
     header: Header,
 ) -> Result<DecryptStreamCiphers, CoreErr> {
-    let key = argon2_hash(password, &header.salt, &header.header_type.header_version)?;
+    let key = argon2_hash(password, &header.salt, &header.header_type.header_version,&header.header_type.derive)?;
 
     match header.header_type.algorithm {
         Algorithm::Aes256Gcm => {
@@ -158,6 +158,7 @@ pub fn encrypt<>(
     ui: &Box<dyn Ui>,
     filesize: u64,
     algorithm: Algorithm,
+    derive:DeriveStrength,
     hash: HashMode,
     bench: BenchMode,
 ) -> Result<(), CoreErr> {
@@ -165,6 +166,7 @@ pub fn encrypt<>(
     let header_type = HeaderType {
         header_version: VERSION,
         algorithm,
+        derive,
     };
 
     let (mut streams, header) = init_encryption_stream(password, header_type).unwrap();
@@ -213,7 +215,7 @@ pub fn encrypt<>(
             }
 
         } else {
-            // if we read something less than BLOCK_SIZE, and have hit the end of the file
+            // if we read something less than MSGLEN, and have hit the end of the file
             let payload = Payload {
                 aad: &aad,
                 msg: &buffer[..read_count],
@@ -234,10 +236,9 @@ pub fn encrypt<>(
             break;
         }
         pb.set_position(total_bytes_read as u64);
-        if let size = filesize {
-            let percentage = (((total_bytes_read as f32) / (size as f32)) * 100.) as i32;
-            ui.output(percentage);
-        }
+        let percentage = (((total_bytes_read as f32) / (filesize as f32)) * 100.) as i32;
+        ui.output(percentage);
+
     }
     if bench == BenchMode::WriteToFilesystem {
         output.flush().map_err(|e| CoreErr::IOError(e))?;
@@ -249,7 +250,6 @@ pub fn encrypt<>(
     pb.finish();
     Ok(())
 }
-
 
 pub fn decrypt<>(
     input: &mut File,
@@ -269,7 +269,7 @@ pub fn decrypt<>(
     }
 
     let mut streams = init_decryption_stream(password, header)?;
-    let mut buffer = [0u8; MSGLEN + 16]; // 16 bytes is the length of the AEAD tag
+    let mut buffer = [0u8; MSGLEN + TAGLEN]; // TAGLEN is the length of the AEAD tag
 
     let mut total_bytes_read = 0;
     let pb = ProgressBar::new(filesize as u64);
@@ -280,7 +280,7 @@ pub fn decrypt<>(
     loop {
         let read_count = input.read(&mut buffer)?;
         total_bytes_read += read_count;
-        if read_count == (MSGLEN + 16) {
+        if read_count == (MSGLEN + TAGLEN) {
             let payload = Payload {
                 aad: &aad,
                 msg: buffer.as_ref(),
@@ -317,10 +317,10 @@ pub fn decrypt<>(
             break;
         }
         pb.set_position(total_bytes_read as u64);
-        if let size = filesize {
-            let percentage = (((total_bytes_read as f32) / (size as f32)) * 100.) as i32;
+
+            let percentage = (((total_bytes_read as f32) / (filesize as f32)) * 100.) as i32;
             ui.output(percentage);
-        }
+
     }
     if hash == HashMode::CalculateHash {
         let hash = hasher.finalize().to_hex().to_string();

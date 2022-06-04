@@ -17,6 +17,7 @@ impl Ui for ProgressUpdater {
 pub extern "C" fn makeConfig(
     direction: u8,
     algorithm: u8,
+    derivestrength: u8,
     password: *mut c_char,
     filename: *mut c_char,
     out_filename: *mut c_char,
@@ -35,6 +36,13 @@ pub extern "C" fn makeConfig(
         _ => panic!("received invalid algorithm enum from c++"),
     };
 
+    let strength = match derivestrength {
+        0 => DeriveStrength::Interactive,
+        1 => DeriveStrength::Moderate,
+        2 => DeriveStrength::Sensitive,
+        _ => panic!("received invalid derive strength enum from c++"),
+    };
+
     let p = match c_to_rust_string(password) {
         Ok(s) => s,
         Err(_) => return null_mut(),
@@ -48,7 +56,7 @@ pub extern "C" fn makeConfig(
         Err(_) => return null_mut(),
     };
     let ui = Box::new(ProgressUpdater { output_func });
-    Box::into_raw(Box::new(Config::new(dir,algo ,DeriveStrength::Interactive,Secret::new(p), Some(f), Some(o), ui,HashMode::NoHash,BenchMode::WriteToFilesystem)))
+    Box::into_raw(Box::new(Config::new(dir,algo ,strength,Secret::new(p), Some(f), Some(o), ui,HashMode::NoHash,BenchMode::WriteToFilesystem)))
 }
 
 #[no_mangle]
@@ -73,7 +81,7 @@ pub unsafe extern "C" fn start(ptr: *mut Config) -> *mut c_char {
                 config.out_file.as_ref().unwrap(),duration
             ),
         },
-        Err(e) => format!("{}", e),
+        Err(e) => format!("{:?}", e),
     };
     rust_to_c_string(msg)
 }

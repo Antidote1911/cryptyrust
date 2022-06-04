@@ -57,35 +57,11 @@ or an encrypted file to decrypt</string>
       </property>
      </widget>
     </item>
-    <item row="2" column="0">
+    <item row="1" column="0">
      <widget class="QProgressBar" name="progBar">
       <property name="value">
        <number>24</number>
       </property>
-     </widget>
-    </item>
-    <item row="1" column="0">
-     <widget class="QComboBox" name="comboAlgo">
-      <item>
-       <property name="text">
-        <string>XChaCha20-Poly1305</string>
-       </property>
-      </item>
-      <item>
-       <property name="text">
-        <string>Aes-256-Gcm</string>
-       </property>
-      </item>
-      <item>
-       <property name="text">
-        <string>Deoxys II-256</string>
-       </property>
-      </item>
-      <item>
-       <property name="text">
-        <string>Aes-256-Gcm-Siv</string>
-       </property>
-      </item>
      </widget>
     </item>
    </layout>
@@ -124,6 +100,7 @@ or an encrypted file to decrypt</string>
      <addaction name="actionDark"/>
      <addaction name="actionLight"/>
     </widget>
+    <addaction name="actionCrypto"/>
     <addaction name="menuSkin"/>
    </widget>
    <addaction name="menuFile"/>
@@ -169,11 +146,6 @@ or an encrypted file to decrypt</string>
     <string>Light</string>
    </property>
   </action>
-  <action name="actionCrypto">
-   <property name="text">
-    <string>Crypto</string>
-   </property>
-  </action>
   <action name="actionAes256Gcm">
    <property name="checkable">
     <bool>true</bool>
@@ -196,6 +168,11 @@ or an encrypted file to decrypt</string>
    </property>
    <property name="text">
     <string>Chacha20Poly1305</string>
+   </property>
+  </action>
+  <action name="actionCrypto">
+   <property name="text">
+    <string>Crypto</string>
    </property>
   </action>
  </widget>

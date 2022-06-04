@@ -21,16 +21,13 @@ pub const fn get_version() -> &'static str {
 
 pub fn main_routine(c: &Config) -> Result<f64, CoreErr> {
     let mut in_file =  File::open(&c.filename.as_ref().unwrap()).unwrap();
-
     let mut out_file = File::create(c.out_file.as_ref().unwrap()).unwrap();
-
-
     let filesize = in_file.metadata().unwrap().len() as u64;
 
     let start = Instant::now();
     match c.direction {
         Direction::Encrypt => {
-            match encrypt(&mut in_file, &mut out_file,&c.password, &c.ui, filesize, c.algorithm,c.hashmode,c.benchmode) {
+            match encrypt(&mut in_file, &mut out_file,&c.password, &c.ui, filesize, c.algorithm,c.derivestrength,c.hashmode,c.benchmode) {
                 Ok(()) => (),
                 Err(e) => {
                     if let Some(out_file) = &c.out_file {

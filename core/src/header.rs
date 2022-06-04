@@ -1,7 +1,7 @@
 use std::fs::File;
 use std::io::{Read, Write};
 use crate::errors::*;
-use crate::{Algorithm, SALTLEN, MAGICNUMBER};
+use crate::{Algorithm, SALTLEN, MAGICNUMBER, DeriveStrength};
 use blake3::Hasher;
 
 pub enum HeaderVersion {
@@ -12,6 +12,7 @@ pub enum HeaderVersion {
 pub struct HeaderType {
     pub header_version: HeaderVersion,
     pub algorithm: Algorithm,
+    pub derive: DeriveStrength,
 }
 
 // the data used returned after reading/deserialising a header
@@ -29,14 +30,16 @@ pub fn write_to_file(file: &mut File, header: &Header) -> Result<(), CoreErr> {
 
     match &header.header_type.header_version {
         HeaderVersion::V1 => {
-            let padding = vec![0u8; 24 - nonce_len];
-            let (version_info, algorithm_info) = serialize(&header.header_type);
+            let padding = vec![0u8; 22 - nonce_len];
+            let (version_info, algorithm_info,derive_info) = serialize(&header.header_type);
 
             file.write_all(&MAGICNUMBER)
                 .map_err(|e| CoreErr::IOError(e))?; // 4
             file.write_all(&version_info)
                 .map_err(|e| CoreErr::IOError(e))?; // 2
             file.write_all(&algorithm_info)
+                .map_err(|e| CoreErr::IOError(e))?; // 2
+            file.write_all(&derive_info)
                 .map_err(|e| CoreErr::IOError(e))?; // 2
             file.write_all(&header.salt)
                 .map_err(|e| CoreErr::IOError(e))?;  // 16
@@ -57,6 +60,7 @@ pub fn read_from_file(file: &mut File) -> Result<(Header, Vec<u8>), CoreErr> {
     let mut magicnumber = [0u8; 4];
     let mut version_info = [0u8; 2];
     let mut algorithm_info = [0u8; 2];
+    let mut derive_info = [0u8; 2];
     let mut salt = [0u8; SALTLEN];
 
     file.read_exact(&mut magicnumber)
@@ -70,14 +74,16 @@ pub fn read_from_file(file: &mut File) -> Result<(Header, Vec<u8>), CoreErr> {
         .map_err(|e| CoreErr::IOError(e))?;
     file.read_exact(&mut algorithm_info)
         .map_err(|e| CoreErr::IOError(e))?;
+    file.read_exact(&mut derive_info)
+        .map_err(|e| CoreErr::IOError(e))?;
 
-    let header_info = deserialize(version_info, algorithm_info)?;
+    let header_info = deserialize(version_info, algorithm_info ,derive_info)?;
     match header_info.header_version {
         HeaderVersion::V1 => {
             let nonce_len = calc_nonce_len(&header_info);
             let mut nonce = vec![0u8; nonce_len];
             let mut padding1 = [0u8; 16];
-            let mut padding2 = vec![0u8; 24 - nonce_len];
+            let mut padding2 = vec![0u8; 22 - nonce_len];
 
             file.read_exact(&mut salt)
                 .map_err(|e| CoreErr::IOError(e))?;
@@ -115,13 +121,14 @@ fn calc_nonce_len(header_info: &HeaderType) -> usize {
 
 // this takes information about the header, and serializes it into raw bytes
 // this is the inverse of the deserialize function
-fn serialize(header_info: &HeaderType) -> ([u8; 2], [u8; 2]) {
+fn serialize(header_info: &HeaderType) -> ([u8; 2], [u8; 2], [u8; 2]) {
     let version_info = match header_info.header_version {
         HeaderVersion::V1 => {
             let info: [u8; 2] = [0xDE, 0x01];
             info
         }
     };
+
     let algorithm_info = match header_info.algorithm {
         Algorithm::XChaCha20Poly1305 => {
             let info: [u8; 2] = [0x0E, 0x01];
@@ -141,7 +148,22 @@ fn serialize(header_info: &HeaderType) -> ([u8; 2], [u8; 2]) {
         }
     };
 
-    (version_info, algorithm_info)
+    let derive_info = match header_info.derive {
+        DeriveStrength::Interactive => {
+            let info: [u8; 2] = [0xBE, 0x01];
+            info
+        }
+        DeriveStrength::Moderate => {
+            let info: [u8; 2] = [0xBE, 0x02];
+            info
+        }
+        DeriveStrength::Sensitive => {
+            let info: [u8; 2] = [0xBE, 0x03];
+            info
+        }
+    };
+
+    (version_info, algorithm_info, derive_info)
 }
 
 // this is used for converting raw bytes from the header to enums that dexios can understand
@@ -149,6 +171,7 @@ fn serialize(header_info: &HeaderType) -> ([u8; 2], [u8; 2]) {
 fn deserialize(
     version_info: [u8; 2],
     algorithm_info: [u8; 2],
+    derive_info: [u8; 2],
 ) -> Result<HeaderType, CoreErr> {
     let header_version = match version_info {
         [0xDE, 0x01] => HeaderVersion::V1,
@@ -163,9 +186,17 @@ fn deserialize(
         _ => return Err(CoreErr::DecryptFail("Invalid algorithm".to_string())),
     };
 
+    let derive = match derive_info {
+        [0xBE, 0x01] => DeriveStrength::Interactive,
+        [0xBE, 0x02] => DeriveStrength::Moderate,
+        [0xBE, 0x03] => DeriveStrength::Sensitive,
+        _ => return Err(CoreErr::DecryptFail("Invalid DeriveStrength".to_string())),
+    };
+
     Ok(HeaderType {
         header_version,
         algorithm,
+        derive,
     })
 }
 
@@ -175,12 +206,13 @@ pub fn hash(hasher: &mut Hasher, header: &Header) {
     match &header.header_type.header_version {
         HeaderVersion::V1 => {
             let nonce_len = calc_nonce_len(&header.header_type);
-            let padding = vec![0u8; 24 - nonce_len];
-            let (version_info, algorithm_info) = serialize(&header.header_type);
+            let padding = vec![0u8; 22 - nonce_len];
+            let (version_info, algorithm_info,derive_info) = serialize(&header.header_type);
 
             hasher.update(&MAGICNUMBER);
             hasher.update(&version_info);
             hasher.update(&algorithm_info);
+            hasher.update(&derive_info);
             hasher.update(&header.salt);
             hasher.update(&[0; 16]);
             hasher.update(&header.nonce);
@@ -192,11 +224,12 @@ pub fn hash(hasher: &mut Hasher, header: &Header) {
 pub fn get_aad(header: &Header, padding1: Option<[u8; 16]>, padding2: Option<Vec<u8>>) -> Vec<u8> {
     match header.header_type.header_version {
         HeaderVersion::V1 => {
-            let (version_info, algorithm_info) = serialize(&header.header_type);
+            let (version_info, algorithm_info,derive_info) = serialize(&header.header_type);
 
             let mut header_bytes = version_info.to_vec();
             header_bytes.extend_from_slice(&MAGICNUMBER);
             header_bytes.extend_from_slice(&algorithm_info);
+            header_bytes.extend_from_slice(&derive_info);
             header_bytes.extend_from_slice(&header.salt);
             header_bytes.extend_from_slice(&padding1.unwrap());
             header_bytes.extend_from_slice(&header.nonce);
@@ -210,15 +243,16 @@ pub fn create_aad(header: &Header) -> Vec<u8> {
     match header.header_type.header_version {
         HeaderVersion::V1 => {
             let nonce_len = calc_nonce_len(&header.header_type);
-            let (version_info, algorithm_info) = serialize(&header.header_type);
+            let (version_info, algorithm_info, derive_info) = serialize(&header.header_type);
 
             let mut header_bytes = version_info.to_vec();
             header_bytes.extend_from_slice(&MAGICNUMBER);
             header_bytes.extend_from_slice(&algorithm_info);
+            header_bytes.extend_from_slice(&derive_info);
             header_bytes.extend_from_slice(&header.salt);
             header_bytes.extend_from_slice(&[0; 16]);
             header_bytes.extend_from_slice(&header.nonce);
-            header_bytes.extend_from_slice(&vec![0; 24 - nonce_len]);
+            header_bytes.extend_from_slice(&vec![0; 22 - nonce_len]);
             header_bytes
         }
     }
