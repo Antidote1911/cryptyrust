@@ -1,6 +1,6 @@
 [package]
 name = "cryptyrust_cli"
-version = "2.0.5"
+version = "3.0.0"
 authors = ["Antidote1911 <antidote1911@gmail.com>"]
 description = "A simple but strong file encryption utility in Rust."
 repository = "https://github.com/Antidote1911/cryptyrust/"
