@@ -16,6 +16,7 @@ use deoxys::DeoxysII256;
 use rand::prelude::StdRng;
 use indicatif::{ProgressBar, ProgressStyle};
 
+
 pub fn init_encryption_stream(
     password: &Secret<String>,
     header_type: HeaderType,
@@ -186,10 +187,12 @@ pub fn encrypt<>(
     let mut buffer = [0u8; MSGLEN];
     let mut total_bytes_read = 0;
     let pb = ProgressBar::new(filesize as u64);
-    pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-        .unwrap()
-        .with_key("eta", |state| format!("{:.1}s", state.eta().as_secs_f64()))
-        .progress_chars("#>-"));
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})",
+        )
+            .unwrap()
+            .progress_chars("#>-"),);
     loop {
         let read_count = input.read(&mut buffer).map_err(|e| CoreErr::IOError(e))?;
         total_bytes_read += read_count;
@@ -240,14 +243,14 @@ pub fn encrypt<>(
         ui.output(percentage);
 
     }
+    pb.finish();
     if bench == BenchMode::WriteToFilesystem {
         output.flush().map_err(|e| CoreErr::IOError(e))?;
     }
     if hash == HashMode::CalculateHash {
         let hash = hasher.finalize().to_hex().to_string();
-        println!("Hash of the encrypted file is: {}", hash,);
+        println!("Hash Blake3 of the encrypted file is: {}", hash,);
     }
-    pb.finish();
     Ok(())
 }
 
@@ -273,10 +276,13 @@ pub fn decrypt<>(
 
     let mut total_bytes_read = 0;
     let pb = ProgressBar::new(filesize as u64);
-    pb.set_style(ProgressStyle::with_template("{spinner:.green} [{elapsed_precise}] [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})")
-        .unwrap()
-        .with_key("eta", |state| format!("{:.1}s", state.eta().as_secs_f64()))
-        .progress_chars("#>-"));
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})",
+        )
+            .unwrap()
+            .progress_chars("#>-"),
+    );
     loop {
         let read_count = input.read(&mut buffer)?;
         total_bytes_read += read_count;
@@ -322,11 +328,12 @@ pub fn decrypt<>(
             ui.output(percentage);
 
     }
+    pb.finish();
     if hash == HashMode::CalculateHash {
         let hash = hasher.finalize().to_hex().to_string();
-        println!("Hash of the encrypted file is: {}. If this doesn't match with the original, something very bad has happened.", hash);
+        println!("Hash Blake3 of the encrypted file is: {}. If this doesn't match with the original, something very bad has happened.", hash);
     }
-    pb.finish();
+
     Ok(())
 }
 

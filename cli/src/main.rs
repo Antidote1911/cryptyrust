@@ -88,7 +88,7 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
     } else if app.passwordfile().is_some() {
         let pw_file = app.passwordfile().unwrap();
         let p = Path::new(&pw_file);
-        drop(pw_file);
+        drop(pw_file.to_string());
         let tmp=std::fs::read_to_string(p).unwrap();
         Secret::new(tmp)
     } else {
