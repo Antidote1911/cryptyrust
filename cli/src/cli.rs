@@ -1,14 +1,15 @@
-use clap::{AppSettings, ArgGroup, ArgEnum, Parser};
+use clap::{ArgGroup, Parser};
 use cryptyrust_core::{Algorithm, BenchMode, DeriveStrength, HashMode};
 
-const AUTHOR: &str = "
+const ABOUT: &str = "
+A simple but strong file encryption utility in Rust.
 Author : Fabrice Corraire <antidote1911@gmail.com>
 Github : https://github.com/Antidote1911/
 ";
 
 #[derive(Parser)]
-#[clap(global_setting(AppSettings::DeriveDisplayOrder))]
-#[clap(about, author=AUTHOR, version)]
+
+#[clap(about=ABOUT, author, version)]
 
 #[clap(group(ArgGroup::new("mode").required(true)
 .args(&["encrypt", "decrypt"]),
@@ -37,11 +38,11 @@ pub struct Cli {
     password: Option<String>,
 
     /// Choose algorithm. Ignored in decryption mode
-    #[clap(short, long, arg_enum,value_name = "ALGO", default_value = "aesgcm")]
+    #[clap(short, long, value_enum,value_name = "ALGO", default_value = "aesgcm")]
     algo: Algo,
 
     /// Choose password derivation strength
-    #[clap(short, long, arg_enum,value_name = "STRENGTH", default_value = "interactive")]
+    #[clap(short, long, value_enum,value_name = "STRENGTH", default_value = "interactive")]
     strength: Strength,
 
     /// File should be valid UTF-8 and contain only the password with no newline.
@@ -49,24 +50,23 @@ pub struct Cli {
     passwordfile: Option<String>,
 
     /// Optional, output hash
-    #[clap(short, long)]
+    #[clap(long)]
     hash: bool,
 
     /// Optional, bench mode
-    #[clap(short, long)]
+    #[clap(long)]
     bench: bool,
 
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ArgEnum)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum Algo {
     Aesgcm,
     Chacha,
-    Deoxys,
     Aesgcmsiv,
 }
 
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, ArgEnum)]
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum Strength {
     Interactive,
     Moderate,
@@ -95,7 +95,6 @@ impl Cli {
             Algo::Aesgcm => Algorithm::Aes256Gcm,
             Algo::Aesgcmsiv => Algorithm::Aes256GcmSiv,
             Algo::Chacha => Algorithm::XChaCha20Poly1305,
-            Algo::Deoxys => Algorithm::DeoxysII256,
         }
     }
 

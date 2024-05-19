@@ -12,7 +12,6 @@ use std::{io::{Read, Write}};
 use std::fs::File;
 use aead::stream::{DecryptorLE31, EncryptorLE31};
 use aes_gcm_siv::Aes256GcmSiv;
-use deoxys::DeoxysII256;
 use rand::prelude::StdRng;
 use indicatif::{ProgressBar, ProgressStyle};
 
@@ -65,26 +64,6 @@ pub fn init_encryption_stream(
                 header,
             ))
         }
-        Algorithm::DeoxysII256 => {
-            let nonce_bytes = StdRng::from_entropy().gen::<[u8; 11]>();
-
-            let cipher = match DeoxysII256::new_from_slice(key.expose()) {
-                Ok(cipher) => cipher,
-                Err(_) => return Err(CoreErr::CreateCipher)
-            };
-
-            let header = Header {
-                header_type,
-                nonce: nonce_bytes.to_vec(),
-                salt,
-            };
-
-            let stream = EncryptorLE31::from_aead(cipher, nonce_bytes.as_slice().into());
-            Ok((
-                EncryptStreamCiphers::DeoxysII(Box::new(stream)),
-                header,
-            ))
-        }
         Algorithm::Aes256GcmSiv => {
             let nonce_bytes = StdRng::from_entropy().gen::<[u8; 8]>();
 
@@ -132,14 +111,6 @@ pub fn init_decryption_stream(
             };
             let stream = DecryptorLE31::from_aead(cipher, header.nonce.as_slice().into());
             Ok(DecryptStreamCiphers::XChaCha(Box::new(stream)))
-        }
-        Algorithm::DeoxysII256 => {
-            let cipher = match DeoxysII256::new_from_slice(key.expose()) {
-                Ok(cipher) => cipher,
-                Err(_) => return Err(CoreErr::CreateCipher)
-            };
-            let stream = DecryptorLE31::from_aead(cipher, header.nonce.as_slice().into());
-            Ok(DecryptStreamCiphers::DeoxysII(Box::new(stream)))
         }
         Algorithm::Aes256GcmSiv => {
             let cipher = match Aes256GcmSiv::new_from_slice(key.expose()) {

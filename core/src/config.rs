@@ -5,7 +5,6 @@ use aead::{
 use aes_gcm::Aes256Gcm;
 use aes_gcm_siv::Aes256GcmSiv;
 use chacha20poly1305::XChaCha20Poly1305;
-use deoxys::DeoxysII256;
 use crate::secret::Secret;
 
 #[derive(PartialEq, Clone, Copy)]
@@ -30,7 +29,6 @@ pub enum Direction {
 pub enum Algorithm {
     Aes256Gcm,
     XChaCha20Poly1305,
-    DeoxysII256,
     Aes256GcmSiv
 }
 
@@ -46,7 +44,6 @@ impl std::fmt::Display for Algorithm {
         match *self {
             Algorithm::Aes256Gcm => write!(f, "AES-256-GCM"),
             Algorithm::XChaCha20Poly1305 => write!(f, "XChaCha20-Poly1305"),
-            Algorithm::DeoxysII256 => write!(f, "Deoxys-II-256"),
             Algorithm::Aes256GcmSiv => write!(f, "Aes256-Gcm-Siv"),
         }
     }
@@ -67,14 +64,12 @@ pub struct Config {
 pub enum EncryptStreamCiphers {
     Aes256Gcm(Box<EncryptorLE31<Aes256Gcm>>),
     XChaCha(Box<EncryptorLE31<XChaCha20Poly1305>>),
-    DeoxysII(Box<EncryptorLE31<DeoxysII256>>),
     Aes256GcmSiv(Box<EncryptorLE31<Aes256GcmSiv>>),
 }
 
 pub enum DecryptStreamCiphers {
     Aes256Gcm(Box<DecryptorLE31<Aes256Gcm>>),
     XChaCha(Box<DecryptorLE31<XChaCha20Poly1305>>),
-    DeoxysII(Box<DecryptorLE31<DeoxysII256>>),
     Aes256GcmSiv(Box<DecryptorLE31<Aes256GcmSiv>>),
 }
 
@@ -86,7 +81,6 @@ impl EncryptStreamCiphers {
         match self {
             EncryptStreamCiphers::Aes256Gcm(s) => s.encrypt_next(payload),
             EncryptStreamCiphers::XChaCha(s) => s.encrypt_next(payload),
-            EncryptStreamCiphers::DeoxysII(s) => s.encrypt_next(payload),
             EncryptStreamCiphers::Aes256GcmSiv(s) => s.encrypt_next(payload),
         }
     }
@@ -98,7 +92,6 @@ impl EncryptStreamCiphers {
         match self {
             EncryptStreamCiphers::Aes256Gcm(s) => s.encrypt_last(payload),
             EncryptStreamCiphers::XChaCha(s) => s.encrypt_last(payload),
-            EncryptStreamCiphers::DeoxysII(s) => s.encrypt_last(payload),
             EncryptStreamCiphers::Aes256GcmSiv(s) => s.encrypt_last(payload),
         }
     }
@@ -112,7 +105,6 @@ impl DecryptStreamCiphers {
         match self {
             DecryptStreamCiphers::Aes256Gcm(s) => s.decrypt_next(payload),
             DecryptStreamCiphers::XChaCha(s) => s.decrypt_next(payload),
-            DecryptStreamCiphers::DeoxysII(s) => s.decrypt_next(payload),
             DecryptStreamCiphers::Aes256GcmSiv(s) => s.decrypt_next(payload),
         }
     }
@@ -124,7 +116,6 @@ impl DecryptStreamCiphers {
         match self {
             DecryptStreamCiphers::Aes256Gcm(s) => s.decrypt_last(payload),
             DecryptStreamCiphers::XChaCha(s) => s.decrypt_last(payload),
-            DecryptStreamCiphers::DeoxysII(s) => s.decrypt_last(payload),
             DecryptStreamCiphers::Aes256GcmSiv(s) => s.decrypt_last(payload),
         }
     }

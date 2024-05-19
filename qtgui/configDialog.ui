@@ -6,7 +6,7 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>351</width>
+    <width>389</width>
     <height>216</height>
    </rect>
   </property>
@@ -30,7 +30,7 @@
       <item row="0" column="1">
        <spacer name="horizontalSpacer_2">
         <property name="orientation">
-         <enum>Qt::Horizontal</enum>
+         <enum>Qt::Orientation::Horizontal</enum>
         </property>
         <property name="sizeHint" stdset="0">
          <size>
@@ -92,11 +92,6 @@
         </item>
         <item>
          <property name="text">
-          <string>Deoxys II-256</string>
-         </property>
-        </item>
-        <item>
-         <property name="text">
           <string>Aes-256-Gcm-Siv</string>
          </property>
         </item>
@@ -109,7 +104,6 @@
     <widget class="QLabel" name="label_5">
      <property name="font">
       <font>
-       <weight>50</weight>
        <italic>true</italic>
        <bold>false</bold>
        <underline>false</underline>
@@ -120,20 +114,20 @@
       <string>The decryption routine detect the right parameters automatically.</string>
      </property>
      <property name="textFormat">
-      <enum>Qt::PlainText</enum>
+      <enum>Qt::TextFormat::PlainText</enum>
      </property>
      <property name="alignment">
-      <set>Qt::AlignCenter</set>
+      <set>Qt::AlignmentFlag::AlignCenter</set>
      </property>
     </widget>
    </item>
    <item>
     <widget class="QDialogButtonBox" name="buttonBox">
      <property name="orientation">
-      <enum>Qt::Horizontal</enum>
+      <enum>Qt::Orientation::Horizontal</enum>
      </property>
      <property name="standardButtons">
-      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+      <set>QDialogButtonBox::StandardButton::Cancel|QDialogButtonBox::StandardButton::Ok</set>
      </property>
     </widget>
    </item>
