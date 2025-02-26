@@ -10,7 +10,7 @@ use crate::header::HeaderVersion;
 
 // this generates a salt for password hashing
 pub fn gen_salt() -> [u8; SALTLEN] {
-    StdRng::from_entropy().gen::<[u8; SALTLEN]>()
+    StdRng::from_os_rng().random::<[u8; SALTLEN]>()
 }
 
 // this handles argon2 hashing with the provided key

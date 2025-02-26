@@ -7,7 +7,7 @@ use crate::secret::*;
 use rand::{Rng, SeedableRng};
 use aes_gcm::{Aes256Gcm};
 use chacha20poly1305::XChaCha20Poly1305;
-use aead::{NewAead, Payload};
+use aead::{Payload,KeyInit};
 use std::{io::{Read, Write}};
 use std::fs::File;
 use aead::stream::{DecryptorLE31, EncryptorLE31};
@@ -25,7 +25,7 @@ pub fn init_encryption_stream(
 
     match header_type.algorithm {
         Algorithm::Aes256Gcm => {
-            let nonce_bytes = StdRng::from_entropy().gen::<[u8; 8]>();
+            let nonce_bytes = StdRng::from_os_rng().random::<[u8; 8]>();
 
             let cipher = match Aes256Gcm::new_from_slice(key.expose()) {
                 Ok(cipher) => cipher,
@@ -45,7 +45,7 @@ pub fn init_encryption_stream(
             ))
         }
         Algorithm::XChaCha20Poly1305 => {
-            let nonce_bytes = StdRng::from_entropy().gen::<[u8; 20]>();
+            let nonce_bytes = StdRng::from_os_rng().random::<[u8; 20]>();
 
             let cipher = match XChaCha20Poly1305::new_from_slice(key.expose()) {
                 Ok(cipher) => cipher,
@@ -65,7 +65,7 @@ pub fn init_encryption_stream(
             ))
         }
         Algorithm::Aes256GcmSiv => {
-            let nonce_bytes = StdRng::from_entropy().gen::<[u8; 8]>();
+            let nonce_bytes = StdRng::from_os_rng().random::<[u8; 8]>();
 
             let cipher = match Aes256GcmSiv::new_from_slice(key.expose()) {
                 Ok(cipher) => cipher,

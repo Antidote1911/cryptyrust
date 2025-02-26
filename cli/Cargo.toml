@@ -9,12 +9,12 @@ edition = "2021"
 [dependencies]
 cryptyrust_core = { path = "../core" }
 rpassword = "7.3.1"
-clap = { version = "4.5.4", features = ["derive","cargo"] }
-anyhow = "1.0.86"
+clap = { version = "4.5.31", features = ["derive","cargo"] }
+anyhow = "1.0.96"
 
 [dev-dependencies]
-assert_cmd = "2.0.14"
-assert_fs = "1.1.1"
+assert_cmd = "2.0.16"
+assert_fs = "1.1.2"
 
 [[bin]]
 name = "cryptyrust_cli"
