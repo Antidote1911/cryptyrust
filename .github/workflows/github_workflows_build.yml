@@ -1,0 +1,41 @@
+name: Build Rust and Qt6/C++ Project
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v2
+
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true
+
+    - name: Install Qt6
+      run: |
+        choco install qt --version 6.2.0 --x86
+
+    - name: Set Qt environment variables
+      run: |
+        echo "C:\Qt\6.2.0\msvc2019_64\bin" >> $GITHUB_PATH
+        echo "C:\Qt\6.2.0\msvc2019_64\lib\cmake" >> $GITHUB_PATH
+
+    - name: Build Rust project
+      run: cargo build --release
+
+    - name: Build Qt project
+      run: |
+        cd /cryptyrust/qtgui/
+        qmake
+        nmake
