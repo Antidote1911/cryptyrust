@@ -1,5 +1,0 @@
-/home/antidote/Documents/cryptyrust/qtgui/build/Desktop-Debug/CMakeFiles/cryptyrust.dir
-/home/antidote/Documents/cryptyrust/qtgui/build/Desktop-Debug/CMakeFiles/edit_cache.dir
-/home/antidote/Documents/cryptyrust/qtgui/build/Desktop-Debug/CMakeFiles/rebuild_cache.dir
-/home/antidote/Documents/cryptyrust/qtgui/build/Desktop-Debug/CMakeFiles/cryptyrust_autogen_timestamp_deps.dir
-/home/antidote/Documents/cryptyrust/qtgui/build/Desktop-Debug/CMakeFiles/cryptyrust_autogen.dir
