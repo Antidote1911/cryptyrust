@@ -1,4 +1,4 @@
-cmake_minimum_required(VERSION 3.5)
+cmake_minimum_required(VERSION 3.10)
 
 project(cryptyrust LANGUAGES CXX)
 
@@ -23,8 +23,6 @@ set(PROJECT_SOURCES
         adapter.cpp
         droparea.h
         adapter.h
-        skin/skin.h
-        skin/skin.cpp
         Config.h
         Config.cpp
         configDialog.cpp
@@ -50,7 +48,7 @@ else()
 endif()
 
 if (WIN32)
-    target_link_libraries(cryptyrust PRIVATE Qt6::Widgets bcrypt advapi32 user32 ws2_32 userenv ${CMAKE_CURRENT_SOURCE_DIR}/../target/release/cryptyrust_adapter.lib)
+    target_link_libraries(cryptyrust PRIVATE Qt6::Widgets advapi32 user32 ws2_32 userenv ${CMAKE_CURRENT_SOURCE_DIR}/../target/release/cryptyrust_adapter.lib)
 endif (WIN32)
 
 if (UNIX)

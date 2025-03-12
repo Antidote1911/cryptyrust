@@ -28,7 +28,6 @@ class MainWindow : public QMainWindow {
 
   private:
     const std::unique_ptr<Ui::MainWindow> m_ui;
-    void applyTheme();
     void loadPreferences();
     void initViewMenu();
     void* cryptoConfig{};

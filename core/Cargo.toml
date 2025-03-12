@@ -6,13 +6,13 @@ edition = "2021"
 
 [dependencies]
 argon2 = "0.4.1"
-aead = { version = "0.5.1", features = ["std", "stream"] }
+aead = { version = "0.5.2", features = ["std", "stream"] }
 aes-gcm = "0.10.3"
 aes-gcm-siv = "0.11.1"
 chacha20poly1305 = "0.10.1"
-blake3 = "1.6.0"
+blake3 = "1.6.1"
 rand = "0.9.0"
-thiserror = "2.0.11"
+thiserror = "2.0.12"
 indicatif = "0.17.11"
 zeroize = "1.8.1"
 

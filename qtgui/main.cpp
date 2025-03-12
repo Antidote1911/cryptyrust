@@ -10,7 +10,6 @@ int main(int argc, char *argv[])
     QApplication a(argc, argv);
     a.setApplicationName("Cryptyrust");
     a.setApplicationVersion("2.0.0");
-    a.setStyle(QStyleFactory::create("Fusion"));
     MainWindow w;
     gMainWindow = &w;
     w.show();

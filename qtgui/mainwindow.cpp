@@ -10,7 +10,6 @@
 #include "adapter.h"
 #include "Config.h"
 #include "configDialog.h"
-#include "skin/skin.h"
 
 MainWindow::MainWindow(QWidget *parent)
         : QMainWindow(parent),
@@ -19,7 +18,6 @@ MainWindow::MainWindow(QWidget *parent)
           m_ui->progBar->setVisible(false);
           loadPreferences();
           initViewMenu();
-          applyTheme();
 
     connect(m_ui->menu_About, &QAction::triggered, this, [=] { slot_menuAbout(); });
     connect(m_ui->menu_AboutQt, &QAction::triggered, this, [=] { QMessageBox::aboutQt(this); });
@@ -111,18 +109,6 @@ void MainWindow::savePreferences()
     // clang-format on
 }
 
-void MainWindow::applyTheme()
-{
-    QString appTheme = config()->get(Config::GUI_ApplicationTheme).toString();
-    if (appTheme == "classic") {
-        skin()->setSkin("classic");
-    }
-    else if (appTheme == "dark") {
-        skin()->setSkin("dark");
-    }
-    else {
-    }
-}
 
 void MainWindow::slot_menuAbout() {
     auto Str = get_version2();
