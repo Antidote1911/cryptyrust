@@ -42,6 +42,7 @@ gui/uic_wrapper.bat
 
 ## Ignore rust build folder
 target
+build
 
 # User-specific files
 *.rsuser
