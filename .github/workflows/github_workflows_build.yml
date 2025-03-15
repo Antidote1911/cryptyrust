@@ -1,46 +1,56 @@
-name: Build Qt6 Application for Windows
+name: ActionsCI
+
+env:
+  Platform: #Any CPU|Win32|x64
+  Configuration: Release
+  Artifacts: build/Release/
 
 on:
   push:
-    branches:
-      - master
-  pull_request:
-    branches:
-      - master
+    branches: [master, develop]
 
 jobs:
-  build:
+  build-windows-qt68:
     runs-on: windows-latest
-
     steps:
-    - name: Checkout repository
-      uses: actions/checkout@main
-      
+    - uses: actions/checkout@main
     - name: Setup msbuild
       uses: microsoft/setup-msbuild@v2
       with:
         vs-version: '[17,18)'  # 17.xx
         msbuild-architecture: x64
-
-    - name: Set up Qt
+    - name: Install Qt
       uses: jurplel/install-qt-action@v4
       with:
-        version: '6.8.1'
-        host: 'windows'
-        target: 'desktop'
-        arch: 'win64_msvc2019_64'
+        version:      6.8.1
+        host:         windows
+        target:       desktop
+        modules:      qtmultimedia
         setup-python: false
-
-    - name: Configure and Build
+    - name: Set up Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        toolchain: stable
+        override: true        
+    - name: Build Rust project
+      run: cargo build --release
+    - name: build
+      shell: cmd
       run: |
         call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
-        mkdir build
-        cd build
-        C:\Qt\6.2.2\msvc2019_64\bin\qmake.exe ..
-        nmake
-
-    - name: Archive Build
+        set CL=/MP
+        cmake -B./build -S. ${{ github.workspace }}\qtgui
+        cmake --build ./build --config ${{env.Configuration}}
+    - name: deploy
+      run: windeployqt.exe build\src\Release\cryptyrust.exe
+    - name: Compress artifacts
+      uses: vimtor/action-zip@v1.1
+      with:
+        files: build\src\Release
+        dest: "build/cryptyrust.zip"
+    - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
-        name: Qt6App
-        path: build/
+        name: cryptyrust.zip
+        path: build\src\Release
+
