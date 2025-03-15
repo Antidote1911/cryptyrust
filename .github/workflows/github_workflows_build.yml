@@ -48,10 +48,17 @@ jobs:
       shell: cmd
       run:  |
         xcopy ${{ github.workspace }}\LICENSE build\Release
+        xcopy ${{ github.workspace }}\target\release\cryptyrust_cli.exe build\Release
         rmdir /s /q build\Release\generic
         rmdir /s /q build\Release\networkinformation
+        rmdir /s /q build\Release\iconengines
         rmdir /s /q build\Release\translations
+        rmdir /s /q build\Release\imageformats
+        rmdir /s /q build\Release\tls
         del /F build\Release\Qt6Network.dll
+        del /F build\Release\Qt6Svg.dll
+        del /F build\Release\D3Dcompiler_47.dll
+        del /F build\Release\opengl32sw.dll
     - name: Compress artifacts
       uses: vimtor/action-zip@v1.1
       with:
