@@ -42,7 +42,7 @@ jobs:
         cmake -B./build -S. ${{ github.workspace }}\qtgui
         cmake --build ./build --config ${{env.Configuration}}
     - name: deploy
-      run: windeployqt.exe --no-compiler-runtime -core -gui build\Release\cryptyrust.exe
+      run: windeployqt.exe --no-compiler-runtime --release build\Release\cryptyrust.exe
     - name: Compress artifacts
       uses: vimtor/action-zip@v1.1
       with:
