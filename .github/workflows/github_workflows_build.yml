@@ -1,12 +1,12 @@
-name: Build Rust and Qt6/C++ Project
+name: Build Qt6 Application for Windows
 
 on:
   push:
     branches:
-      - master
+      - main
   pull_request:
     branches:
-      - master
+      - main
 
 jobs:
   build:
@@ -16,26 +16,23 @@ jobs:
     - name: Checkout repository
       uses: actions/checkout@v2
 
-    - name: Set up Rust
-      uses: actions-rs/toolchain@v1
+    - name: Set up Qt
+      uses: jurplel/install-qt-action@v4
       with:
-        toolchain: stable
-        override: true
+        version: '6.8.1'
+        host: 'windows'
+        target: 'desktop'
+        arch: 'win64_msvc2019_64'
 
-    - name: Install Qt6
+    - name: Configure and Build
       run: |
-        choco install qt --version 6.2.0 --x86
-
-    - name: Set Qt environment variables
-      run: |
-        echo "C:\Qt\6.2.0\msvc2019_64\bin" >> $GITHUB_PATH
-        echo "C:\Qt\6.2.0\msvc2019_64\lib\cmake" >> $GITHUB_PATH
-
-    - name: Build Rust project
-      run: cargo build --release
-
-    - name: Build Qt project
-      run: |
-        cd /cryptyrust/qtgui/
-        qmake
+        mkdir build
+        cd build
+        C:\Qt\6.2.2\msvc2019_64\bin\qmake.exe ..
         nmake
+
+    - name: Archive Build
+      uses: actions/upload-artifact@v4
+      with:
+        name: Qt6App
+        path: build/
