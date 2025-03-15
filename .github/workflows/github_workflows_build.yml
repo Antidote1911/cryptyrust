@@ -42,15 +42,15 @@ jobs:
         cmake -B./build -S. ${{ github.workspace }}\qtgui
         cmake --build ./build --config ${{env.Configuration}}
     - name: deploy
-      run: windeployqt.exe build\src\Release\cryptyrust.exe
+      run: windeployqt.exe build\Release\cryptyrust.exe
     - name: Compress artifacts
       uses: vimtor/action-zip@v1.1
       with:
-        files: build\src\Release
+        files: build\Release
         dest: "build/cryptyrust.zip"
     - name: Upload Artifacts
       uses: actions/upload-artifact@v4
       with:
         name: cryptyrust.zip
-        path: build\src\Release
+        path: build\Release
 
