@@ -23,9 +23,11 @@ jobs:
         host: 'windows'
         target: 'desktop'
         arch: 'win64_msvc2019_64'
+        setup-python: false
 
     - name: Configure and Build
       run: |
+        call "C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC\Auxiliary\Build\vcvars64.bat"
         mkdir build
         cd build
         C:\Qt\6.2.2\msvc2019_64\bin\qmake.exe ..
