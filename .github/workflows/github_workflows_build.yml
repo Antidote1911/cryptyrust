@@ -48,9 +48,9 @@ jobs:
       shell: cmd
       run:  |
         xcopy ${{ github.workspace }}\LICENSE build\Release
-        rmdir /s build\Release\generic
-        rmdir /s build\Release\networkinformation
-        rmdir /s build\Release\translations
+        rmdir /s /q build\Release\generic
+        rmdir /s /q build\Release\networkinformation
+        rmdir /s /q build\Release\translations
         del /F build\Release\Qt6Network.dll
     - name: Compress artifacts
       uses: vimtor/action-zip@v1.1
