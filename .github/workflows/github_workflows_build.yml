@@ -44,6 +44,9 @@ jobs:
     - name: deploy
       run:  |        
         windeployqt.exe --no-compiler-runtime --release build\Release\cryptyrust.exe
+    - name: cleaning
+      shell: cmd
+      run:  |
         xcopy ${{ github.workspace }}\LICENSE build\Release
         rmdir /s build\Release\generic
         rmdir /s build\Release\networkinformation
