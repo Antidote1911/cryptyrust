@@ -45,10 +45,10 @@ jobs:
       run:  |        
         windeployqt.exe --no-compiler-runtime --release build\Release\cryptyrust.exe
         xcopy ${{ github.workspace }}\LICENSE build\Release
-        rm -rf build\Release\generic
-        rm -rf build\Release\networkinformation
-        rm -rf build\Release\translations
-        rm -rf build\Release\Qt6Network.dll
+        Remove-Item build\Release\generic
+        Remove-Item build\Release\networkinformation
+        Remove-Item build\Release\translations
+        Remove-Item build\Release\Qt6Network.dll
     - name: Compress artifacts
       uses: vimtor/action-zip@v1.1
       with:
