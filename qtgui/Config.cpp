@@ -47,7 +47,6 @@ struct ConfigDirective {
  */
 static const QHash<Config::ConfigKey, ConfigDirective> configStrings = {
     //cryptyrust
-    {Config::GUI_ApplicationTheme, {QS("GUI/ApplicationTheme"), Roaming, QS("classic")}},
 
     {Config::GUI_MainWindowGeometry, {QS("GUI/MainWindowGeometry"), Local, {}}},
     {Config::GUI_MainWindowState, {QS("GUI/MainWindowState"), Local, {}}},

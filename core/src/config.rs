@@ -63,13 +63,13 @@ pub struct Config {
 
 pub enum EncryptStreamCiphers {
     Aes256Gcm(Box<EncryptorLE31<Aes256Gcm>>),
-    XChaCha(Box<EncryptorLE31<XChaCha20Poly1305>>),
+    XChaCha20Poly1305(Box<EncryptorLE31<XChaCha20Poly1305>>),
     Aes256GcmSiv(Box<EncryptorLE31<Aes256GcmSiv>>),
 }
 
 pub enum DecryptStreamCiphers {
     Aes256Gcm(Box<DecryptorLE31<Aes256Gcm>>),
-    XChaCha(Box<DecryptorLE31<XChaCha20Poly1305>>),
+    XChaCha20Poly1305(Box<DecryptorLE31<XChaCha20Poly1305>>),
     Aes256GcmSiv(Box<DecryptorLE31<Aes256GcmSiv>>),
 }
 
@@ -80,7 +80,7 @@ impl EncryptStreamCiphers {
     ) -> aead::Result<Vec<u8>> {
         match self {
             EncryptStreamCiphers::Aes256Gcm(s) => s.encrypt_next(payload),
-            EncryptStreamCiphers::XChaCha(s) => s.encrypt_next(payload),
+            EncryptStreamCiphers::XChaCha20Poly1305(s) => s.encrypt_next(payload),
             EncryptStreamCiphers::Aes256GcmSiv(s) => s.encrypt_next(payload),
         }
     }
@@ -91,7 +91,7 @@ impl EncryptStreamCiphers {
     ) -> aead::Result<Vec<u8>> {
         match self {
             EncryptStreamCiphers::Aes256Gcm(s) => s.encrypt_last(payload),
-            EncryptStreamCiphers::XChaCha(s) => s.encrypt_last(payload),
+            EncryptStreamCiphers::XChaCha20Poly1305(s) => s.encrypt_last(payload),
             EncryptStreamCiphers::Aes256GcmSiv(s) => s.encrypt_last(payload),
         }
     }
@@ -104,7 +104,7 @@ impl DecryptStreamCiphers {
     ) -> aead::Result<Vec<u8>> {
         match self {
             DecryptStreamCiphers::Aes256Gcm(s) => s.decrypt_next(payload),
-            DecryptStreamCiphers::XChaCha(s) => s.decrypt_next(payload),
+            DecryptStreamCiphers::XChaCha20Poly1305(s) => s.decrypt_next(payload),
             DecryptStreamCiphers::Aes256GcmSiv(s) => s.decrypt_next(payload),
         }
     }
@@ -115,7 +115,7 @@ impl DecryptStreamCiphers {
     ) -> aead::Result<Vec<u8>> {
         match self {
             DecryptStreamCiphers::Aes256Gcm(s) => s.decrypt_last(payload),
-            DecryptStreamCiphers::XChaCha(s) => s.decrypt_last(payload),
+            DecryptStreamCiphers::XChaCha20Poly1305(s) => s.decrypt_last(payload),
             DecryptStreamCiphers::Aes256GcmSiv(s) => s.decrypt_last(payload),
         }
     }

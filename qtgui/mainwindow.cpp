@@ -17,7 +17,6 @@ MainWindow::MainWindow(QWidget *parent)
           m_ui->setupUi(this);
           m_ui->progBar->setVisible(false);
           loadPreferences();
-          initViewMenu();
 
     connect(m_ui->menu_About, &QAction::triggered, this, [=] { slot_menuAbout(); });
     connect(m_ui->menu_AboutQt, &QAction::triggered, this, [=] { QMessageBox::aboutQt(this); });
@@ -43,52 +42,6 @@ void MainWindow::closeEvent(QCloseEvent *event)
 
 }
 
-void MainWindow::initViewMenu()
-{
-    setContextMenuPolicy(Qt::NoContextMenu);
-
-    m_ui->actionDark->setData("dark");
-    m_ui->actionLight->setData("classic");
-
-    auto themeActions = new QActionGroup(this);
-    themeActions->addAction(m_ui->actionDark);
-    themeActions->addAction(m_ui->actionLight);
-
-    auto theme = config()->get(Config::GUI_ApplicationTheme).toString();
-    for (auto action : themeActions->actions()) {
-        if (action->data() == theme) {
-            action->setChecked(true);
-            break;
-        }
-    }
-
-    connect(themeActions, &QActionGroup::triggered, this, [this](QAction *action) {
-        if (action->data() != config()->get(Config::GUI_ApplicationTheme)) {
-            config()->set(Config::GUI_ApplicationTheme, action->data());
-            restartApp();
-        }
-    });
-}
-
-void MainWindow::restartApp()
-{
-    int ret = QMessageBox::question(this, tr("Restart Application ?"),
-                                    tr("To take effect, Arsenic need to be restarted.\n"
-                                       "Do you want to restart now ?"),
-                                    QMessageBox::No | QMessageBox::Yes,
-                                    QMessageBox::Yes);
-
-    if (ret == QMessageBox::Yes) {
-        close();
-        reboot();
-    }
-}
-
-void MainWindow::reboot()
-{
-    qDebug() << "Performing application reboot...";
-    qApp->exit(-123456789);
-}
 
 void MainWindow::loadPreferences()
 {

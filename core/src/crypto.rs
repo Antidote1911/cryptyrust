@@ -60,7 +60,7 @@ pub fn init_encryption_stream(
 
             let stream = EncryptorLE31::from_aead(cipher, nonce_bytes.as_slice().into());
             Ok((
-                EncryptStreamCiphers::XChaCha(Box::new(stream)),
+                EncryptStreamCiphers::XChaCha20Poly1305(Box::new(stream)),
                 header,
             ))
         }
@@ -110,7 +110,7 @@ pub fn init_decryption_stream(
                 Err(_) => return Err(CoreErr::CreateCipher)
             };
             let stream = DecryptorLE31::from_aead(cipher, header.nonce.as_slice().into());
-            Ok(DecryptStreamCiphers::XChaCha(Box::new(stream)))
+            Ok(DecryptStreamCiphers::XChaCha20Poly1305(Box::new(stream)))
         }
         Algorithm::Aes256GcmSiv => {
             let cipher = match Aes256GcmSiv::new_from_slice(key.expose()) {

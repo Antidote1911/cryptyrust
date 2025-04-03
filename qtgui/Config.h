@@ -31,7 +31,6 @@ class Config : public QObject {
     Q_DISABLE_COPY(Config)
 
     enum ConfigKey {
-        GUI_ApplicationTheme,
 
         GUI_MainWindowGeometry,
         GUI_MainWindowState,
