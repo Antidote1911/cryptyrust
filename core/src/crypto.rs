@@ -155,7 +155,7 @@ pub fn encrypt<>(
 
     let aad = create_aad(&header);
 
-    let mut buffer = [0u8; MSGLEN];
+    let mut buffer = vec![0u8; MSGLEN];
     let mut total_bytes_read = 0;
     let pb = ProgressBar::new(filesize as u64);
     pb.set_style(
@@ -168,9 +168,6 @@ pub fn encrypt<>(
         let read_count = input.read(&mut buffer).map_err(|e| CoreErr::IOError(e))?;
         total_bytes_read += read_count;
         if read_count == MSGLEN {
-            // aad is just empty bytes normally
-            // create_aad returns empty bytes if the header isn't V3+
-            // this means we don't need to do anything special in regards to older versions
             let payload = Payload {
                 aad: &aad,
                 msg: buffer.as_ref(),
@@ -189,7 +186,6 @@ pub fn encrypt<>(
             }
 
         } else {
-            // if we read something less than MSGLEN, and have hit the end of the file
             let payload = Payload {
                 aad: &aad,
                 msg: &buffer[..read_count],
@@ -243,10 +239,10 @@ pub fn decrypt<>(
     }
 
     let mut streams = init_decryption_stream(password, header)?;
-    let mut buffer = [0u8; MSGLEN + TAGLEN]; // TAGLEN is the length of the AEAD tag
+    let mut buffer = vec![0u8; MSGLEN + TAGLEN]; // TAGLEN is the length of the AEAD tag
 
     let mut total_bytes_read = 0;
-    let pb = ProgressBar::new(filesize as u64);
+    let pb = ProgressBar::new(filesize);
     pb.set_style(
         ProgressStyle::with_template(
             "{spinner:.green} [{wide_bar:.cyan/blue}] {bytes}/{total_bytes} ({eta})",
@@ -275,7 +271,6 @@ pub fn decrypt<>(
                 hasher.update(&buffer);
             }
         } else {
-            // if we read something less than BLOCK_SIZE+16, and have hit the end of the file
             let payload = Payload {
                 aad: &aad,
                 msg: &buffer[..read_count],
@@ -295,8 +290,8 @@ pub fn decrypt<>(
         }
         pb.set_position(total_bytes_read as u64);
 
-            let percentage = (((total_bytes_read as f32) / (filesize as f32)) * 100.) as i32;
-            ui.output(percentage);
+        let percentage = (((total_bytes_read as f32) / (filesize as f32)) * 100.) as i32;
+        ui.output(percentage);
 
     }
     pb.finish();
@@ -308,3 +303,112 @@ pub fn decrypt<>(
     Ok(())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempfile;
+    use std::io::{Write, Read, Seek};
+
+    fn setup_temp_files() -> (File, File) {
+        let mut input_file = tempfile().expect("Failed to create temp input file");
+        let output_file = tempfile().expect("Failed to create temp output file");
+
+        // Écrire des données dans le fichier d'entrée
+        writeln!(input_file, "Données de test pour l'encryptage.")
+            .expect("Failed to write to temp file");
+        input_file.rewind().expect("Failed to rewind input file");
+
+        (input_file, output_file)
+    }
+
+    #[test]
+    fn test_encrypt() {
+        let (mut input_file, mut output_file) = setup_temp_files();
+        let password = Secret::new(String::from("mot_de_passe_test"));
+        let mock_ui: Box<dyn Ui> = Box::new(MockUi {});
+        let filesize = input_file.metadata().unwrap().len() as u64;
+
+        // Appel d'encrypt
+        let result = encrypt(
+            &mut input_file,
+            &mut output_file,
+            &password,
+            &mock_ui,
+            filesize,
+            Algorithm::Aes256Gcm,
+            DeriveStrength::Interactive,
+            HashMode::CalculateHash,
+            BenchMode::WriteToFilesystem,
+        );
+
+        assert!(
+            result.is_ok(),
+            "Encryption failed with error: {:?}",
+            result.err()
+        );
+    }
+
+    #[test]
+    fn test_encrypt_and_decrypt() {
+        let (mut input_file, mut encrypted_file) = setup_temp_files();
+        let mut decrypted_file = tempfile().expect("Failed to create temp decrypted file");
+        let password = Secret::new(String::from("mot_de_passe_test"));
+        let mock_ui: Box<dyn Ui> = Box::new(MockUi {});
+        let filesize = input_file.metadata().unwrap().len() as u64;
+
+        // Encrypt the data
+        let enc_result = encrypt(
+            &mut input_file,
+            &mut encrypted_file,
+            &password,
+            &mock_ui,
+            filesize,
+            Algorithm::Aes256Gcm,
+            DeriveStrength::Interactive,
+            HashMode::CalculateHash,
+            BenchMode::WriteToFilesystem,
+        );
+        assert!(
+            enc_result.is_ok(),
+            "Encryption failed with error: {:?}",
+            enc_result.err()
+        );
+
+        // Déplacer la tête de lecture vers le début du fichier crypté
+        encrypted_file.rewind().unwrap();
+
+        // Decrypt the data
+        let dec_result = decrypt(
+            &mut encrypted_file,
+            &mut decrypted_file,
+            &password,
+            &mock_ui,
+            filesize,
+            HashMode::CalculateHash,
+            BenchMode::WriteToFilesystem,
+        );
+        assert!(
+            dec_result.is_ok(),
+            "Decryption failed with error: {:?}",
+            dec_result.err()
+        );
+
+        // Vérifier que les données sont identiques
+        let mut original_data = String::new();
+        input_file.rewind().unwrap();
+        input_file.read_to_string(&mut original_data).unwrap();
+
+        let mut decrypted_data = String::new();
+        let mut decrypted_file = decrypted_file; // Propriété mutable locale
+        decrypted_file.rewind().unwrap();
+        decrypted_file.read_to_string(&mut decrypted_data).unwrap();
+
+        assert_eq!(original_data, decrypted_data, "Decrypted data does not match original");
+    }
+
+    // Mock de l'UI pour les tests
+    struct MockUi;
+    impl Ui for MockUi {
+        fn output(&self, _percentage: i32) {}
+    }
+}

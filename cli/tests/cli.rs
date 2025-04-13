@@ -23,7 +23,7 @@ fn encrypt_and_decrypt() {
         .arg(original)
         .arg("-p mypassword")
         .arg("-s")
-        .arg("moderate")
+        .arg("interactive")
         .arg("-a")
         .arg("chacha")
         .arg("-o")
