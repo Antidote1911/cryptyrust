@@ -1,0 +1,13 @@
+[package]
+name = "cryptyrust_adapter"
+version = "3.1.0"
+authors = ["Antidote1911 <antidote1911@gmail.com>"]
+edition = "2021"
+
+[lib]
+name = "cryptyrust_adapter"
+crate-type = ["staticlib"]
+
+[dependencies]
+cryptyrust_core = { path = "../core" }
+zeroize = "1.8.1"
