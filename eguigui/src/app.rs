@@ -1,481 +1,183 @@
 use eframe::egui;
-use std::fs::File;
-use std::io::Read;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
-use std::sync::mpsc::{self, Receiver, Sender};
-use cryptyrust_core::{
-    main_routine, Config, Direction, Ui,
-    Algorithm, Secret, HashMode, BenchMode, DeriveStrength,
-};
+use std::path::PathBuf;
+use cryptyrust_core::{Algorithm, DeriveStrength};
 
-// ── Magic number Cryptyrust : "CRYP" (0x43 0x52 0x59 0x50) ─────────
-const CRYPTYRUST_MAGIC: [u8; 4] = [0x43, 0x52, 0x59, 0x50];
-
-/// Retourne true si le fichier commence par la signature Cryptyrust.
-fn is_cryptyrust_file(path: &Path) -> bool {
-    let Ok(mut f) = File::open(path) else { return false };
-    let mut magic = [0u8; 4];
-    matches!(f.read_exact(&mut magic), Ok(_) if magic == CRYPTYRUST_MAGIC)
-}
-
-/// Détecte le mode à partir d'une liste de fichiers.
-fn detect_mode(files: &[PathBuf]) -> Option<Mode> {
-    if files.is_empty() { return Some(Mode::Encrypt); }
-    let encrypted_count = files.iter().filter(|p| is_cryptyrust_file(p)).count();
-    if encrypted_count == files.len()  { Some(Mode::Decrypt) }
-    else if encrypted_count == 0       { Some(Mode::Encrypt) }
-    else                               { None }               // mélange
-}
-
-// ── Trait Ui qui envoie la progression via channel ─────────────────
-struct ChannelProgress {
-    sender: Sender<i32>,
-}
-
-impl Ui for ChannelProgress {
-    fn output(&self, percentage: i32) {
-        let _ = self.sender.send(percentage);
-    }
-}
-
-#[derive(PartialEq, Clone, Copy, Debug)]
-enum Mode { Encrypt, Decrypt }
-
-// ── État de la fenêtre modale de mot de passe ──────────────────────
-#[derive(PartialEq, Clone, Copy, Debug)]
-enum ModalState {
-    None,
-    Encrypt,
-    Decrypt,
-}
-
-// ── État du traitement en cours ────────────────────────────────────
-enum JobState {
-    Idle,
-    Running {
-        progress: Arc<Mutex<i32>>,
-        receiver: Receiver<i32>,
-    },
-    Done(Result<String, String>),
-}
+use crate::job::{JobState, PasswordPopup, FileStatus};
+use crate::file_utils::{detect_mode, Mode};
+use crate::ui::UI;
 
 pub struct CryptyApp {
-    mode:             Mode,
-    mixed_files:      bool,
-    files:            Vec<PathBuf>,
-    // États pour la fenêtre de mot de passe
-    modal_state:      ModalState,
-    password_input:   String,
-    password_confirm: String,
-    password_error:   Option<String>,
-    show_pass:        bool,
-    
-    algorithm:        Algorithm,
-    strength:         DeriveStrength,
-    job:              JobState,
+    pub files: Vec<PathBuf>,
+    pub mode: Mode,
+    pub mixed: bool,
+    pub job: JobState,
+    pub popup: PasswordPopup,
+    pub pw: String,
+    pub pw_confirm: String,
+    pub pw_show: bool,
+    pub pw_error: Option<String>,
+    pub pw_focus: bool,
+    pub algorithm: Algorithm,
+    pub strength: DeriveStrength,
+    pub show_about: bool,
 }
 
 impl Default for CryptyApp {
     fn default() -> Self {
         Self {
-            mode:             Mode::Encrypt,
-            mixed_files:      false,
-            files:            vec![],
-            modal_state:      ModalState::None,
-            password_input:   String::new(),
-            password_confirm: String::new(),
-            password_error:   None,
-            show_pass:        false,
-            algorithm:        Algorithm::XChaCha20Poly1305,
-            strength:         DeriveStrength::Moderate,
-            job:              JobState::Idle,
+            files: vec![],
+            mode: Mode::Encrypt,
+            mixed: false,
+            job: JobState::Idle,
+            popup: PasswordPopup::Closed,
+            pw: String::new(),
+            pw_confirm: String::new(),
+            pw_show: false,
+            pw_error: None,
+            pw_focus: false,
+            algorithm: Algorithm::XChaCha20Poly1305,
+            strength: DeriveStrength::Moderate,
+            show_about: false,
         }
     }
 }
 
 impl CryptyApp {
-    fn add_files(&mut self, new_files: impl IntoIterator<Item = PathBuf>) {
-        self.files.extend(new_files);
+    pub fn add_files(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        for p in paths {
+            if !self.files.contains(&p) {
+                self.files.push(p);
+            }
+        }
+        self.refresh_mode();
+    }
+
+    pub fn remove_file(&mut self, idx: usize) {
+        self.files.remove(idx);
         self.refresh_mode();
     }
 
     fn refresh_mode(&mut self) {
         match detect_mode(&self.files) {
-            Some(m) => { self.mode = m; self.mixed_files = false; }
-            None    => {                self.mixed_files = true;  }
+            Some(m) => {
+                self.mode = m;
+                self.mixed = false;
+            }
+            None => {
+                self.mixed = true;
+            }
         }
     }
 
-    fn clear_files(&mut self) {
+    pub fn clear_all(&mut self) {
         self.files.clear();
         self.mode = Mode::Encrypt;
-        self.mixed_files = false;
+        self.mixed = false;
+        self.pw.clear();
+        self.pw_confirm.clear();
+        self.pw_error = None;
+        self.popup = PasswordPopup::Closed;
+        self.job = JobState::Idle;
+    }
+
+    pub fn open_popup(&mut self) {
+        self.pw.clear();
+        self.pw_confirm.clear();
+        self.pw_error = None;
+        self.pw_show = false;
+        self.pw_focus = true;
+        self.popup = PasswordPopup::Open;
+    }
+
+    pub fn validate_and_start(&mut self, ctx: &egui::Context) {
+        if self.pw.is_empty() {
+            self.pw_error = Some("Password cannot be empty.".into());
+            return;
+        }
+        if self.mode == Mode::Encrypt && self.pw != self.pw_confirm {
+            self.pw_error = Some("Passwords do not match.".into());
+            return;
+        }
+        let password = self.pw.clone();
+        self.popup = PasswordPopup::Closed;
+        self.pw.clear();
+        self.pw_confirm.clear();
+        self.start_job(ctx.clone(), password);
+    }
+
+    fn start_job(&mut self, ctx: egui::Context, password: String) {
+        self.job.start(
+            self.files.clone(),
+            self.mode,
+            self.algorithm,
+            self.strength,
+            password,
+            ctx,
+        );
     }
 }
 
 impl eframe::App for CryptyApp {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-
-        // ── Drag & drop ──────────────────────────────────────────────
-        let dropped: Vec<PathBuf> = ctx.input(|i| {
-            i.raw.dropped_files.iter()
-                .filter_map(|f| f.path.clone())
-                .collect()
-        });
-        if !dropped.is_empty() {
-            self.add_files(dropped);
-        }
-
-        // ── Mise à jour progression depuis le thread ─────────────────
-        if let JobState::Running { progress, receiver } = &self.job {
-            while let Ok(pct) = receiver.try_recv() {
-                *progress.lock().unwrap() = pct;
-            }
-            ctx.request_repaint();
-            if *progress.lock().unwrap() >= 100 {
-                self.job = JobState::Done(Ok("Traitement terminé".to_string()));
-            }
-        }
-
-        // Bloquer l'interface principale si la modale est ouverte
-        let main_ui_enabled = self.modal_state == ModalState::None;
-
-        egui::CentralPanel::default().show(ctx, |ui| {
-            ui.add_enabled_ui(main_ui_enabled, |ui| {
-                ui.heading("🔐 Cryptyrust");
-                ui.separator();
-
-                let is_running = matches!(self.job, JobState::Running { .. });
-
-                // ── Indicateur de mode ────────────────────────────────────
-                ui.horizontal(|ui| {
-                    if self.mixed_files {
-                        ui.colored_label(
-                            egui::Color32::YELLOW,
-                            "⚠  Fichiers hétérogènes : certains sont chiffrés, d'autres non",
-                        );
-                    } else if self.files.is_empty() {
-                        ui.colored_label(egui::Color32::GRAY, "— En attente de fichiers —");
-                    } else {
-                        match self.mode {
-                            Mode::Encrypt => ui.colored_label(
-                                egui::Color32::from_rgb(100, 180, 255),
-                                "🔒  Mode détecté : Chiffrement",
-                            ),
-                            Mode::Decrypt => ui.colored_label(
-                                egui::Color32::from_rgb(100, 220, 130),
-                                "🔓  Mode détecté : Déchiffrement",
-                            ),
-                        };
-                    }
-                });
-
-                ui.add_space(8.0);
-
-                // ── Zone drop ────────────────────────────────────────────
-                let available_width = ui.available_width();
-                let zone_height = 80.0f32.max(20.0 * self.files.len() as f32 + 20.0);
-                let (rect, response) = ui.allocate_exact_size(
-                    egui::vec2(available_width, zone_height),
-                    egui::Sense::click(),
-                );
-
-                let border_color = if self.mixed_files {
-                    egui::Color32::from_rgb(200, 160, 0)
-                } else {
-                    egui::Color32::from_rgb(80, 80, 80)
-                };
-
-                ui.painter().rect_filled(rect, 6.0, egui::Color32::from_rgb(30, 30, 30));
-                ui.painter().rect_stroke(rect, 6.0,
-                                         egui::Stroke::new(1.0, border_color),
-                                         egui::StrokeKind::Outside);
-
-                if self.files.is_empty() {
-                    ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER,
-                                      "📂  Glissez des fichiers ici ou cliquez pour choisir",
-                                      egui::FontId::proportional(14.0), egui::Color32::GRAY);
-                } else {
-                    let mut y = rect.top() + 10.0;
-                    for f in &self.files {
-                        let icon = if is_cryptyrust_file(f) { "🔒 " } else { "📄 " };
-                        let name = format!("{}{}", icon,
-                                           f.file_name().unwrap_or_default().to_string_lossy());
-                        ui.painter().text(
-                            egui::pos2(rect.center().x, y),
-                            egui::Align2::CENTER_TOP,
-                            name,
-                            egui::FontId::proportional(13.0),
-                            egui::Color32::WHITE,
-                        );
-                        y += 20.0;
-                    }
-                }
-
-                if response.hovered() && !is_running {
-                    ui.painter().rect_stroke(rect, 6.0,
-                                             egui::Stroke::new(2.0, egui::Color32::from_rgb(100, 150, 255)),
-                                             egui::StrokeKind::Outside);
-                }
-
-                if response.clicked() && !is_running {
-                    if let Some(paths) = rfd::FileDialog::new().pick_files() {
-                        self.add_files(paths);
-                    }
-                }
-
-                if !self.files.is_empty() && !is_running {
-                    if ui.small_button("🗑  Effacer la liste").clicked() {
-                        self.clear_files();
-                    }
-                }
-
-                ui.add_space(8.0);
-
-                // ── Options chiffrement ──────────────────────────────────
-                if self.mode == Mode::Encrypt && !self.mixed_files && !is_running {
-                    ui.horizontal(|ui| {
-                        ui.label("Algorithme :");
-                        egui::ComboBox::from_id_salt("algo")
-                            .selected_text(format!("{}", self.algorithm))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.algorithm,
-                                                    Algorithm::XChaCha20Poly1305, "XChacha20Poly1305");
-                                ui.selectable_value(&mut self.algorithm,
-                                                    Algorithm::Aes256Gcm, "AES-256-GCM");
-                                ui.selectable_value(&mut self.algorithm,
-                                                    Algorithm::Aes256GcmSiv, "AES-256-GCM-SIV");
-                            });
-                    });
-                    ui.horizontal(|ui| {
-                        ui.label("Sécurité Argon2 :");
-                        egui::ComboBox::from_id_salt("strength")
-                            .selected_text(format!("{:?}", self.strength))
-                            .show_ui(ui, |ui| {
-                                ui.selectable_value(&mut self.strength,
-                                                    DeriveStrength::Interactive, "Interactive (rapide)");
-                                ui.selectable_value(&mut self.strength,
-                                                    DeriveStrength::Moderate, "Moderate");
-                                ui.selectable_value(&mut self.strength,
-                                                    DeriveStrength::Sensitive, "Sensitive (lent)");
-                            });
-                    });
-                }
-
-                ui.add_space(12.0);
-
-                // ── Barre de progression / bouton d'action ────────────────
-                match &self.job {
-                    JobState::Running { progress, .. } => {
-                        let pct = *progress.lock().unwrap();
-                        ui.label(format!("Traitement en cours... {}%", pct));
-                        ui.add(egui::ProgressBar::new(pct as f32 / 100.0)
-                            .show_percentage()
-                            .animate(true));
-                    }
-                    JobState::Done(Ok(msg)) => {
-                        ui.colored_label(egui::Color32::GREEN, format!("✅ {}", msg));
-                        if ui.button("Nouveau traitement").clicked() {
-                            self.job = JobState::Idle;
-                        }
-                    }
-                    JobState::Done(Err(msg)) => {
-                        ui.colored_label(egui::Color32::RED, format!("❌ {}", msg));
-                        if ui.button("Réessayer").clicked() {
-                            self.job = JobState::Idle;
-                        }
-                    }
-                    JobState::Idle => {
-                        // Le mot de passe sera demandé plus tard, on vérifie juste les fichiers
-                        let can_run = !self.files.is_empty() && !self.mixed_files;
-
-                        let label = match self.mode {
-                            Mode::Encrypt => "🔒 Chiffrer",
-                            Mode::Decrypt => "🔓 Déchiffrer",
-                        };
-
-                        if ui.add_enabled(can_run, egui::Button::new(label)
-                            .min_size(egui::vec2(120.0, 32.0))).clicked()
-                        {
-                            // On prépare et on ouvre la modale
-                            self.password_input.clear();
-                            self.password_confirm.clear();
-                            self.password_error = None;
-                            self.show_pass = false;
-                            
-                            self.modal_state = match self.mode {
-                                Mode::Encrypt => ModalState::Encrypt,
-                                Mode::Decrypt => ModalState::Decrypt,
-                            };
-                        }
-
-                        if self.mixed_files {
-                            ui.colored_label(
-                                egui::Color32::YELLOW,
-                                "Retirez les fichiers hétérogènes avant de continuer.",
-                            );
-                        }
-                    }
-                }
+        // Handle drag & drop
+        if self.popup == PasswordPopup::Closed && matches!(self.job, JobState::Idle | JobState::Completed { .. }) {
+            let dropped: Vec<PathBuf> = ctx.input(|i| {
+                i.raw
+                    .dropped_files
+                    .iter()
+                    .filter_map(|f| f.path.clone())
+                    .collect()
             });
-        });
-
-        // ── Fenêtre modale pour le mot de passe ───────────────────────
-        let mut start_processing = false;
-        let mut close_modal = false;
-
-        if self.modal_state != ModalState::None {
-            let title = match self.modal_state {
-                ModalState::Encrypt => "🔒 Définir un mot de passe",
-                _                   => "🔓 Entrer le mot de passe",
-            };
-
-            egui::Window::new(title)
-                .collapsible(false)
-                .resizable(false)
-                .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0)) // Centre la fenêtre
-                .show(ctx, |ui| {
-                    ui.add_space(4.0);
-                    
-                    ui.horizontal(|ui| {
-                        ui.label("Mot de passe :");
-                        ui.add(egui::TextEdit::singleline(&mut self.password_input)
-                            .password(!self.show_pass)
-                            .desired_width(200.0));
-                        ui.checkbox(&mut self.show_pass, "👁");
-                    });
-
-                    // Champ de confirmation uniquement pour le chiffrement
-                    if self.modal_state == ModalState::Encrypt {
-                        ui.add_space(4.0);
-                        ui.horizontal(|ui| {
-                            ui.label("Confirmer    :");
-                            ui.add(egui::TextEdit::singleline(&mut self.password_confirm)
-                                .password(!self.show_pass)
-                                .desired_width(200.0));
-                        });
-                    }
-
-                    if let Some(err) = &self.password_error {
-                        ui.add_space(4.0);
-                        ui.colored_label(egui::Color32::RED, err);
-                    }
-
-                    ui.add_space(12.0);
-                    ui.horizontal(|ui| {
-                        if ui.button("Valider").clicked() {
-                            if self.password_input.is_empty() {
-                                self.password_error = Some("Le mot de passe ne peut pas être vide.".into());
-                            } else if self.modal_state == ModalState::Encrypt && self.password_input != self.password_confirm {
-                                self.password_error = Some("Les mots de passe ne correspondent pas.".into());
-                            } else {
-                                start_processing = true;
-                                close_modal = true;
-                            }
-                        }
-                        if ui.button("Annuler").clicked() {
-                            close_modal = true;
-                        }
-                    });
-                });
-        }
-
-        if close_modal {
-            self.modal_state = ModalState::None;
-        }
-
-        if start_processing {
-            // On clone le mot de passe validé pour le passer au thread
-            let valid_password = self.password_input.clone();
-            self.start_job(ctx.clone(), valid_password);
-        }
-    }
-}
-
-impl CryptyApp {
-    fn start_job(&mut self, ctx: egui::Context, password: String) { // <--- Ajout de l'argument password
-        let files    = self.files.clone();
-        let mode     = self.mode;
-        let algo     = self.algorithm;
-        let strength = self.strength;
-
-        let (tx, rx) = mpsc::channel::<i32>();
-        let progress = Arc::new(Mutex::new(0i32));
-        let progress_clone = progress.clone();
-
-        self.job = JobState::Running { progress, receiver: rx };
-        self.clear_files();
-
-        std::thread::spawn(move || {
-            let total = files.len();
-            let mut errors: Vec<String> = vec![];
-            let mut ok_count = 0usize;
-
-            for (i, path) in files.iter().enumerate() {
-                let in_file = path.to_string_lossy().to_string();
-
-                let out_file = match mode {
-                    Mode::Encrypt => format!("{}.crypty", in_file),
-                    Mode::Decrypt => {
-                        if in_file.ends_with(".crypty") {
-                            in_file.trim_end_matches(".crypty").to_string()
-                        } else {
-                            format!("{}.dec", in_file)
-                        }
-                    }
-                };
-
-                let tx_clone = tx.clone();
-                let file_index = i;
-                let total_files = total;
-
-                let sender = {
-                    let tx = tx_clone;
-                    struct ScaledProgress {
-                        tx:    Sender<i32>,
-                        base:  i32,
-                        scale: i32,
-                    }
-                    impl Ui for ScaledProgress {
-                        fn output(&self, pct: i32) {
-                            let global = self.base + pct * self.scale / 100;
-                            let _ = self.tx.send(global);
-                        }
-                    }
-                    ScaledProgress {
-                        tx,
-                        base:  (file_index * 100 / total_files) as i32,
-                        scale: (100 / total_files) as i32,
-                    }
-                };
-
-                let mut config = Config::new(
-                    if mode == Mode::Encrypt { Direction::Encrypt } else { Direction::Decrypt },
-                    algo,
-                    strength,
-                    Secret::new(password.clone()), // <--- Utilisation du mot de passe passé en paramètre
-                    Some(in_file),
-                    Some(out_file),
-                    Box::new(sender),
-                    HashMode::NoHash,
-                    BenchMode::WriteToFilesystem,
-                );
-
-                match main_routine(&mut config) {
-                    Ok(_)  => ok_count += 1,
-                    Err(e) => errors.push(format!(
-                        "{}: {:?}",
-                        path.file_name().unwrap_or_default().to_string_lossy(), e
-                    )),
-                }
+            if !dropped.is_empty() {
+                self.job = JobState::Idle;
+                self.add_files(dropped);
             }
+        }
 
-            let _ = tx.send(100);
-            *progress_clone.lock().unwrap() = 100;
+        // Update job progress
+        let mut job_completed = None;
+        if let JobState::Running {
+            progress,
+            receiver,
+            current_file,
+            processing_files,
+            ..
+        } = &self.job
+        {
+            while let Ok((file_index, pct)) = receiver.try_recv() {
+                progress.lock().unwrap().insert(file_index, pct);
+            }
             ctx.request_repaint();
 
-            let _ = (ok_count, errors);
-        });
+            let current = *current_file.lock().unwrap();
+            if current == usize::MAX {
+                // Job terminé, créer les statuses finaux
+                let progress_map = progress.lock().unwrap();
+                let mut statuses = Vec::new();
+                
+                for (i, _file) in processing_files.iter().enumerate() {
+                    if progress_map.get(&i).map_or(false, |&p| p == 100) {
+                        statuses.push(FileStatus::Success);
+                    } else {
+                        statuses.push(FileStatus::Failed("Unknown error".to_string()));
+                    }
+                }
+                
+                job_completed = Some((processing_files.clone(), statuses));
+            }
+        }
+
+        // Mettre à jour l'état du job en dehors du if let
+        if let Some((files, statuses)) = job_completed {
+            self.job = JobState::Completed { files, statuses };
+        }
+
+        // Render UI
+        UI::render(self, ctx);
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+        // Cette méthode est maintenant requise dans eframe 0.34
+        // On peut la laisser vide car nous utilisons update() pour notre logique
     }
 }
