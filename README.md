@@ -7,7 +7,7 @@
 
 Pre-built binaries for Linux, macOS (universal), and Windows are available on the [releases page](https://github.com/Antidote1911/cryptyrust/releases/latest).
 
-![Demo](demo.gif)
+<img src='cryptyrust.png'/>
 
 ---
 
