@@ -127,17 +127,16 @@ pub trait Ui {
 
 impl Config {
     pub fn new(
-        _direction: Direction,
+        direction: Direction,
         algorithm: Algorithm,
-        derivestrength:DeriveStrength,
+        derivestrength: DeriveStrength,
         password: Secret<String>,
         filename: Option<String>,
         out_file: Option<String>,
         ui: Box<dyn Ui>,
-        hashmode:HashMode,
-        benchmode:BenchMode,
+        hashmode: HashMode,
+        benchmode: BenchMode,
     ) -> Self {
-        let direction: Direction = _direction.clone();
         Config {
             direction,
             algorithm,

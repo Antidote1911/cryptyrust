@@ -11,6 +11,7 @@ cryptyrust_core = { path = "../core" }
 rpassword = "7.3.1"
 clap = { version = "4.5.32", features = ["derive","cargo"] }
 anyhow = "1.0.97"
+indicatif = "0.17.11"
 
 [dev-dependencies]
 assert_cmd = "2.0.16"

@@ -11,8 +11,7 @@ The file start with the magic number 43 52 59 50. This allow to check if it's a 
 2 bytes for used algorithm:
 - 0E 01 -> XChaCha20Poly1305
 - 0E 02 -> Aes256Gcm
-- 0E 03 -> DeoxysII256
-- 0E 04 -> Aes256GcmSiv
+- 0E 03 -> Aes256GcmSiv
 
 2 bytes for used argon2 strength:
 - BE 01 -> Interactive

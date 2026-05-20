@@ -10,4 +10,3 @@ crate-type = ["staticlib"]
 
 [dependencies]
 cryptyrust_core = { path = "../core" }
-zeroize = "1.8.1"

@@ -1,28 +1,47 @@
 use cryptyrust_core::*;
 mod cli;
-use cli::{Cli};
-use clap::{Parser};
+use cli::Cli;
+use clap::Parser;
 use std::{
     path::{Path, PathBuf},
-    env, process::exit};
+    env,
+};
 
-use anyhow::anyhow;
-use anyhow::Result;
+use anyhow::{anyhow, Context, Result};
 use std::result::Result::Ok;
+use indicatif::{ProgressBar, ProgressStyle};
 
 const FILE_EXTENSION: &str = ".crypty";
 
 struct ProgressUpdater {
     mode: Direction,
+    pb: ProgressBar,
+}
+
+impl ProgressUpdater {
+    fn new(mode: Direction) -> Self {
+        let pb = ProgressBar::new(100);
+        pb.set_style(
+            ProgressStyle::with_template(
+                "{spinner:.green} [{wide_bar:.cyan/blue}] {pos}%",
+            )
+            .unwrap()
+            .progress_chars("#>-"),
+        );
+        Self { mode, pb }
+    }
 }
 
 impl Ui for ProgressUpdater {
-    fn output(&self, _percentage: i32) {
-            let _s = match self.mode {
-                Direction::Encrypt => "Encrypting",
-                Direction::Decrypt => "Decrypting",
+    fn output(&self, percentage: i32) {
+        self.pb.set_position(percentage as u64);
+        if percentage >= 100 {
+            let msg = match self.mode {
+                Direction::Encrypt => "Encrypted",
+                Direction::Decrypt => "Decrypted",
             };
-            //print!("\r{}: {}%", s, percentage);
+            self.pb.finish_with_message(msg);
+        }
     }
 }
 
@@ -42,7 +61,6 @@ fn main() {
 }
 
 fn run() -> Result<(Option<String>, Direction, f64)> {
-    // Augment built args with derived args
     let app = Cli::parse();
     let direction = if app.encrypt().is_some() {
         Direction::Encrypt
@@ -52,51 +70,45 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
 
     let filename = if app.encrypt().is_some() {
         let f = app.encrypt().ok_or("file to encrypt not given").unwrap();
-        // make sure input file exists
         let p = Path::new(&f);
         if !(p.exists() && p.is_file()) {
-            println!("Invalid filename: {}", f);
-            exit(1);
+            return Err(anyhow!("Invalid filename: {}", f));
         }
         Some(f)
     } else if app.decrypt().is_some() {
         let f = app.decrypt().ok_or("file to decrypt not given").unwrap();
         let p = Path::new(&f);
         if !(p.exists() && p.is_file()) {
-            println!("Invalid filename: {}", f);
-            exit(1);
+            return Err(anyhow!("Invalid filename: {}", f));
         }
         Some(f)
     } else {
-        None // using stdin
+        None
     };
 
-    let output_path =  {
-        let s = generate_output_path(&direction, filename.as_deref(), app.output()).unwrap()
+    let output_path = {
+        let s = generate_output_path(&direction, filename.as_deref(), app.output())
+            .unwrap()
             .to_str()
-            .ok_or("could not convert output path to string").unwrap()
+            .ok_or("could not convert output path to string")
+            .unwrap()
             .to_string();
         Some(s)
-
     };
 
-    // get_password needs to only happen if using neither stdin nor stdout: using requires() in clap
-    // password prompting is affected by both stdin and stdout, whereas other printing is affected only by stdout
-    let password: Secret<String>= if app.password().is_some() {
-        let tmp=app.password().unwrap();
-        Secret::new(tmp)
+    let password: Secret<String> = if app.password().is_some() {
+        Secret::new(app.password().unwrap())
     } else if app.passwordfile().is_some() {
         let pw_file = app.passwordfile().unwrap();
         let p = Path::new(&pw_file);
-        drop(pw_file.to_string());
-        let tmp=std::fs::read_to_string(p).unwrap();
+        let tmp = std::fs::read_to_string(p)
+            .with_context(|| format!("could not read password file: {}", pw_file))?;
         Secret::new(tmp)
     } else {
-        get_password(&direction)
+        get_password(&direction)?
     };
-    let ui = Box::new(ProgressUpdater {
-        mode: direction.clone(),
-    });
+
+    let ui = Box::new(ProgressUpdater::new(direction.clone()));
 
     let config = Config::new(
         direction.clone(),
@@ -107,39 +119,37 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
         output_path.clone(),
         ui,
         app.hash(),
-        app.bench());
+        app.bench(),
+    );
 
     match main_routine(&config) {
-        Ok(duration) =>{ Ok((output_path, direction, duration))},
-        Err(e) => {
-            return Err(anyhow!(e))
-        }
+        Ok(duration) => Ok((output_path, direction, duration)),
+        Err(e) => Err(anyhow!(e)),
     }
 }
 
-fn get_password(mode: &Direction) -> Secret<String> {
+fn get_password(mode: &Direction) -> Result<Secret<String>> {
     match mode {
         Direction::Encrypt => {
             let password = rpassword::prompt_password(
                 "Password (minimum 8 characters, longer is better): ",
             )
-            .expect("could not get password from user");
+            .context("could not get password from user")?;
             if password.len() < 8 {
-                println!("Error: password must be at least 8 characters. Exiting.");
-                exit(12);
+                return Err(anyhow!("password must be at least 8 characters"));
             }
             let verified_password = rpassword::prompt_password("Confirm password: ")
-                .expect("could not get password from user");
+                .context("could not get password from user")?;
             if password != verified_password {
-                println!("Error: passwords do not match. Exiting.");
-                exit(1);
+                return Err(anyhow!("passwords do not match"));
             }
-            Secret::new(password)
+            Ok(Secret::new(password))
         }
         Direction::Decrypt => {
-            let password= rpassword::prompt_password("Password: ").expect("could not get password from user");
-            Secret::new(password)
-        },
+            let password = rpassword::prompt_password("Password: ")
+                .context("could not get password from user")?;
+            Ok(Secret::new(password))
+        }
     }
 }
 
@@ -149,19 +159,15 @@ fn generate_output_path(
     output: Option<&str>,
 ) -> Result<PathBuf, String> {
     if let Some(..) = output {
-        // if output flag was specified,
         let p = PathBuf::from(output.unwrap());
         if p.exists() && p.is_dir() {
-            // and it's a directory,
-            generate_default_filename(mode, p, input) // give it a default filename.
+            generate_default_filename(mode, p, input)
         } else if p.exists() && p.is_file() {
             Err(format!("Error: file {:?} already exists. Must choose new filename or specify directory to generate default filename.", p))
         } else {
-            // otherwise use it as the output filename.
             Ok(p)
         }
     } else {
-        // if output not specified, generate default filename and put in the current working directory
         let cwd = env::current_dir().map_err(|e| e.to_string())?;
         generate_default_filename(mode, cwd, input)
     }
@@ -169,10 +175,10 @@ fn generate_output_path(
 
 fn generate_default_filename(
     mode: &Direction,
-    _path: PathBuf,
+    path: PathBuf,
     name: Option<&str>,
 ) -> Result<PathBuf, String> {
-    let mut path = _path;
+    let mut path = path;
     let f = match mode {
         Direction::Encrypt => {
             let mut with_ext = if let Some(n) = name {
@@ -197,9 +203,9 @@ fn generate_default_filename(
     find_filename(path).ok_or_else(|| "could not generate filename".to_string())
 }
 
-fn find_filename(_path: PathBuf) -> Option<PathBuf> {
+fn find_filename(path: PathBuf) -> Option<PathBuf> {
     let mut i = 1;
-    let mut path = _path;
+    let mut path = path;
     let backup_path = path.clone();
     while path.exists() {
         path = backup_path.clone();

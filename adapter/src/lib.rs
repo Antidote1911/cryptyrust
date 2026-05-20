@@ -1,5 +1,3 @@
-mod secret;
-
 use std::ffi::{CStr, CString};
 use std::os::raw::c_char;
 use std::ptr::null_mut;
@@ -92,8 +90,8 @@ pub unsafe extern "C" fn start(ptr: *mut Config) -> *mut c_char {
 /// This function should not be called before the horsemen are ready.
 #[no_mangle]
 pub unsafe extern "C" fn destroyConfig(ptr: *mut Config) {
-    if ptr.is_null() {
-        drop(Box::from_raw(&mut *ptr));
+    if !ptr.is_null() {
+        drop(Box::from_raw(ptr));
     }
 }
 
