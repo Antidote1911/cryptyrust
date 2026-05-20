@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 eframe = "0.34.2"
 egui = "0.34.2"
+egui_extras = { version = "0.34.2", features = ["table"] }
 rfd = "0.17.2"
 cryptyrust_core = { path = "../core" }
 rayon = "1.12.0"
