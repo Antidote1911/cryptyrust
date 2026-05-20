@@ -1,18 +1,18 @@
 use eframe::egui;
 
 use crate::app::CryptyApp;
-use crate::file_utils::{algo_label, get_file_size, is_cryptyrust_file, Mode};
+use crate::file_utils::{algo_label, is_cryptyrust_file, Mode};
 use crate::job::JobState;
 use crate::ui::components;
 
 pub fn render_menu_bar(
     app: &mut CryptyApp,
-    ctx: &egui::Context,
+    ui: &mut egui::Ui,
     is_running: bool,
     popup_open: bool,
 ) {
-    egui::TopBottomPanel::top("menubar").show(ctx, |ui| {
-        egui::menu::bar(ui, |ui| {
+    egui::Panel::top("menubar").show_inside(ui, |ui| {
+        egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui
                     .add_enabled(
@@ -21,7 +21,7 @@ pub fn render_menu_bar(
                     )
                     .clicked()
                 {
-                    ui.close_menu();
+                    ui.close();
                     if let Some(paths) = rfd::FileDialog::new().pick_files() {
                         app.add_files(paths);
                     }
@@ -34,12 +34,12 @@ pub fn render_menu_bar(
                     )
                     .clicked()
                 {
-                    ui.close_menu();
+                    ui.close();
                     app.clear_all();
                 }
                 ui.separator();
                 if ui.button("Quit").clicked() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
 
@@ -47,7 +47,7 @@ pub fn render_menu_bar(
 
             ui.menu_button("About", |ui| {
                 if ui.button("About Cryptyrust…").clicked() {
-                    ui.close_menu();
+                    ui.close();
                     app.show_about = true;
                 }
             });
@@ -55,10 +55,10 @@ pub fn render_menu_bar(
     });
 }
 
-pub fn render_bottom_bar(app: &CryptyApp, ctx: &egui::Context) {
-    egui::TopBottomPanel::bottom("bottombar")
-        .exact_height(30.0)
-        .show(ctx, |ui| {
+pub fn render_bottom_bar(app: &CryptyApp, ui: &mut egui::Ui) {
+    egui::Panel::bottom("bottombar")
+        .exact_size(30.0)
+        .show_inside(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.label(
                     egui::RichText::new("🔒")
@@ -87,7 +87,7 @@ pub fn render_bottom_bar(app: &CryptyApp, ctx: &egui::Context) {
 
 pub fn render_action_bar(
     app: &mut CryptyApp,
-    ctx: &egui::Context,
+    ui: &mut egui::Ui,
     is_running: bool,
     popup_open: bool,
 ) {
@@ -97,9 +97,9 @@ pub fn render_action_bar(
     let mut do_clear = false;
     let mut do_add = false;
 
-    egui::TopBottomPanel::bottom("actionbar")
-        .exact_height(52.0)
-        .show(ctx, |ui| {
+    egui::Panel::bottom("actionbar")
+        .exact_size(52.0)
+        .show_inside(ui, |ui| {
             ui.add_space(8.0);
             ui.horizontal_centered(|ui| {
                 let (btn_label, btn_color) = if app.mixed {
@@ -160,10 +160,10 @@ pub fn render_action_bar(
     }
 }
 
-pub fn render_central_panel(app: &mut CryptyApp, ctx: &egui::Context) {
-    egui::CentralPanel::default().show(ctx, |ui| {
+pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
+    egui::CentralPanel::default().show_inside(ui, |ui| {
         let avail = ui.available_rect_before_wrap();
-        let hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
+        let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
 
         match &app.job {
             JobState::Running {
@@ -314,7 +314,7 @@ fn render_file_list(
         egui::vec2(avail.width(), avail.height() - top_offset - 30.0),
     );
 
-    ui.allocate_ui_at_rect(list_rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(list_rect), |ui| {
         let file_data: Vec<(std::path::PathBuf, bool)> = app
             .files
             .iter()

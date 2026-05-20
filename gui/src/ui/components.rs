@@ -2,7 +2,7 @@ use eframe::egui;
 use std::path::Path;
 
 use crate::app::CryptyApp;
-use crate::file_utils::{get_file_size, Mode};
+use crate::file_utils::{get_file_size, read_encryption_info, algo_label, derive_label, Mode};
 use cryptyrust_core::{Algorithm, DeriveStrength};
 
 pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool) {
@@ -114,7 +114,7 @@ pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
 
 pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
     // Créer un overlay semi-transparent pour bloquer l'arrière-plan
-    let screen_rect = ctx.screen_rect();
+    let screen_rect = ctx.viewport_rect();
     let overlay_id = egui::Id::new("about_overlay");
 
     egui::Area::new(overlay_id)
@@ -122,7 +122,7 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             // Overlay semi-transparent qui couvre tout l'écran
             let overlay_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), screen_rect.size());
-            ui.allocate_ui_at_rect(overlay_rect, |ui| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(overlay_rect), |ui| {
                 let (rect, response) = ui.allocate_exact_size(overlay_rect.size(), egui::Sense::click());
 
                 // Fond semi-transparent
@@ -256,7 +256,7 @@ pub fn render_file_list_header(ui: &mut egui::Ui, avail: egui::Rect, show_progre
     ui.painter()
         .rect_filled(header_rect, 0.0, egui::Color32::from_rgb(30, 30, 40));
 
-    ui.allocate_ui_at_rect(header_rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(header_rect), |ui| {
         ui.horizontal_centered(|ui| {
             ui.add_space(8.0);
             ui.label(
@@ -306,7 +306,7 @@ pub fn render_completed_file_list_header(ui: &mut egui::Ui, avail: egui::Rect) {
     ui.painter()
         .rect_filled(header_rect, 0.0, egui::Color32::from_rgb(30, 30, 40));
 
-    ui.allocate_ui_at_rect(header_rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(header_rect), |ui| {
         ui.horizontal_centered(|ui| {
             ui.add_space(8.0);
             ui.label(
@@ -379,7 +379,7 @@ pub fn render_file_row(
         );
     }
 
-    ui.allocate_ui_at_rect(row_rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
         ui.horizontal_centered(|ui| {
             ui.add_space(8.0);
 
@@ -481,6 +481,30 @@ pub fn render_file_row(
                         .color(egui::Color32::from_gray(140)),
                 );
 
+                // Encryption info (algo + derive strength) for encrypted files
+                if is_encrypted {
+                    if let Some((algo, derive)) = read_encryption_info(path) {
+                        ui.add_space(12.0);
+                        ui.label(
+                            egui::RichText::new(derive_label(derive))
+                                .small()
+                                .color(egui::Color32::from_rgb(140, 180, 120)),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new("·")
+                                .small()
+                                .color(egui::Color32::from_gray(80)),
+                        );
+                        ui.add_space(4.0);
+                        ui.label(
+                            egui::RichText::new(algo_label(algo))
+                                .small()
+                                .color(egui::Color32::from_rgb(100, 160, 220)),
+                        );
+                    }
+                }
+
                 ui.add_space(12.0);
 
                 // File path
@@ -520,7 +544,7 @@ pub fn render_completed_file_row(
 
     ui.painter().rect_filled(row_rect, 0.0, row_bg);
 
-    ui.allocate_ui_at_rect(row_rect, |ui| {
+    ui.scope_builder(egui::UiBuilder::new().max_rect(row_rect), |ui| {
         ui.horizontal_centered(|ui| {
             ui.add_space(8.0);
 
@@ -528,7 +552,7 @@ pub fn render_completed_file_row(
             let (status_icon, status_color) = match status {
                 crate::job::FileStatus::Success => ("✅", egui::Color32::from_rgb(60, 160, 100)),
                 crate::job::FileStatus::Failed(_) => ("❌", egui::Color32::from_rgb(200, 80, 80)),
-                crate::job::FileStatus::Processing(_) => ("⏳", egui::Color32::from_rgb(200, 160, 80)),
+                crate::job::FileStatus::Processing => ("⏳", egui::Color32::from_rgb(200, 160, 80)),
                 crate::job::FileStatus::Pending => ("⏸", egui::Color32::from_gray(120)),
             };
 

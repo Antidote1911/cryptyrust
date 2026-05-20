@@ -15,7 +15,7 @@ use crate::file_utils::Mode;
 #[derive(Clone, Debug)]
 pub enum FileStatus {
     Pending,
-    Processing(i32), // pourcentage
+    Processing,
     Success,
     Failed(String),  // message d'erreur
 }
@@ -64,7 +64,6 @@ impl JobState {
         let (tx, rx) = mpsc::channel::<(usize, i32)>();
         let progress = Arc::new(Mutex::new(HashMap::new()));
         let current_file = Arc::new(Mutex::new(0));
-        let progress_clone = progress.clone();
         let current_file_clone = current_file.clone();
 
         *self = JobState::Running {
@@ -86,7 +85,7 @@ impl JobState {
                 .enumerate()
                 .map(|(i, path)| {
                     // Marquer comme en cours de traitement
-                    file_statuses.lock().unwrap()[i] = FileStatus::Processing(0);
+                    file_statuses.lock().unwrap()[i] = FileStatus::Processing;
 
                     let in_file = path.to_string_lossy().to_string();
                     let out_file = match mode {

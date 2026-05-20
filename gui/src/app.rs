@@ -172,12 +172,9 @@ impl eframe::App for CryptyApp {
             self.job = JobState::Completed { files, statuses };
         }
 
-        // Render UI
-        UI::render(self, ctx);
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        // Cette méthode est maintenant requise dans eframe 0.34
-        // On peut la laisser vide car nous utilisons update() pour notre logique
+        UI::render(self, ui);
     }
 }

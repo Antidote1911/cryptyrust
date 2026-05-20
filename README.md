@@ -21,7 +21,6 @@ Latest Windows x64 release is available [here](https://github.com/Antidote1911/c
 - [Build Instructions](#build-instructions)
   - [Linux](#linux)
   - [Windows](#windows)
-  - [Qt GUI (C++)](#qt-gui-c)
 - [Data Loss Disclaimer](#data-loss-disclaimer)
 
 ---
@@ -39,20 +38,18 @@ Latest Windows x64 release is available [here](https://github.com/Antidote1911/c
 
 ## Project Structure
 
-| Crate / Folder | Description |
+| Crate | Description |
 |---|---|
-| `core` | Rust encryption/decryption library |
+| `core` | Rust encryption/decryption library (`cryptyrust_core`) |
 | `cli` | Command-line interface (`cryptyrust_cli`) |
-| `eguigui` | Native GUI built with [egui](https://github.com/emilk/egui) |
-| `adapter` | FFI adapter for the C++ Qt GUI |
-| `qtgui` | C++ drag-and-drop GUI built with Qt5/Qt6 |
+| `gui` | Native GUI built with [egui](https://github.com/emilk/egui) |
 
 ---
 
 ## CLI Usage
 
 ```bash
-# Encrypt a file (default algorithm: XChaCha20Poly1305)
+# Encrypt a file (default algorithm: AES-256-GCM)
 ./cryptyrust_cli -e test.mp4 -p 12345678
 
 # Decrypt a file (algorithm is auto-detected)
@@ -63,7 +60,7 @@ Latest Windows x64 release is available [here](https://github.com/Antidote1911/c
 ./cryptyrust_cli -d test.mp4.crypty -p 12345678 --hash
 
 # Choose an encryption algorithm with -a
-./cryptyrust_cli -e test.mp4 -a aesgcm    -p 12345678   # AES-256-GCM
+./cryptyrust_cli -e test.mp4 -a aesgcm    -p 12345678   # AES-256-GCM (default)
 ./cryptyrust_cli -e test.mp4 -a aesgcmsiv -p 12345678   # AES-256-GCM-SIV
 ./cryptyrust_cli -e test.mp4 -a chacha    -p 12345678   # XChaCha20Poly1305
 
@@ -72,9 +69,15 @@ Latest Windows x64 release is available [here](https://github.com/Antidote1911/c
 ./cryptyrust_cli -e test.mp4 -p 12345678 -s moderate     # balanced
 ./cryptyrust_cli -e test.mp4 -p 12345678 -s sensitive    # slow, maximum security
 
+# Read the password from a file (UTF-8, no trailing newline)
+./cryptyrust_cli -e test.mp4 -f /path/to/passfile
+
 # Specify an output file name with -o
 ./cryptyrust_cli -e test.mp4 -o myEncryptedFile -p 12345678
 ./cryptyrust_cli -d myEncryptedFile -o myDecryptedFile -p 12345678
+
+# Run an in-memory benchmark (no file written)
+./cryptyrust_cli -e test.mp4 -p 12345678 --bench
 ```
 
 If no output file is specified with `-o`, Cryptyrust generates an incremental unique filename with a `.crypty` extension.
@@ -143,7 +146,8 @@ See [FORMAT.md](FORMAT.md) for the detailed binary format with examples.
 
 ```bash
 cargo build --release
-# Binary: target/release/cryptyrust_cli
+# CLI:  target/release/cryptyrust_cli
+# GUI:  target/release/cryptyrust
 ```
 
 ### Windows
@@ -157,31 +161,7 @@ cargo build --release
    ```bat
    cargo build --release
    ```
-
-### Qt GUI (C++)
-
-The Qt GUI requires Qt5 or Qt6 and the Rust core/adapter built first:
-
-```bash
-cargo build --release
-```
-
-**Linux (qmake):**
-```bash
-cd qtgui
-qmake cryptyrust.pro
-make
-```
-
-**Windows (CMake + MSVC):**
-```bat
-cd qtgui
-mkdir build && cd build
-cmake -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=Release ..
-nmake
-```
-
-Alternatively, open `qtgui/CMakeLists.txt` or `qtgui/cryptyrust.pro` directly in Qt Creator.
+   Binaries: `target\release\cryptyrust_cli.exe` and `target\release\cryptyrust.exe`.
 
 ---
 

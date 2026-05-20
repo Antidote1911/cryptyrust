@@ -2,14 +2,12 @@ use crate::constants::*;
 use argon2::{Algorithm, Argon2, Params, Version};
 use crate::errors::*;
 use crate::secret::*;
-use rand::prelude::StdRng;
-use rand::Rng;
-use rand::SeedableRng;
+use rand::random;
 use crate::DeriveStrength;
 use crate::header::HeaderVersion;
 
 pub fn gen_salt() -> [u8; SALTLEN] {
-    StdRng::from_os_rng().random::<[u8; SALTLEN]>()
+    random::<[u8; SALTLEN]>()
 }
 
 pub fn argon2_hash(

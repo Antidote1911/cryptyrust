@@ -4,7 +4,7 @@ use crate::errors::*;
 use crate::{Algorithm, BenchMode, DecryptStreamCiphers, DeriveStrength, EncryptStreamCiphers, HashMode, Ui};
 use crate::header::{create_aad, Header, HeaderType};
 use crate::secret::*;
-use rand::{Rng, SeedableRng};
+use rand::random;
 use aes_gcm::Aes256Gcm;
 use chacha20poly1305::XChaCha20Poly1305;
 use aead::{Payload, KeyInit};
@@ -12,7 +12,6 @@ use std::io::{Read, Write};
 use std::fs::File;
 use aead::stream::{DecryptorLE31, EncryptorLE31};
 use aes_gcm_siv::Aes256GcmSiv;
-use rand::prelude::StdRng;
 
 
 pub fn init_encryption_stream(
@@ -24,7 +23,7 @@ pub fn init_encryption_stream(
 
     match header_type.algorithm {
         Algorithm::Aes256Gcm => {
-            let nonce_bytes = StdRng::from_os_rng().random::<[u8; 8]>();
+            let nonce_bytes = random::<[u8; 8]>();
             let cipher = Aes256Gcm::new_from_slice(key.expose())
                 .map_err(|_| CoreErr::CreateCipher)?;
             let header = Header { header_type, nonce: nonce_bytes.to_vec(), salt };
@@ -32,7 +31,7 @@ pub fn init_encryption_stream(
             Ok((EncryptStreamCiphers::Aes256Gcm(Box::new(stream)), header))
         }
         Algorithm::XChaCha20Poly1305 => {
-            let nonce_bytes = StdRng::from_os_rng().random::<[u8; 20]>();
+            let nonce_bytes = random::<[u8; 20]>();
             let cipher = XChaCha20Poly1305::new_from_slice(key.expose())
                 .map_err(|_| CoreErr::CreateCipher)?;
             let header = Header { header_type, nonce: nonce_bytes.to_vec(), salt };
@@ -40,7 +39,7 @@ pub fn init_encryption_stream(
             Ok((EncryptStreamCiphers::XChaCha20Poly1305(Box::new(stream)), header))
         }
         Algorithm::Aes256GcmSiv => {
-            let nonce_bytes = StdRng::from_os_rng().random::<[u8; 8]>();
+            let nonce_bytes = random::<[u8; 8]>();
             let cipher = Aes256GcmSiv::new_from_slice(key.expose())
                 .map_err(|_| CoreErr::CreateCipher)?;
             let header = Header { header_type, nonce: nonce_bytes.to_vec(), salt };

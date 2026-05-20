@@ -5,8 +5,7 @@ resolver = "2"
 members = [
 	"core",
 	"cli",
-	"adapter",
-	"eguigui"
+	"gui"
 ]
 
 [profile.release]
