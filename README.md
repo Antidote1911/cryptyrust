@@ -5,7 +5,7 @@
 
 **Simple cross-platform file encryption with a drag-and-drop GUI and a CLI.**
 
-Latest Windows x64 release is available [here](https://github.com/Antidote1911/cryptyrust/releases/latest).
+Pre-built binaries for Linux, macOS (universal), and Windows are available on the [releases page](https://github.com/Antidote1911/cryptyrust/releases/latest).
 
 ![Demo](demo.gif)
 
@@ -20,6 +20,7 @@ Latest Windows x64 release is available [here](https://github.com/Antidote1911/c
 - [Technical Description](#technical-description)
 - [Build Instructions](#build-instructions)
   - [Linux](#linux)
+  - [macOS](#macos)
   - [Windows](#windows)
 - [Data Loss Disclaimer](#data-loss-disclaimer)
 
@@ -148,6 +149,30 @@ See [FORMAT.md](FORMAT.md) for the detailed binary format with examples.
 cargo build --release
 # CLI:  target/release/cryptyrust_cli
 # GUI:  target/release/cryptyrust
+```
+
+### macOS
+
+```bash
+cargo build --release
+# CLI:  target/release/cryptyrust_cli
+# GUI:  target/release/cryptyrust
+```
+
+To build a universal binary (Intel + Apple Silicon):
+
+```bash
+rustup target add x86_64-apple-darwin aarch64-apple-darwin
+cargo build --release --target x86_64-apple-darwin
+cargo build --release --target aarch64-apple-darwin
+lipo -create \
+  target/x86_64-apple-darwin/release/cryptyrust_cli \
+  target/aarch64-apple-darwin/release/cryptyrust_cli \
+  -output cryptyrust_cli
+lipo -create \
+  target/x86_64-apple-darwin/release/cryptyrust \
+  target/aarch64-apple-darwin/release/cryptyrust \
+  -output cryptyrust
 ```
 
 ### Windows
