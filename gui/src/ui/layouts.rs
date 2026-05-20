@@ -1,7 +1,7 @@
 use eframe::egui;
 
 use crate::app::CryptyApp;
-use crate::file_utils::{algo_label, is_cryptyrust_file, Mode};
+use crate::file_utils::{algo_label, Mode};
 use crate::job::JobState;
 use crate::ui::components;
 
@@ -201,23 +201,7 @@ fn render_processing_view(
     ui.painter()
         .rect_filled(avail, 0.0, egui::Color32::from_rgb(18, 18, 24));
 
-    components::render_file_list_header(ui, avail, true);
-
-    egui::ScrollArea::vertical()
-        .id_salt("running_file_list")
-        .show(ui, |ui| {
-            ui.set_min_width(avail.width());
-
-            for (i, path) in processing_files.iter().enumerate() {
-                let is_enc = is_cryptyrust_file(path);
-                let is_current = i == current_idx;
-                let file_pct = file_progress.get(&i).copied().unwrap_or(0);
-
-                components::render_file_row(
-                    ui, i, path, is_enc, true, is_current, Some(file_pct),
-                );
-            }
-        });
+    components::render_processing_table(ui, processing_files, &file_progress, current_idx);
 }
 
 fn render_completed_view(
@@ -229,18 +213,7 @@ fn render_completed_view(
     ui.painter()
         .rect_filled(avail, 0.0, egui::Color32::from_rgb(18, 18, 24));
 
-    components::render_completed_file_list_header(ui, avail);
-
-    egui::ScrollArea::vertical()
-        .id_salt("completed_file_list")
-        .show(ui, |ui| {
-            ui.set_min_width(avail.width());
-
-            for (i, (path, status)) in files.iter().zip(statuses.iter()).enumerate() {
-                let is_enc = is_cryptyrust_file(path);
-                components::render_completed_file_row(ui, i, path, is_enc, status);
-            }
-        });
+    components::render_completed_table(ui, files, statuses);
 }
 
 fn render_drop_zone(
@@ -298,47 +271,16 @@ fn render_file_list(
     hovering: bool,
     app: &mut CryptyApp,
 ) {
-    let top_offset = if app.mixed { 36.0 } else { 0.0 };
-
     ui.painter()
         .rect_filled(avail, 0.0, egui::Color32::from_rgb(18, 18, 24));
 
     if app.mixed {
-        components::render_warning_banner(ui, avail);
+        components::render_warning_banner(ui);
     }
 
-    components::render_file_list_header(ui, avail.translate(egui::vec2(0.0, top_offset)), false);
-
-    let list_rect = egui::Rect::from_min_size(
-        avail.min + egui::vec2(0.0, top_offset + 30.0),
-        egui::vec2(avail.width(), avail.height() - top_offset - 30.0),
-    );
-
-    ui.scope_builder(egui::UiBuilder::new().max_rect(list_rect), |ui| {
-        let file_data: Vec<(std::path::PathBuf, bool)> = app
-            .files
-            .iter()
-            .map(|p| (p.clone(), is_cryptyrust_file(p)))
-            .collect();
-
-        let mut to_remove: Option<usize> = None;
-
-        egui::ScrollArea::vertical()
-            .id_salt("file_list")
-            .show(ui, |ui| {
-                ui.set_min_width(list_rect.width());
-
-                for (i, (path, is_enc)) in file_data.iter().enumerate() {
-                    if components::render_file_row(ui, i, path, *is_enc, false, false, None) {
-                        to_remove = Some(i);
-                    }
-                }
-            });
-
-        if let Some(idx) = to_remove {
-            app.remove_file(idx);
-        }
-    });
+    if let Some(idx) = components::render_file_table(ui, &app.files) {
+        app.remove_file(idx);
+    }
 
     if hovering {
         ui.painter().rect_stroke(
