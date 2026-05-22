@@ -4,6 +4,7 @@ mod crypto;
 mod errors;
 mod header;
 mod keygen;
+pub mod pem;
 mod secret;
 
 pub use crate::config::*;

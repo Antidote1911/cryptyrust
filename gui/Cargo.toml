@@ -9,5 +9,4 @@ egui = "0.34.2"
 egui_extras = "0.34.2"
 rfd = "0.17.2"
 cryptyrust_core = { path = "../core" }
-base64ct = { version = "1", features = ["alloc"] }
 rayon = "1.12.0"

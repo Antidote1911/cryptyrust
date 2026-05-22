@@ -5,6 +5,7 @@ authors.workspace = true
 edition = "2021"
 
 [dependencies]
+base64ct = { version = "1", features = ["alloc"] }
 argon2 = "0.5.3"
 aead = { version = "0.5.2", features = ["std", "stream"] }
 aes-gcm = "0.10.3"

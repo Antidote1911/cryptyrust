@@ -1,7 +1,10 @@
+use cryptyrust_core::pem::{is_pem_cryptyrust_file, PemReader, PemWriter};
 use cryptyrust_core::*;
 mod cli;
 use clap::Parser;
 use cli::Cli;
+use std::fs::File;
+use std::time::Instant;
 use std::{
     env,
     path::{Path, PathBuf},
@@ -12,6 +15,7 @@ use indicatif::{ProgressBar, ProgressStyle};
 use std::result::Result::Ok;
 
 const FILE_EXTENSION: &str = ".crypty";
+const PEM_EXTENSION: &str = ".crypty.pem";
 
 struct ProgressUpdater {
     mode: Direction,
@@ -87,8 +91,16 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
         None
     };
 
+    // --pem triggers PEM output on encrypt; on decrypt it is always auto-detected
+    let is_pem = match &direction {
+        Direction::Encrypt => app.pem(),
+        Direction::Decrypt => filename
+            .map(|f| is_pem_cryptyrust_file(Path::new(f)))
+            .unwrap_or(false),
+    };
+
     let output_path = {
-        let s = generate_output_path(&direction, filename, app.output())
+        let s = generate_output_path(&direction, filename, app.output(), is_pem)
             .unwrap()
             .to_str()
             .ok_or("could not convert output path to string")
@@ -109,24 +121,83 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
         get_password(&direction)?
     };
 
-    let ui = Box::new(ProgressUpdater::new(direction.clone()));
+    let out_str = output_path.as_deref().unwrap();
 
-    let config = Config::new(
-        direction.clone(),
-        app.algo(),
-        app.strength(),
-        password,
-        filename.map(|f| f.to_string()),
-        output_path.clone(),
-        ui,
-        app.hash(),
-        app.bench(),
-    );
+    let duration = if is_pem {
+        let in_path = filename.unwrap();
+        let ui = ProgressUpdater::new(direction.clone());
+        let start = Instant::now();
 
-    match main_routine(&config) {
-        Ok(duration) => Ok((output_path, direction, duration)),
-        Err(e) => Err(anyhow!(e)),
-    }
+        let result: Result<()> = (|| -> Result<()> {
+            let out_file = File::create(out_str)
+                .with_context(|| format!("could not create {}", out_str))?;
+            let mut in_file = File::open(in_path)
+                .with_context(|| format!("could not open {}", in_path))?;
+            let filesize = in_file.metadata()?.len();
+
+            match &direction {
+                Direction::Encrypt => {
+                    let mut writer = PemWriter::new(out_file, env!("CARGO_PKG_VERSION"))
+                        .context("could not initialize PEM writer")?;
+                    encrypt(
+                        &mut in_file,
+                        &mut writer,
+                        &password,
+                        &ui,
+                        filesize,
+                        app.algo(),
+                        app.strength(),
+                        app.hash(),
+                        app.bench(),
+                    )
+                    .map_err(|e| anyhow!(e))?;
+                    let _ = writer.finish().context("could not finalize PEM output")?;
+                    Ok(())
+                }
+                Direction::Decrypt => {
+                    let approx_size = (filesize * 3) / 4;
+                    let mut reader = PemReader::new(Path::new(in_path))
+                        .context("could not open PEM reader")?;
+                    let mut out = out_file;
+                    decrypt(
+                        &mut reader,
+                        &mut out,
+                        &password,
+                        &ui,
+                        approx_size,
+                        app.hash(),
+                        app.bench(),
+                    )
+                    .map_err(|e| anyhow!(e))
+                }
+            }
+        })();
+
+        if let Err(e) = result {
+            let _ = std::fs::remove_file(out_str);
+            return Err(e);
+        }
+        start.elapsed().as_secs_f64()
+    } else {
+        let ui = Box::new(ProgressUpdater::new(direction.clone()));
+        let config = Config::new(
+            direction.clone(),
+            app.algo(),
+            app.strength(),
+            password,
+            filename.map(|f| f.to_string()),
+            output_path.clone(),
+            ui,
+            app.hash(),
+            app.bench(),
+        );
+        match main_routine(&config) {
+            Ok(d) => d,
+            Err(e) => return Err(anyhow!(e)),
+        }
+    };
+
+    Ok((output_path, direction, duration))
 }
 
 fn get_password(mode: &Direction) -> Result<Secret<String>> {
@@ -157,11 +228,12 @@ fn generate_output_path(
     mode: &Direction,
     input: Option<&str>,
     output: Option<&str>,
+    is_pem: bool,
 ) -> Result<PathBuf, String> {
     if let Some(output) = output {
         let p = PathBuf::from(output);
         if p.exists() && p.is_dir() {
-            generate_default_filename(mode, p, input)
+            generate_default_filename(mode, p, input, is_pem)
         } else if p.exists() && p.is_file() {
             Err(format!("Error: file {:?} already exists. Must choose new filename or specify directory to generate default filename.", p))
         } else {
@@ -169,7 +241,7 @@ fn generate_output_path(
         }
     } else {
         let cwd = env::current_dir().map_err(|e| e.to_string())?;
-        generate_default_filename(mode, cwd, input)
+        generate_default_filename(mode, cwd, input, is_pem)
     }
 }
 
@@ -177,21 +249,22 @@ fn generate_default_filename(
     mode: &Direction,
     path: PathBuf,
     name: Option<&str>,
+    is_pem: bool,
 ) -> Result<PathBuf, String> {
     let mut path = path;
     let f = match mode {
         Direction::Encrypt => {
-            let mut with_ext = if let Some(n) = name {
-                n.to_string()
-            } else {
-                "encrypted".to_string()
-            };
-            with_ext.push_str(FILE_EXTENSION);
-            with_ext
+            let base = name.unwrap_or("encrypted").to_string();
+            let ext = if is_pem { PEM_EXTENSION } else { FILE_EXTENSION };
+            format!("{}{}", base, ext)
         }
         Direction::Decrypt => {
             let name = name.unwrap_or("stdin");
-            if name.ends_with(FILE_EXTENSION) {
+            if name.ends_with(PEM_EXTENSION) {
+                name.strip_suffix(PEM_EXTENSION).unwrap().to_string()
+            } else if name.ends_with(".pem") {
+                name.strip_suffix(".pem").unwrap().to_string()
+            } else if name.ends_with(FILE_EXTENSION) {
                 name.strip_suffix(FILE_EXTENSION).unwrap().to_string()
             } else {
                 prepend("decrypted_".to_string(), name)

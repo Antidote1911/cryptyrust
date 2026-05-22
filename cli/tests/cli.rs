@@ -68,6 +68,49 @@ fn roundtrip_aesgcmsiv() {
     check_roundtrip("aesgcmsiv");
 }
 
+fn encrypt_file_pem(input: &str, output: &std::path::Path, password: &str, algo: &str) {
+    Command::cargo_bin("cryptyrust_cli")
+        .unwrap()
+        .args(["-e", input, "-p", password, "-s", "interactive", "-a", algo, "--pem", "-o"])
+        .arg(output)
+        .assert()
+        .success();
+}
+
+fn check_roundtrip_pem(algo: &str) {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let encrypted = temp.child("out.crypty.pem");
+    let decrypted = temp.child("out.txt");
+
+    encrypt_file_pem(ORIGINAL, encrypted.path(), "testpassword", algo);
+    decrypt_file(encrypted.path(), decrypted.path(), "testpassword");
+
+    let original_bytes = std::fs::read(ORIGINAL).unwrap();
+    let decrypted_bytes = std::fs::read(decrypted.path()).unwrap();
+    assert_eq!(
+        original_bytes, decrypted_bytes,
+        "PEM round-trip mismatch for algo={}",
+        algo
+    );
+
+    temp.close().unwrap();
+}
+
+#[test]
+fn roundtrip_pem_xchacha20() {
+    check_roundtrip_pem("chacha");
+}
+
+#[test]
+fn roundtrip_pem_aesgcm() {
+    check_roundtrip_pem("aesgcm");
+}
+
+#[test]
+fn roundtrip_pem_aesgcmsiv() {
+    check_roundtrip_pem("aesgcmsiv");
+}
+
 #[test]
 fn wrong_password_fails() {
     let temp = assert_fs::TempDir::new().unwrap();

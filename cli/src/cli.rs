@@ -57,6 +57,10 @@ pub struct Cli {
     /// Optional, bench mode
     #[clap(long)]
     bench: bool,
+
+    /// Encrypt to PEM (base64 text) format with .crypty.pem extension. Ignored during decryption (auto-detected).
+    #[clap(long)]
+    pem: bool,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
@@ -118,5 +122,9 @@ impl Cli {
             true => BenchMode::BenchmarkInMemory,
             false => BenchMode::WriteToFilesystem,
         }
+    }
+
+    pub fn pem(&self) -> bool {
+        self.pem
     }
 }

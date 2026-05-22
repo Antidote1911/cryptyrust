@@ -33,7 +33,10 @@ Pre-built binaries for Linux, macOS (universal), and Windows are available on th
 - Streaming encryption — works on files of any size
 - Optional BLAKE3 hash of the output file
 - Automatic algorithm detection on decryption
+- Optional PEM (base64 text) output format — `.crypty.pem` — CLI and GUI
 - Cross-platform: Linux, Windows, macOS
+
+> **Compatibility notice:** v1.1.0 files are **not compatible** with v1.0.0. The header is now used as Additional Authenticated Data (AAD), which changes the ciphertext structure.
 
 ---
 
@@ -79,6 +82,12 @@ Pre-built binaries for Linux, macOS (universal), and Windows are available on th
 
 # Run an in-memory benchmark (no file written)
 ./cryptyrust_cli -e test.mp4 -p 12345678 --bench
+
+# Encrypt to PEM (base64 text) format — output: test.mp4.crypty.pem
+./cryptyrust_cli -e test.mp4 --pem -p 12345678
+
+# Decrypt a PEM file (auto-detected from file content)
+./cryptyrust_cli -d test.mp4.crypty.pem -p 12345678
 ```
 
 If no output file is specified with `-o`, Cryptyrust generates an incremental unique filename with a `.crypty` extension.
@@ -119,6 +128,10 @@ A random nonce is generated for each encryption:
 
 Nonces are 4 bytes shorter than the standard size for each algorithm because STREAM mode reserves the last 4 bytes for a little-endian counter, which is incremented after each encrypted chunk.
 
+### Additional Authenticated Data (AAD)
+
+The entire 64-byte header is passed as AAD to the AEAD stream cipher. Any modification to the header (magic number, algorithm, salt, nonce, or padding) causes decryption to fail with an authentication error. This is what makes v1.1.0 files incompatible with v1.0.0.
+
 ### File Format
 
 ```
@@ -134,6 +147,8 @@ Nonces are 4 bytes shorter than the standard size for each algorithm because STR
 ```
 
 See [FORMAT.md](FORMAT.md) for the detailed binary format with examples.
+
+Both the CLI (`--pem` flag) and the GUI support a PEM output variant (`.crypty.pem`): the same binary structure is base64-encoded and wrapped between `-----BEGIN CRYPTYRUST ENCRYPTED DATA-----` and `-----END CRYPTYRUST ENCRYPTED DATA-----` lines, making the encrypted file safe to copy-paste as plain text. PEM files are auto-detected on decryption — no flag needed.
 
 ---
 
