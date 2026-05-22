@@ -71,7 +71,18 @@ fn roundtrip_aesgcmsiv() {
 fn encrypt_file_pem(input: &str, output: &std::path::Path, password: &str, algo: &str) {
     Command::cargo_bin("cryptyrust_cli")
         .unwrap()
-        .args(["-e", input, "-p", password, "-s", "interactive", "-a", algo, "--pem", "-o"])
+        .args([
+            "-e",
+            input,
+            "-p",
+            password,
+            "-s",
+            "interactive",
+            "-a",
+            algo,
+            "--pem",
+            "-o",
+        ])
         .arg(output)
         .assert()
         .success();

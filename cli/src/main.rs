@@ -129,10 +129,10 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
         let start = Instant::now();
 
         let result: Result<()> = (|| -> Result<()> {
-            let out_file = File::create(out_str)
-                .with_context(|| format!("could not create {}", out_str))?;
-            let mut in_file = File::open(in_path)
-                .with_context(|| format!("could not open {}", in_path))?;
+            let out_file =
+                File::create(out_str).with_context(|| format!("could not create {}", out_str))?;
+            let mut in_file =
+                File::open(in_path).with_context(|| format!("could not open {}", in_path))?;
             let filesize = in_file.metadata()?.len();
 
             match &direction {
@@ -156,8 +156,8 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
                 }
                 Direction::Decrypt => {
                     let approx_size = (filesize * 3) / 4;
-                    let mut reader = PemReader::new(Path::new(in_path))
-                        .context("could not open PEM reader")?;
+                    let mut reader =
+                        PemReader::new(Path::new(in_path)).context("could not open PEM reader")?;
                     let mut out = out_file;
                     decrypt(
                         &mut reader,
@@ -255,7 +255,11 @@ fn generate_default_filename(
     let f = match mode {
         Direction::Encrypt => {
             let base = name.unwrap_or("encrypted").to_string();
-            let ext = if is_pem { PEM_EXTENSION } else { FILE_EXTENSION };
+            let ext = if is_pem {
+                PEM_EXTENSION
+            } else {
+                FILE_EXTENSION
+            };
             format!("{}{}", base, ext)
         }
         Direction::Decrypt => {
