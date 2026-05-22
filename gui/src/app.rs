@@ -1,9 +1,9 @@
+use cryptyrust_core::{Algorithm, DeriveStrength};
 use eframe::egui;
 use std::path::PathBuf;
-use cryptyrust_core::{Algorithm, DeriveStrength};
 
-use crate::job::{JobState, PasswordPopup, FileStatus};
 use crate::file_utils::{detect_mode, Mode};
+use crate::job::{FileStatus, JobState, PasswordPopup};
 use crate::ui::UI;
 
 pub struct CryptyApp {
@@ -21,6 +21,7 @@ pub struct CryptyApp {
     pub strength: DeriveStrength,
     pub show_about: bool,
     pub dark_mode: bool,
+    pub pem_output: bool,
 }
 
 impl CryptyApp {
@@ -29,6 +30,11 @@ impl CryptyApp {
             .and_then(|s| s.get_string("dark_mode"))
             .and_then(|s| s.parse().ok())
             .unwrap_or(system_dark);
+
+        let pem_output = storage
+            .and_then(|s| s.get_string("pem_output"))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(false);
 
         let algorithm = storage
             .and_then(|s| s.get_string("algorithm"))
@@ -65,6 +71,7 @@ impl CryptyApp {
             strength,
             show_about: false,
             dark_mode,
+            pem_output,
         }
     }
 }
@@ -139,6 +146,7 @@ impl CryptyApp {
             self.algorithm,
             self.strength,
             password,
+            self.pem_output,
             ctx,
         );
     }
@@ -147,16 +155,25 @@ impl CryptyApp {
 impl eframe::App for CryptyApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string("dark_mode", self.dark_mode.to_string());
-        storage.set_string("algorithm", match self.algorithm {
-            Algorithm::XChaCha20Poly1305 => "xchacha20",
-            Algorithm::Aes256Gcm => "aes256gcm",
-            Algorithm::Aes256GcmSiv => "aes256gcmsiv",
-        }.to_string());
-        storage.set_string("strength", match self.strength {
-            DeriveStrength::Interactive => "interactive",
-            DeriveStrength::Moderate => "moderate",
-            DeriveStrength::Sensitive => "sensitive",
-        }.to_string());
+        storage.set_string(
+            "algorithm",
+            match self.algorithm {
+                Algorithm::XChaCha20Poly1305 => "xchacha20",
+                Algorithm::Aes256Gcm => "aes256gcm",
+                Algorithm::Aes256GcmSiv => "aes256gcmsiv",
+            }
+            .to_string(),
+        );
+        storage.set_string("pem_output", self.pem_output.to_string());
+        storage.set_string(
+            "strength",
+            match self.strength {
+                DeriveStrength::Interactive => "interactive",
+                DeriveStrength::Moderate => "moderate",
+                DeriveStrength::Sensitive => "sensitive",
+            }
+            .to_string(),
+        );
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
@@ -167,7 +184,9 @@ impl eframe::App for CryptyApp {
         });
 
         // Handle drag & drop
-        if self.popup == PasswordPopup::Closed && matches!(self.job, JobState::Idle | JobState::Completed { .. }) {
+        if self.popup == PasswordPopup::Closed
+            && matches!(self.job, JobState::Idle | JobState::Completed { .. })
+        {
             let dropped: Vec<PathBuf> = ctx.input(|i| {
                 i.raw
                     .dropped_files
@@ -201,15 +220,15 @@ impl eframe::App for CryptyApp {
                 // Job terminé, créer les statuses finaux
                 let progress_map = progress.lock().unwrap();
                 let mut statuses = Vec::new();
-                
+
                 for (i, _file) in processing_files.iter().enumerate() {
-                    if progress_map.get(&i).map_or(false, |&p| p == 100) {
+                    if progress_map.get(&i).is_some_and(|&p| p == 100) {
                         statuses.push(FileStatus::Success);
                     } else {
                         statuses.push(FileStatus::Failed("Unknown error".to_string()));
                     }
                 }
-                
+
                 job_completed = Some((processing_files.clone(), statuses));
             }
         }
@@ -218,7 +237,6 @@ impl eframe::App for CryptyApp {
         if let Some((files, statuses)) = job_completed {
             self.job = JobState::Completed { files, statuses };
         }
-
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {

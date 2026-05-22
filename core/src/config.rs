@@ -1,3 +1,4 @@
+use crate::secret::Secret;
 use aead::{
     stream::{DecryptorLE31, EncryptorLE31},
     Payload,
@@ -5,7 +6,6 @@ use aead::{
 use aes_gcm::Aes256Gcm;
 use aes_gcm_siv::Aes256GcmSiv;
 use chacha20poly1305::XChaCha20Poly1305;
-use crate::secret::Secret;
 
 #[derive(PartialEq, Clone, Copy)]
 pub enum HashMode {
@@ -29,7 +29,7 @@ pub enum Direction {
 pub enum Algorithm {
     Aes256Gcm,
     XChaCha20Poly1305,
-    Aes256GcmSiv
+    Aes256GcmSiv,
 }
 
 #[derive(Copy, Clone, PartialEq, Debug)]
@@ -52,13 +52,13 @@ impl std::fmt::Display for Algorithm {
 pub struct Config {
     pub direction: Direction,
     pub algorithm: Algorithm,
-    pub derivestrength:DeriveStrength,
+    pub derivestrength: DeriveStrength,
     pub password: Secret<String>,
     pub filename: Option<String>,
     pub out_file: Option<String>,
     pub ui: Box<dyn Ui>,
-    pub hashmode:HashMode,
-    pub benchmode:BenchMode,
+    pub hashmode: HashMode,
+    pub benchmode: BenchMode,
 }
 
 pub enum EncryptStreamCiphers {
@@ -126,6 +126,7 @@ pub trait Ui {
 }
 
 impl Config {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         direction: Direction,
         algorithm: Algorithm,

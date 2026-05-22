@@ -1,7 +1,7 @@
 [package]
 name = "cryptyrust_core"
-version = "1.0.0"
-authors = ["Antidote1911 <antidote1911@gmail.com>"]
+version.workspace = true
+authors.workspace = true
 edition = "2021"
 
 [dependencies]

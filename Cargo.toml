@@ -8,6 +8,10 @@ members = [
 	"gui"
 ]
 
+[workspace.package]
+version = "1.1.0"
+authors = ["Antidote1911 <antidote1911@gmail.com>"]
+
 [profile.release]
 # opt-level = 'z'     # Optimize for size.
 # lto = true          # Enable Link Time Optimization

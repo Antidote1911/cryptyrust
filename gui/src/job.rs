@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::fs::{remove_file, File};
 use std::path::PathBuf;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -7,17 +8,19 @@ use std::thread;
 use rayon::prelude::*;
 
 use cryptyrust_core::{
-    main_routine, Algorithm, BenchMode, Config, Direction, DeriveStrength, HashMode, Secret, Ui,
+    decrypt, encrypt, main_routine, Algorithm, BenchMode, Config, DeriveStrength, Direction,
+    HashMode, Secret, Ui,
 };
 
-use crate::file_utils::Mode;
+use crate::file_utils::{create_unique_output_file, Mode};
+use crate::pem::{is_pem_cryptyrust_file, PemReader, PemWriter};
 
 #[derive(Clone, Debug)]
 pub enum FileStatus {
     Pending,
     Processing,
     Success,
-    Failed(String),  // message d'erreur
+    Failed(String),
 }
 
 pub enum JobState {
@@ -52,6 +55,7 @@ impl Ui for ScaledProgress {
 }
 
 impl JobState {
+    #[allow(clippy::too_many_arguments)]
     pub fn start(
         &mut self,
         files: Vec<PathBuf>,
@@ -59,6 +63,7 @@ impl JobState {
         algo: Algorithm,
         strength: DeriveStrength,
         password: String,
+        pem_output: bool,
         ctx: eframe::egui::Context,
     ) {
         let (tx, rx) = mpsc::channel::<(usize, i32)>();
@@ -78,67 +83,109 @@ impl JobState {
             let total_files = files.len();
             let file_statuses = Arc::new(Mutex::new(vec![FileStatus::Pending; total_files]));
 
-            // Traitement parallèle avec Rayon
             let _results: Vec<bool> = files
                 .clone()
                 .into_par_iter()
                 .enumerate()
                 .map(|(i, path)| {
-                    // Marquer comme en cours de traitement
                     file_statuses.lock().unwrap()[i] = FileStatus::Processing;
 
-                    let in_file = path.to_string_lossy().to_string();
-                    let out_file = match mode {
-                        Mode::Encrypt => format!("{}.crypty", in_file),
-                        Mode::Decrypt => {
-                            if in_file.ends_with(".crypty") {
-                                in_file.trim_end_matches(".crypty").to_string()
+                    let in_path = path.to_string_lossy().to_string();
+                    let is_pem_file = is_pem_cryptyrust_file(&path);
+
+                    let success = match mode {
+                        Mode::Encrypt if pem_output => {
+                            match create_unique_output_file(&in_path, ".crypty.pem") {
+                                Err(e) => {
+                                    report_error(&file_statuses, i, e.to_string());
+                                    false
+                                }
+                                Ok((out_path, out_file)) => process_encrypt_pem(
+                                    &in_path, &out_path, out_file, &password, algo, strength, &tx,
+                                    i,
+                                ),
+                            }
+                        }
+                        Mode::Decrypt if is_pem_file => {
+                            let (base, ext) = if in_path.ends_with(".crypty.pem") {
+                                (in_path.trim_end_matches(".crypty.pem"), "")
+                            } else if in_path.ends_with(".pem") {
+                                (in_path.trim_end_matches(".pem"), "")
                             } else {
-                                format!("{}.dec", in_file)
+                                (in_path.as_str(), ".dec")
+                            };
+                            match create_unique_output_file(base, ext) {
+                                Err(e) => {
+                                    report_error(&file_statuses, i, e.to_string());
+                                    false
+                                }
+                                Ok((out_path, out_file)) => process_decrypt_pem(
+                                    &in_path, &out_path, out_file, &password, &tx, i,
+                                ),
+                            }
+                        }
+                        _ => {
+                            // Binary path — use main_routine
+                            let (base, ext) = match mode {
+                                Mode::Encrypt => (in_path.as_str(), ".crypty"),
+                                Mode::Decrypt => {
+                                    if in_path.ends_with(".crypty") {
+                                        (in_path.trim_end_matches(".crypty"), "")
+                                    } else {
+                                        (in_path.as_str(), ".dec")
+                                    }
+                                }
+                            };
+                            match create_unique_output_file(base, ext) {
+                                Err(e) => {
+                                    report_error(&file_statuses, i, e.to_string());
+                                    false
+                                }
+                                Ok((out_path, _claim)) => {
+                                    // _claim keeps the filename reserved while main_routine writes
+                                    let sender = ScaledProgress {
+                                        tx: tx.clone(),
+                                        file_index: i,
+                                    };
+                                    let config = Config::new(
+                                        if mode == Mode::Encrypt {
+                                            Direction::Encrypt
+                                        } else {
+                                            Direction::Decrypt
+                                        },
+                                        algo,
+                                        strength,
+                                        Secret::new(password.clone()),
+                                        Some(in_path.clone()),
+                                        Some(out_path),
+                                        Box::new(sender),
+                                        HashMode::NoHash,
+                                        BenchMode::WriteToFilesystem,
+                                    );
+                                    match main_routine(&config) {
+                                        Ok(_) => {
+                                            let _ = tx.send((i, 100));
+                                            true
+                                        }
+                                        Err(e) => {
+                                            report_error(&file_statuses, i, e.to_string());
+                                            false
+                                        }
+                                    }
+                                }
                             }
                         }
                     };
 
-                    let sender = ScaledProgress {
-                        tx: tx.clone(),
-                        file_index: i,
-                    };
+                    if success {
+                        let _ = tx.send((i, 100));
+                        file_statuses.lock().unwrap()[i] = FileStatus::Success;
+                    }
 
-                    let mut config = Config::new(
-                        if mode == Mode::Encrypt {
-                            Direction::Encrypt
-                        } else {
-                            Direction::Decrypt
-                        },
-                        algo,
-                        strength,
-                        Secret::new(password.clone()),
-                        Some(in_file.clone()),
-                        Some(out_file),
-                        Box::new(sender),
-                        HashMode::NoHash,
-                        BenchMode::WriteToFilesystem,
-                    );
-
-                    let success = match main_routine(&mut config) {
-                        Ok(_) => {
-                            let _ = tx.send((i, 100));
-                            file_statuses.lock().unwrap()[i] = FileStatus::Success;
-                            true
-                        }
-                        Err(e) => {
-                            let error_msg = format!("{}", e);
-                            file_statuses.lock().unwrap()[i] = FileStatus::Failed(error_msg);
-                            false
-                        }
-                    };
-
-                    // Incrémenter le compteur et vérifier si c'est le dernier
                     {
                         let mut completed = completed_count.lock().unwrap();
                         *completed += 1;
                         if *completed == total_files {
-                            // Signaler la fin après un court délai
                             thread::spawn({
                                 let ctx = ctx.clone();
                                 let current_file_clone = current_file_clone.clone();
@@ -155,8 +202,94 @@ impl JobState {
                     success
                 })
                 .collect();
-
-            // Les statuses sont maintenant stockés dans file_statuses
         });
     }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn process_encrypt_pem(
+    in_path: &str,
+    out_path: &str,
+    out_file: File,
+    password: &str,
+    algo: Algorithm,
+    strength: DeriveStrength,
+    tx: &Sender<(usize, i32)>,
+    file_index: usize,
+) -> bool {
+    let run = || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let mut in_file = File::open(in_path)?;
+        let filesize = in_file.metadata()?.len();
+        let mut writer = PemWriter::new(out_file, env!("CARGO_PKG_VERSION"))?;
+
+        let ui: Box<dyn Ui> = Box::new(ScaledProgress {
+            tx: tx.clone(),
+            file_index,
+        });
+        encrypt(
+            &mut in_file,
+            &mut writer,
+            &Secret::new(password.to_string()),
+            &*ui,
+            filesize,
+            algo,
+            strength,
+            HashMode::NoHash,
+            BenchMode::WriteToFilesystem,
+        )?;
+        writer.finish()?;
+        Ok(())
+    };
+
+    match run() {
+        Ok(_) => true,
+        Err(e) => {
+            let _ = remove_file(out_path);
+            eprintln!("PEM encrypt error: {}", e);
+            false
+        }
+    }
+}
+
+fn process_decrypt_pem(
+    in_path: &str,
+    out_path: &str,
+    mut out_file: File,
+    password: &str,
+    tx: &Sender<(usize, i32)>,
+    file_index: usize,
+) -> bool {
+    let mut run = || -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+        let pem_size = File::open(in_path)?.metadata()?.len();
+        let approx_size = (pem_size * 3) / 4;
+        let mut reader = PemReader::new(std::path::Path::new(in_path))?;
+
+        let ui: Box<dyn Ui> = Box::new(ScaledProgress {
+            tx: tx.clone(),
+            file_index,
+        });
+        decrypt(
+            &mut reader,
+            &mut out_file,
+            &Secret::new(password.to_string()),
+            &*ui,
+            approx_size,
+            HashMode::NoHash,
+            BenchMode::WriteToFilesystem,
+        )?;
+        Ok(())
+    };
+
+    match run() {
+        Ok(_) => true,
+        Err(e) => {
+            let _ = remove_file(out_path);
+            eprintln!("PEM decrypt error: {}", e);
+            false
+        }
+    }
+}
+
+fn report_error(statuses: &Arc<Mutex<Vec<FileStatus>>>, index: usize, msg: String) {
+    statuses.lock().unwrap()[index] = FileStatus::Failed(msg);
 }

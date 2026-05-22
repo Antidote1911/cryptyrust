@@ -8,19 +8,14 @@ Github : https://github.com/Antidote1911/
 ";
 
 #[derive(Parser)]
-
 #[clap(about=ABOUT, author, version)]
-
 #[clap(group(ArgGroup::new("mode").required(true)
 .args(&["encrypt", "decrypt"]),
 ))]
-
 #[clap(group(ArgGroup::new("passwordflags")
 .args(&["password", "passwordfile"]),
 ))]
-
 pub struct Cli {
-
     /// Specifies the file to encrypt.
     #[clap(long, short, value_name = "FILE_TO_ENCRYPT")]
     encrypt: Option<String>,
@@ -38,15 +33,21 @@ pub struct Cli {
     password: Option<String>,
 
     /// Choose algorithm. Ignored in decryption mode
-    #[clap(short, long, value_enum,value_name = "ALGO", default_value = "aesgcm")]
+    #[clap(short, long, value_enum, value_name = "ALGO", default_value = "aesgcm")]
     algo: Algo,
 
     /// Choose password derivation strength
-    #[clap(short, long, value_enum,value_name = "STRENGTH", default_value = "interactive")]
+    #[clap(
+        short,
+        long,
+        value_enum,
+        value_name = "STRENGTH",
+        default_value = "interactive"
+    )]
     strength: Strength,
 
     /// File should be valid UTF-8 and contain only the password with no newline.
-    #[clap(short='f', long, value_name = "PASSWORD_FILE")]
+    #[clap(short = 'f', long, value_name = "PASSWORD_FILE")]
     passwordfile: Option<String>,
 
     /// Optional, output hash
@@ -56,7 +57,6 @@ pub struct Cli {
     /// Optional, bench mode
     #[clap(long)]
     bench: bool,
-
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
@@ -99,10 +99,10 @@ impl Cli {
     }
 
     pub fn strength(&self) -> DeriveStrength {
-         match self.strength {
+        match self.strength {
             Strength::Interactive => DeriveStrength::Interactive,
-            Strength::Moderate    => DeriveStrength::Moderate,
-            Strength::Sensitive   => DeriveStrength::Sensitive,
+            Strength::Moderate => DeriveStrength::Moderate,
+            Strength::Sensitive => DeriveStrength::Sensitive,
         }
     }
 

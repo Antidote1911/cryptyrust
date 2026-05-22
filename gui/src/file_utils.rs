@@ -1,7 +1,7 @@
-use std::fs::File;
-use std::io::Read;
-use std::path::{Path, PathBuf};
 use cryptyrust_core::{Algorithm, DeriveStrength};
+use std::fs::{File, OpenOptions};
+use std::io::{self, Read};
+use std::path::{Path, PathBuf};
 
 const CRYPTYRUST_MAGIC: [u8; 4] = [0x43, 0x52, 0x59, 0x50];
 
@@ -16,7 +16,10 @@ pub fn is_cryptyrust_file(path: &Path) -> bool {
         return false;
     };
     let mut magic = [0u8; 4];
-    matches!(f.read_exact(&mut magic), Ok(_) if magic == CRYPTYRUST_MAGIC)
+    if f.read_exact(&mut magic).is_ok() && magic == CRYPTYRUST_MAGIC {
+        return true;
+    }
+    crate::pem::is_pem_cryptyrust_file(path)
 }
 
 pub fn detect_mode(files: &[PathBuf]) -> Option<Mode> {
@@ -54,16 +57,47 @@ pub fn get_file_size(path: &Path) -> String {
 pub fn algo_label(a: Algorithm) -> &'static str {
     match a {
         Algorithm::XChaCha20Poly1305 => "XChaCha20Poly1305",
-        Algorithm::Aes256Gcm         => "AES-256-GCM",
-        Algorithm::Aes256GcmSiv      => "AES-256-GCM-SIV",
+        Algorithm::Aes256Gcm => "AES-256-GCM",
+        Algorithm::Aes256GcmSiv => "AES-256-GCM-SIV",
     }
 }
 
 pub fn derive_label(d: DeriveStrength) -> &'static str {
     match d {
         DeriveStrength::Interactive => "Interactive",
-        DeriveStrength::Moderate    => "Moderate",
-        DeriveStrength::Sensitive   => "Sensitive",
+        DeriveStrength::Moderate => "Moderate",
+        DeriveStrength::Sensitive => "Sensitive",
+    }
+}
+
+/// Atomically claims a unique output path using `create_new` (O_CREAT|O_EXCL).
+/// Returns the path string and the open empty File handle.
+/// Keep the handle alive until the actual write completes to prevent another
+/// concurrent thread from claiming the same filename.
+pub fn create_unique_output_file(base: &str, ext: &str) -> io::Result<(String, File)> {
+    let candidate = format!("{}{}", base, ext);
+    match OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&candidate)
+    {
+        Ok(f) => return Ok((candidate, f)),
+        Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
+        _ => {}
+    }
+    let mut n = 1u32;
+    loop {
+        let candidate = format!("{} ({}){}", base, n, ext);
+        match OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&candidate)
+        {
+            Ok(f) => return Ok((candidate, f)),
+            Err(e) if e.kind() != io::ErrorKind::AlreadyExists => return Err(e),
+            _ => {}
+        }
+        n += 1;
     }
 }
 

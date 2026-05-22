@@ -5,20 +5,12 @@ use crate::file_utils::{algo_label, Mode};
 use crate::job::JobState;
 use crate::ui::components;
 
-pub fn render_menu_bar(
-    app: &mut CryptyApp,
-    ui: &mut egui::Ui,
-    is_running: bool,
-    popup_open: bool,
-) {
+pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool, popup_open: bool) {
     egui::Panel::top("menubar").show_inside(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.menu_button("File", |ui| {
                 if ui
-                    .add_enabled(
-                        !is_running && !popup_open,
-                        egui::Button::new("Add files…"),
-                    )
+                    .add_enabled(!is_running && !popup_open, egui::Button::new("Add files…"))
                     .clicked()
                 {
                     ui.close();
@@ -68,12 +60,13 @@ pub fn render_bottom_bar(app: &CryptyApp, ui: &mut egui::Ui) {
         .show_inside(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.label(egui::RichText::new("🔒").size(13.0).weak());
-                ui.label(egui::RichText::new(algo_label(app.algorithm)).small());
+                ui.label(egui::RichText::new(algo_label(app.algorithm)));
                 ui.separator();
                 ui.label(egui::RichText::new("🔑").size(13.0).weak());
-                ui.label(
-                    egui::RichText::new(format!("Argon2id · {:?}", app.strength)).small(),
-                );
+                ui.label(egui::RichText::new(format!(
+                    "Argon2id · {:?}",
+                    app.strength
+                )));
             });
         });
 }
@@ -197,12 +190,7 @@ fn render_completed_view(
     components::render_completed_table(ui, files, statuses);
 }
 
-fn render_drop_zone(
-    ui: &mut egui::Ui,
-    avail: egui::Rect,
-    hovering: bool,
-    app: &mut CryptyApp,
-) {
+fn render_drop_zone(ui: &mut egui::Ui, avail: egui::Rect, hovering: bool, app: &mut CryptyApp) {
     if hovering {
         ui.painter().rect_stroke(
             avail,
@@ -237,12 +225,7 @@ fn render_drop_zone(
     }
 }
 
-fn render_file_list(
-    ui: &mut egui::Ui,
-    avail: egui::Rect,
-    hovering: bool,
-    app: &mut CryptyApp,
-) {
+fn render_file_list(ui: &mut egui::Ui, avail: egui::Rect, hovering: bool, app: &mut CryptyApp) {
     if app.mixed {
         components::render_warning_banner(ui);
     }

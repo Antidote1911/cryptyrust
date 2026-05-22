@@ -3,7 +3,6 @@ use thiserror::Error;
 /// WordCountError enumerates all possible errors returned by this library.
 #[derive(Error, Debug)]
 pub enum CoreErr {
-
     #[error("Decryption failed: Cant read signature.")]
     ReadSignature,
 
@@ -44,7 +43,6 @@ pub enum CoreErr {
     EncryptFail(String),
 
     //// Header errors
-
     #[error("Decryption failed: Incorrect signature. Not a Cryptyrust encrypted file.")]
     BadSignature,
 

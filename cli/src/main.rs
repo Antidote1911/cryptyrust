@@ -1,15 +1,15 @@
 use cryptyrust_core::*;
 mod cli;
-use cli::Cli;
 use clap::Parser;
+use cli::Cli;
 use std::{
-    path::{Path, PathBuf},
     env,
+    path::{Path, PathBuf},
 };
 
 use anyhow::{anyhow, Context, Result};
-use std::result::Result::Ok;
 use indicatif::{ProgressBar, ProgressStyle};
+use std::result::Result::Ok;
 
 const FILE_EXTENSION: &str = ".crypty";
 
@@ -22,11 +22,9 @@ impl ProgressUpdater {
     fn new(mode: Direction) -> Self {
         let pb = ProgressBar::new(100);
         pb.set_style(
-            ProgressStyle::with_template(
-                "{spinner:.green} [{wide_bar:.cyan/blue}] {pos}%",
-            )
-            .unwrap()
-            .progress_chars("#>-"),
+            ProgressStyle::with_template("{spinner:.green} [{wide_bar:.cyan/blue}] {pos}%")
+                .unwrap()
+                .progress_chars("#>-"),
         );
         Self { mode, pb }
     }
@@ -56,7 +54,10 @@ fn main() {
                 println!("\nSuccess! {} has been {} in {} s", name, m, time);
             }
         }
-        Err(e) => eprintln!("\n{}", e),
+        Err(e) => {
+            eprintln!("\n{}", e);
+            std::process::exit(1);
+        }
     };
 }
 
@@ -87,7 +88,7 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
     };
 
     let output_path = {
-        let s = generate_output_path(&direction, filename.as_deref(), app.output())
+        let s = generate_output_path(&direction, filename, app.output())
             .unwrap()
             .to_str()
             .ok_or("could not convert output path to string")
@@ -131,10 +132,9 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
 fn get_password(mode: &Direction) -> Result<Secret<String>> {
     match mode {
         Direction::Encrypt => {
-            let password = rpassword::prompt_password(
-                "Password (minimum 8 characters, longer is better): ",
-            )
-            .context("could not get password from user")?;
+            let password =
+                rpassword::prompt_password("Password (minimum 8 characters, longer is better): ")
+                    .context("could not get password from user")?;
             if password.len() < 8 {
                 return Err(anyhow!("password must be at least 8 characters"));
             }
@@ -158,8 +158,8 @@ fn generate_output_path(
     input: Option<&str>,
     output: Option<&str>,
 ) -> Result<PathBuf, String> {
-    if let Some(..) = output {
-        let p = PathBuf::from(output.unwrap());
+    if let Some(output) = output {
+        let p = PathBuf::from(output);
         if p.exists() && p.is_dir() {
             generate_default_filename(mode, p, input)
         } else if p.exists() && p.is_file() {
@@ -190,9 +190,9 @@ fn generate_default_filename(
             with_ext
         }
         Direction::Decrypt => {
-            let name = if let Some(n) = name { n } else { "stdin" };
+            let name = name.unwrap_or("stdin");
             if name.ends_with(FILE_EXTENSION) {
-                name[..name.len() - FILE_EXTENSION.len()].to_string()
+                name.strip_suffix(FILE_EXTENSION).unwrap().to_string()
             } else {
                 prepend("decrypted_".to_string(), name)
                     .ok_or(format!("could not prepend decrypted_ to filename {}", name))?
