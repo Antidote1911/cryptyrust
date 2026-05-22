@@ -51,6 +51,13 @@ pub fn render_menu_bar(
                     app.show_about = true;
                 }
             });
+
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let icon = if app.dark_mode { "☀" } else { "🌙" };
+                if ui.add(egui::Button::new(icon).frame(false)).clicked() {
+                    app.dark_mode = !app.dark_mode;
+                }
+            });
         });
     });
 }
@@ -60,26 +67,12 @@ pub fn render_bottom_bar(app: &CryptyApp, ui: &mut egui::Ui) {
         .exact_size(30.0)
         .show_inside(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                ui.label(
-                    egui::RichText::new("🔒")
-                        .size(13.0)
-                        .color(egui::Color32::from_gray(150)),
-                );
-                ui.label(
-                    egui::RichText::new(algo_label(app.algorithm))
-                        .small()
-                        .color(egui::Color32::from_gray(200)),
-                );
+                ui.label(egui::RichText::new("🔒").size(13.0).weak());
+                ui.label(egui::RichText::new(algo_label(app.algorithm)).small());
                 ui.separator();
+                ui.label(egui::RichText::new("🔑").size(13.0).weak());
                 ui.label(
-                    egui::RichText::new("🔑")
-                        .size(13.0)
-                        .color(egui::Color32::from_gray(150)),
-                );
-                ui.label(
-                    egui::RichText::new(format!("Argon2id · {:?}", app.strength))
-                        .small()
-                        .color(egui::Color32::from_gray(200)),
+                    egui::RichText::new(format!("Argon2id · {:?}", app.strength)).small(),
                 );
             });
         });
@@ -102,18 +95,17 @@ pub fn render_action_bar(
         .show_inside(ui, |ui| {
             ui.add_space(8.0);
             ui.horizontal_centered(|ui| {
-                let (btn_label, btn_color) = if app.mixed {
-                    ("⚠  Mixed files", egui::Color32::from_rgb(120, 90, 0))
+                let btn_label = if app.mixed {
+                    "⚠  Mixed files"
                 } else {
                     match app.mode {
-                        Mode::Encrypt => ("🔒  Encrypt", egui::Color32::from_rgb(40, 120, 200)),
-                        Mode::Decrypt => ("🔓  Decrypt", egui::Color32::from_rgb(40, 160, 80)),
+                        Mode::Encrypt => "🔒  Encrypt",
+                        Mode::Decrypt => "🔓  Decrypt",
                     }
                 };
 
                 let btn = egui::Button::new(egui::RichText::new(btn_label).size(15.0).strong())
-                    .min_size(egui::vec2(150.0, 32.0))
-                    .fill(btn_color);
+                    .min_size(egui::vec2(150.0, 32.0));
 
                 if ui.add_enabled(can_act, btn).clicked() {
                     do_open_popup = true;
@@ -136,9 +128,7 @@ pub fn render_action_bar(
                 if ui
                     .add_enabled(
                         !is_running && !popup_open,
-                        egui::Button::new("🗑  Clear")
-                            .min_size(egui::vec2(80.0, 32.0))
-                            .fill(egui::Color32::from_rgb(100, 35, 35)),
+                        egui::Button::new("🗑  Clear").min_size(egui::vec2(80.0, 32.0)),
                     )
                     .clicked()
                 {
@@ -172,10 +162,10 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
                 processing_files,
                 ..
             } => {
-                render_processing_view(ui, avail, progress, current_file, processing_files);
+                render_processing_view(ui, progress, current_file, processing_files);
             }
             JobState::Completed { files, statuses } => {
-                render_completed_view(ui, avail, files, statuses);
+                render_completed_view(ui, files, statuses);
             }
             JobState::Idle => {
                 if app.files.is_empty() {
@@ -190,29 +180,20 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
 
 fn render_processing_view(
     ui: &mut egui::Ui,
-    avail: egui::Rect,
     progress: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<usize, i32>>>,
     current_file: &std::sync::Arc<std::sync::Mutex<usize>>,
     processing_files: &[std::path::PathBuf],
 ) {
     let current_idx = *current_file.lock().unwrap();
     let file_progress = progress.lock().unwrap();
-
-    ui.painter()
-        .rect_filled(avail, 0.0, egui::Color32::from_rgb(18, 18, 24));
-
     components::render_processing_table(ui, processing_files, &file_progress, current_idx);
 }
 
 fn render_completed_view(
     ui: &mut egui::Ui,
-    avail: egui::Rect,
     files: &[std::path::PathBuf],
     statuses: &[crate::job::FileStatus],
 ) {
-    ui.painter()
-        .rect_filled(avail, 0.0, egui::Color32::from_rgb(18, 18, 24));
-
     components::render_completed_table(ui, files, statuses);
 }
 
@@ -222,38 +203,29 @@ fn render_drop_zone(
     hovering: bool,
     app: &mut CryptyApp,
 ) {
-    let bg_color = if hovering {
-        egui::Color32::from_rgb(40, 65, 110)
-    } else {
-        egui::Color32::from_rgb(25, 45, 75)
-    };
-
-    {
-        let painter = ui.painter();
-        painter.rect_filled(avail, 0.0, bg_color);
-        if hovering {
-            painter.rect_stroke(
-                avail,
-                0.0,
-                egui::Stroke::new(3.0, egui::Color32::from_rgb(100, 160, 255)),
-                egui::StrokeKind::Inside,
-            );
-        }
-        painter.text(
-            avail.center() - egui::vec2(0.0, 14.0),
-            egui::Align2::CENTER_CENTER,
-            "Drop files here to encrypt or decrypt",
-            egui::FontId::proportional(18.0),
-            egui::Color32::from_gray(210),
-        );
-        painter.text(
-            avail.center() + egui::vec2(0.0, 14.0),
-            egui::Align2::CENTER_CENTER,
-            "or click to browse",
-            egui::FontId::proportional(14.0),
-            egui::Color32::from_gray(140),
+    if hovering {
+        ui.painter().rect_stroke(
+            avail,
+            4.0,
+            egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+            egui::StrokeKind::Inside,
         );
     }
+
+    ui.painter().text(
+        avail.center() - egui::vec2(0.0, 14.0),
+        egui::Align2::CENTER_CENTER,
+        "Drop files here to encrypt or decrypt",
+        egui::FontId::proportional(18.0),
+        ui.visuals().text_color(),
+    );
+    ui.painter().text(
+        avail.center() + egui::vec2(0.0, 14.0),
+        egui::Align2::CENTER_CENTER,
+        "or click to browse",
+        egui::FontId::proportional(14.0),
+        ui.visuals().weak_text_color(),
+    );
 
     if ui
         .interact(avail, ui.id().with("idle_click"), egui::Sense::click())
@@ -271,9 +243,6 @@ fn render_file_list(
     hovering: bool,
     app: &mut CryptyApp,
 ) {
-    ui.painter()
-        .rect_filled(avail, 0.0, egui::Color32::from_rgb(18, 18, 24));
-
     if app.mixed {
         components::render_warning_banner(ui);
     }
@@ -286,7 +255,7 @@ fn render_file_list(
         ui.painter().rect_stroke(
             avail,
             0.0,
-            egui::Stroke::new(3.0, egui::Color32::from_rgb(100, 160, 255)),
+            egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
             egui::StrokeKind::Inside,
         );
     }

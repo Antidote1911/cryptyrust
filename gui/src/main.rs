@@ -1,3 +1,5 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
 mod app;
 mod ui;
 mod job;
@@ -17,6 +19,11 @@ fn main() -> Result<(), eframe::Error> {
     eframe::run_native(
         "Cryptyrust",
         options,
-        Box::new(|_cc| Ok(Box::new(app::CryptyApp::default()))),
+        Box::new(|cc| {
+            let system_dark = cc.egui_ctx.system_theme()
+                .map(|t| t == egui::Theme::Dark)
+                .unwrap_or(true);
+            Ok(Box::new(app::CryptyApp::new(cc.storage, system_dark)))
+        }),
     )
 }

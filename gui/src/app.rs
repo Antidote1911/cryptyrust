@@ -20,10 +20,36 @@ pub struct CryptyApp {
     pub algorithm: Algorithm,
     pub strength: DeriveStrength,
     pub show_about: bool,
+    pub dark_mode: bool,
 }
 
-impl Default for CryptyApp {
-    fn default() -> Self {
+impl CryptyApp {
+    pub fn new(storage: Option<&dyn eframe::Storage>, system_dark: bool) -> Self {
+        let dark_mode = storage
+            .and_then(|s| s.get_string("dark_mode"))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(system_dark);
+
+        let algorithm = storage
+            .and_then(|s| s.get_string("algorithm"))
+            .and_then(|s| match s.as_str() {
+                "xchacha20" => Some(Algorithm::XChaCha20Poly1305),
+                "aes256gcm" => Some(Algorithm::Aes256Gcm),
+                "aes256gcmsiv" => Some(Algorithm::Aes256GcmSiv),
+                _ => None,
+            })
+            .unwrap_or(Algorithm::XChaCha20Poly1305);
+
+        let strength = storage
+            .and_then(|s| s.get_string("strength"))
+            .and_then(|s| match s.as_str() {
+                "interactive" => Some(DeriveStrength::Interactive),
+                "moderate" => Some(DeriveStrength::Moderate),
+                "sensitive" => Some(DeriveStrength::Sensitive),
+                _ => None,
+            })
+            .unwrap_or(DeriveStrength::Moderate);
+
         Self {
             files: vec![],
             mode: Mode::Encrypt,
@@ -35,9 +61,10 @@ impl Default for CryptyApp {
             pw_show: false,
             pw_error: None,
             pw_focus: false,
-            algorithm: Algorithm::XChaCha20Poly1305,
-            strength: DeriveStrength::Moderate,
+            algorithm,
+            strength,
             show_about: false,
+            dark_mode,
         }
     }
 }
@@ -118,7 +145,27 @@ impl CryptyApp {
 }
 
 impl eframe::App for CryptyApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        storage.set_string("dark_mode", self.dark_mode.to_string());
+        storage.set_string("algorithm", match self.algorithm {
+            Algorithm::XChaCha20Poly1305 => "xchacha20",
+            Algorithm::Aes256Gcm => "aes256gcm",
+            Algorithm::Aes256GcmSiv => "aes256gcmsiv",
+        }.to_string());
+        storage.set_string("strength", match self.strength {
+            DeriveStrength::Interactive => "interactive",
+            DeriveStrength::Moderate => "moderate",
+            DeriveStrength::Sensitive => "sensitive",
+        }.to_string());
+    }
+
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        ctx.set_visuals(if self.dark_mode {
+            egui::Visuals::dark()
+        } else {
+            egui::Visuals::light()
+        });
+
         // Handle drag & drop
         if self.popup == PasswordPopup::Closed && matches!(self.job, JobState::Idle | JobState::Completed { .. }) {
             let dropped: Vec<PathBuf> = ctx.input(|i| {

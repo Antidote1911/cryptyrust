@@ -85,7 +85,7 @@ pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
 
             if let Some(err) = &app.pw_error {
                 ui.add_space(4.0);
-                ui.colored_label(egui::Color32::RED, err);
+                ui.colored_label(ui.visuals().error_fg_color, err);
             }
 
             ui.add_space(10.0);
@@ -128,7 +128,7 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
                 ui.painter().rect_filled(
                     rect,
                     0.0,
-                    egui::Color32::from_black_alpha(128)
+                    egui::Color32::from_black_alpha(128),
                 );
 
                 if response.clicked() {
@@ -142,7 +142,7 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
         .resizable(false)
         .movable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .fixed_size(egui::vec2(350.0, 160.0))
+        .fixed_size(egui::vec2(380.0, 200.0))
         .show(ctx, |ui| {
             if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
                 app.show_about = false;
@@ -155,16 +155,9 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
                     ui.label(egui::RichText::new("🔐").size(24.0));
                     ui.add_space(8.0);
                     ui.vertical(|ui| {
+                        ui.label(egui::RichText::new("Cryptyrust").size(16.0).strong());
                         ui.label(
-                            egui::RichText::new("Cryptyrust")
-                                .size(16.0)
-                                .strong()
-                                .color(egui::Color32::from_rgb(130, 190, 255)),
-                        );
-                        ui.label(
-                            egui::RichText::new("Fast, authenticated file encryption")
-                                .size(11.0)
-                                .color(egui::Color32::from_gray(170)),
+                            egui::RichText::new("Fast, authenticated file encryption").weak(),
                         );
                     });
                 });
@@ -176,30 +169,20 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
 
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new("🔒 Algorithms")
-                            .size(12.0)
-                            .strong()
-                            .color(egui::Color32::from_rgb(100, 200, 130)),
-                    );
+                    ui.label(egui::RichText::new("🔒 Algorithms").strong());
                     ui.add_space(2.0);
-                    ui.label(egui::RichText::new("XChaCha20-Poly1305").size(10.0).color(egui::Color32::from_rgb(200, 220, 255)));
-                    ui.label(egui::RichText::new("AES-256-GCM").size(10.0).color(egui::Color32::from_rgb(200, 220, 255)));
-                    ui.label(egui::RichText::new("AES-256-GCM-SIV").size(10.0).color(egui::Color32::from_rgb(200, 220, 255)));
+                    ui.label("XChaCha20-Poly1305");
+                    ui.label("AES-256-GCM");
+                    ui.label("AES-256-GCM-SIV");
                 });
 
                 ui.add_space(20.0);
 
                 ui.vertical(|ui| {
-                    ui.label(
-                        egui::RichText::new("🔑 Key Derivation")
-                            .size(12.0)
-                            .strong()
-                            .color(egui::Color32::from_rgb(100, 200, 130)),
-                    );
+                    ui.label(egui::RichText::new("🔑 Key Derivation").strong());
                     ui.add_space(2.0);
-                    ui.label(egui::RichText::new("Argon2id").size(10.0).color(egui::Color32::from_rgb(200, 220, 255)));
-                    ui.label(egui::RichText::new("• Interactive, Moderate, Sensitive").size(9.0).color(egui::Color32::from_gray(140)));
+                    ui.label("Argon2id");
+                    ui.label(egui::RichText::new("• Interactive, Moderate, Sensitive").weak());
                 });
             });
 
@@ -208,16 +191,12 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
             ui.add_space(4.0);
 
             ui.horizontal(|ui| {
-                ui.label(
-                    egui::RichText::new("Built with Rust • eframe/egui")
-                        .size(9.0)
-                        .color(egui::Color32::from_gray(120)),
-                );
+                ui.label(egui::RichText::new("Built with Rust • eframe/egui").weak());
 
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
                         .add(
-                            egui::Button::new(egui::RichText::new("Close").size(11.0))
+                            egui::Button::new("Close")
                                 .min_size(egui::vec2(50.0, 20.0)),
                         )
                         .clicked()
@@ -234,35 +213,29 @@ pub fn render_warning_banner(ui: &mut egui::Ui) {
         egui::vec2(ui.available_width(), 36.0),
         egui::Sense::hover(),
     );
-    ui.painter().rect_filled(warn_rect, 0.0, egui::Color32::from_rgb(80, 60, 0));
     ui.painter().text(
         warn_rect.center(),
         egui::Align2::CENTER_CENTER,
         "⚠  Mixed encrypted / non-encrypted files — remove files below to fix",
         egui::FontId::proportional(12.5),
-        egui::Color32::from_rgb(255, 210, 80),
+        ui.visuals().warn_fg_color,
     );
 }
 
 fn header_label(ui: &mut egui::Ui, text: &str) {
-    ui.label(
-        egui::RichText::new(text)
-            .small()
-            .strong()
-            .color(egui::Color32::from_gray(160)),
-    );
+    ui.label(egui::RichText::new(text).small().strong());
 }
 
 fn render_type_cell(ui: &mut egui::Ui, path: &Path, is_encrypted: bool) {
-    let (icon, badge, badge_color) = if is_encrypted {
-        ("🔒", "encrypted", egui::Color32::from_rgb(60, 160, 100))
+    let (icon, badge) = if is_encrypted {
+        ("🔒", "encrypted")
     } else {
-        ("📄", "plain", egui::Color32::from_rgb(80, 120, 200))
+        ("📄", "plain")
     };
     let resp = ui.horizontal(|ui| {
         ui.label(egui::RichText::new(icon).size(14.0));
         ui.add_space(4.0);
-        ui.label(egui::RichText::new(badge).small().color(badge_color));
+        ui.label(egui::RichText::new(badge));
     }).response;
     if is_encrypted {
         if let Some((algo, derive)) = read_encryption_info(path) {
@@ -272,32 +245,11 @@ fn render_type_cell(ui: &mut egui::Ui, path: &Path, is_encrypted: bool) {
 }
 
 fn render_progress_cell(ui: &mut egui::Ui, pct: i32) {
-    let progress_width = ui.available_width().min(110.0);
-    let progress_height = 16.0;
-    let (progress_rect, _) = ui.allocate_exact_size(
-        egui::vec2(progress_width, progress_height),
-        egui::Sense::hover(),
-    );
-    ui.painter().rect_filled(progress_rect, 2.0, egui::Color32::from_rgb(40, 40, 50));
-    let fill_width = (progress_width * pct as f32 / 100.0).max(0.0);
-    if fill_width > 0.0 {
-        let fill_rect = egui::Rect::from_min_size(
-            progress_rect.min,
-            egui::vec2(fill_width, progress_height),
-        );
-        let fill_color = if pct >= 100 {
-            egui::Color32::from_rgb(40, 160, 80)
-        } else {
-            egui::Color32::from_rgb(60, 120, 200)
-        };
-        ui.painter().rect_filled(fill_rect, 2.0, fill_color);
-    }
-    ui.painter().text(
-        progress_rect.center(),
-        egui::Align2::CENTER_CENTER,
-        format!("{}%", pct),
-        egui::FontId::proportional(10.0),
-        egui::Color32::WHITE,
+    let fraction = (pct as f32 / 100.0).clamp(0.0, 1.0);
+    ui.add(
+        egui::ProgressBar::new(fraction)
+            .text(format!("{}%", pct))
+            .desired_width(110.0),
     );
 }
 
@@ -325,13 +277,9 @@ pub fn render_file_table(ui: &mut egui::Ui, files: &[PathBuf]) -> Option<usize> 
                 body.row(32.0, |mut row| {
                     row.col(|ui| {
                         if ui.add(
-                            egui::Button::new(
-                                egui::RichText::new("✕")
-                                    .size(12.0)
-                                    .color(egui::Color32::from_gray(160)),
-                            )
-                            .min_size(egui::vec2(20.0, 20.0))
-                            .fill(egui::Color32::TRANSPARENT),
+                            egui::Button::new(egui::RichText::new("✕").size(12.0))
+                                .min_size(egui::vec2(20.0, 20.0))
+                                .fill(egui::Color32::TRANSPARENT),
                         ).clicked() {
                             to_remove = Some(i);
                         }
@@ -339,22 +287,14 @@ pub fn render_file_table(ui: &mut egui::Ui, files: &[PathBuf]) -> Option<usize> 
                     row.col(|ui| { render_type_cell(ui, path, is_enc); });
                     row.col(|ui| {
                         let name = path.file_name().unwrap_or_default().to_string_lossy();
-                        ui.label(egui::RichText::new(name.as_ref()).color(egui::Color32::WHITE));
+                        ui.label(egui::RichText::new(name.as_ref()));
                     });
                     row.col(|ui| {
                         let dir = path.parent().and_then(|p| p.to_str()).unwrap_or("");
-                        ui.label(
-                            egui::RichText::new(dir)
-                                .small()
-                                .color(egui::Color32::from_gray(100)),
-                        );
+                        ui.label(egui::RichText::new(dir).weak());
                     });
                     row.col(|ui| {
-                        ui.label(
-                            egui::RichText::new(get_file_size(path))
-                                .small()
-                                .color(egui::Color32::from_gray(140)),
-                        );
+                        ui.label(egui::RichText::new(get_file_size(path)).weak());
                     });
                 });
             }
@@ -395,37 +335,20 @@ pub fn render_processing_table(
                 body.row(32.0, |mut row| {
                     row.col(|ui| {
                         if is_current && pct < 100 {
-                            ui.label(
-                                egui::RichText::new("▶")
-                                    .size(10.0)
-                                    .color(egui::Color32::from_rgb(80, 140, 200)),
-                            );
+                            ui.label(egui::RichText::new("▶").size(10.0));
                         }
                     });
                     row.col(|ui| { render_type_cell(ui, path, is_enc); });
                     row.col(|ui| {
                         let name = path.file_name().unwrap_or_default().to_string_lossy();
-                        let color = if is_current && pct < 100 {
-                            egui::Color32::from_rgb(200, 220, 255)
-                        } else {
-                            egui::Color32::WHITE
-                        };
-                        ui.label(egui::RichText::new(name.as_ref()).color(color));
+                        ui.label(egui::RichText::new(name.as_ref()));
                     });
                     row.col(|ui| {
                         let dir = path.parent().and_then(|p| p.to_str()).unwrap_or("");
-                        ui.label(
-                            egui::RichText::new(dir)
-                                .small()
-                                .color(egui::Color32::from_gray(100)),
-                        );
+                        ui.label(egui::RichText::new(dir).weak());
                     });
                     row.col(|ui| {
-                        ui.label(
-                            egui::RichText::new(get_file_size(path))
-                                .small()
-                                .color(egui::Color32::from_gray(140)),
-                        );
+                        ui.label(egui::RichText::new(get_file_size(path)).weak());
                     });
                     row.col(|ui| { render_progress_cell(ui, pct); });
                 });
@@ -460,40 +383,31 @@ pub fn render_completed_table(
                 let is_enc = is_cryptyrust_file(path);
                 body.row(32.0, |mut row| {
                     row.col(|ui| {
-                        let (icon, color) = match status {
-                            crate::job::FileStatus::Success => ("✅", egui::Color32::from_rgb(60, 160, 100)),
-                            crate::job::FileStatus::Failed(_) => ("❌", egui::Color32::from_rgb(200, 80, 80)),
-                            crate::job::FileStatus::Processing => ("⏳", egui::Color32::from_rgb(200, 160, 80)),
-                            crate::job::FileStatus::Pending => ("⏸", egui::Color32::from_gray(120)),
+                        let icon = match status {
+                            crate::job::FileStatus::Success => "✅",
+                            crate::job::FileStatus::Failed(_) => "❌",
+                            crate::job::FileStatus::Processing => "⏳",
+                            crate::job::FileStatus::Pending => "⏸",
                         };
-                        ui.label(egui::RichText::new(icon).size(14.0).color(color));
+                        ui.label(egui::RichText::new(icon).size(14.0));
                     });
                     row.col(|ui| { render_type_cell(ui, path, is_enc); });
                     row.col(|ui| {
                         let name = path.file_name().unwrap_or_default().to_string_lossy();
-                        ui.label(egui::RichText::new(name.as_ref()).color(egui::Color32::WHITE));
+                        ui.label(egui::RichText::new(name.as_ref()));
                     });
                     row.col(|ui| {
                         let dir = path.parent().and_then(|p| p.to_str()).unwrap_or("");
-                        ui.label(
-                            egui::RichText::new(dir)
-                                .small()
-                                .color(egui::Color32::from_gray(100)),
-                        );
+                        ui.label(egui::RichText::new(dir).weak());
                     });
                     row.col(|ui| {
-                        ui.label(
-                            egui::RichText::new(get_file_size(path))
-                                .small()
-                                .color(egui::Color32::from_gray(140)),
-                        );
+                        ui.label(egui::RichText::new(get_file_size(path)).weak());
                     });
                     row.col(|ui| {
                         if let crate::job::FileStatus::Failed(error) = status {
                             ui.label(
                                 egui::RichText::new(error)
-                                    .small()
-                                    .color(egui::Color32::from_rgb(255, 150, 150)),
+                                    .color(ui.visuals().error_fg_color),
                             );
                         }
                     });
