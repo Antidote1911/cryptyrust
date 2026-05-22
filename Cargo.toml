@@ -12,6 +12,20 @@ members = [
 version = "1.2.0"
 authors = ["Antidote1911 <antidote1911@gmail.com>"]
 
+[workspace.lints.rust]
+unsafe_code = "forbid"
+unused_imports = "warn"
+
+[workspace.lints.clippy]
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+unwrap_used = "warn"
+expect_used = "warn"
+# common allow-list for pedantic false positives
+must_use_candidate = "allow"
+module_name_repetitions = "allow"
+missing_errors_doc = "allow"
+
 [profile.release]
 # opt-level = 'z'     # Optimize for size.
 # lto = true          # Enable Link Time Optimization
