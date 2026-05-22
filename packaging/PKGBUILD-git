@@ -1,0 +1,48 @@
+# Maintainer: Fabrice Corraire <antidote1911@gmail.com>
+pkgname=cryptyrust-git
+pkgver=r22.0f8dee5
+pkgrel=1
+pkgdesc="Simple cross-platform file encryption with a drag-and-drop GUI and a CLI (git)"
+arch=('x86_64' 'aarch64')
+url="https://github.com/Antidote1911/cryptyrust"
+license=('GPL-3.0-only')
+depends=('libxcb' 'libxkbcommon' 'openssl')
+optdepends=('wayland: Wayland display server support')
+makedepends=('cargo' 'git')
+provides=('cryptyrust')
+conflicts=('cryptyrust')
+source=("git+https://github.com/Antidote1911/cryptyrust.git")
+sha256sums=('SKIP')
+
+pkgver() {
+    cd cryptyrust
+    printf "r%s.%s" "$(git rev-list --count HEAD)" "$(git rev-parse --short HEAD)"
+}
+
+prepare() {
+    cd cryptyrust
+    export RUSTUP_TOOLCHAIN=stable
+    cargo fetch --target "$(rustc -vV | sed -n 's/host: //p')"
+}
+
+build() {
+    cd cryptyrust
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    cargo build --release --workspace
+}
+
+check() {
+    cd cryptyrust
+    export RUSTUP_TOOLCHAIN=stable
+    cargo test --release --workspace
+}
+
+package() {
+    cd cryptyrust
+    install -Dm755 "target/release/cryptyrust_cli" "$pkgdir/usr/bin/cryptyrust_cli"
+    install -Dm755 "target/release/cryptyrust"     "$pkgdir/usr/bin/cryptyrust"
+    install -Dm644 "LICENSE"    "$pkgdir/usr/share/licenses/${pkgname%-git}/LICENSE"
+    install -Dm644 "README.md"  "$pkgdir/usr/share/doc/${pkgname%-git}/README.md"
+    install -Dm644 "FORMAT.md"  "$pkgdir/usr/share/doc/${pkgname%-git}/FORMAT.md"
+}
