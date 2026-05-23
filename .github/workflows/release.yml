@@ -250,13 +250,17 @@ jobs:
           Copy-Item target\release\cryptyrust_cli.exe dist\
           Compress-Archive -Path dist\* -DestinationPath cryptyrust-windows-portable.zip
 
+      - name: Install NSIS
+        shell: pwsh
+        run: choco install nsis -y --no-progress
+
       - name: Build NSIS installer
         shell: pwsh
         run: |
           Copy-Item target\release\cryptyrust.exe     packaging\windows\
           Copy-Item target\release\cryptyrust_cli.exe packaging\windows\
           Copy-Item gui\assets\icon.ico               packaging\windows\
-          makensis /DVERSION=${{ steps.version.outputs.VERSION }} packaging\windows\installer.nsi
+          & "C:\Program Files (x86)\NSIS\makensis.exe" /DVERSION=${{ steps.version.outputs.VERSION }} packaging\windows\installer.nsi
           Move-Item packaging\windows\cryptyrust-windows-setup.exe .
 
       - uses: actions/upload-artifact@v4
