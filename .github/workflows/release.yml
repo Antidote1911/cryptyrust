@@ -57,7 +57,7 @@ jobs:
             --executable target/release/cryptyrust \
             --executable target/release/cryptyrust_cli \
             --desktop-file packaging/linux/cryptyrust.desktop \
-            --icon-file packaging/icon.png \
+            --icon-file packaging/cryptyrust.png \
             --output appimage
 
       - uses: actions/upload-artifact@v4
@@ -109,15 +109,15 @@ jobs:
       - name: PNG → .icns (outils natifs macOS)
         run: |
           mkdir -p cryptyrust.iconset
-          sips -z 16   16   packaging/icon.png --out cryptyrust.iconset/icon_16x16.png
-          sips -z 32   32   packaging/icon.png --out cryptyrust.iconset/icon_16x16@2x.png
-          sips -z 32   32   packaging/icon.png --out cryptyrust.iconset/icon_32x32.png
-          sips -z 64   64   packaging/icon.png --out cryptyrust.iconset/icon_32x32@2x.png
-          sips -z 128  128  packaging/icon.png --out cryptyrust.iconset/icon_128x128.png
-          sips -z 256  256  packaging/icon.png --out cryptyrust.iconset/icon_128x128@2x.png
-          sips -z 256  256  packaging/icon.png --out cryptyrust.iconset/icon_256x256.png
-          sips -z 512  512  packaging/icon.png --out cryptyrust.iconset/icon_256x256@2x.png
-          sips -z 512  512  packaging/icon.png --out cryptyrust.iconset/icon_512x512.png
+          sips -z 16   16   packaging/cryptyrust.png --out cryptyrust.iconset/icon_16x16.png
+          sips -z 32   32   packaging/cryptyrust.png --out cryptyrust.iconset/icon_16x16@2x.png
+          sips -z 32   32   packaging/cryptyrust.png --out cryptyrust.iconset/icon_32x32.png
+          sips -z 64   64   packaging/cryptyrust.png --out cryptyrust.iconset/icon_32x32@2x.png
+          sips -z 128  128  packaging/cryptyrust.png --out cryptyrust.iconset/icon_128x128.png
+          sips -z 256  256  packaging/cryptyrust.png --out cryptyrust.iconset/icon_128x128@2x.png
+          sips -z 256  256  packaging/cryptyrust.png --out cryptyrust.iconset/icon_256x256.png
+          sips -z 512  512  packaging/cryptyrust.png --out cryptyrust.iconset/icon_256x256@2x.png
+          sips -z 512  512  packaging/cryptyrust.png --out cryptyrust.iconset/icon_512x512.png
           cp cryptyrust.iconset/icon_512x512.png cryptyrust.iconset/icon_512x512@2x.png
           iconutil -c icns cryptyrust.iconset -o cryptyrust.icns
 
