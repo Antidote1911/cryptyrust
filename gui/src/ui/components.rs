@@ -150,46 +150,55 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
                 app.show_about = false;
             }
 
-            ui.add_space(4.0);
+            ui.add_space(8.0);
 
             ui.vertical_centered(|ui| {
                 ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("🔐").size(24.0));
-                    ui.add_space(8.0);
+                    ui.label(egui::RichText::new("🔐").size(32.0));
+                    ui.add_space(10.0);
                     ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("Cryptyrust").size(16.0).strong());
+                        ui.label(egui::RichText::new("Cryptyrust").size(22.0).strong());
                         ui.label(
                             egui::RichText::new(format!(
                                 "v{}  —  by Antidote1911",
                                 env!("CARGO_PKG_VERSION")
                             ))
+                            .size(13.0)
                             .weak(),
                         );
-                        ui.label(egui::RichText::new("Fast, authenticated file encryption").weak());
+                        ui.label(
+                            egui::RichText::new("Fast, authenticated file encryption")
+                                .size(13.0)
+                                .weak(),
+                        );
                     });
                 });
             });
 
-            ui.add_space(8.0);
+            ui.add_space(10.0);
             ui.separator();
-            ui.add_space(6.0);
+            ui.add_space(8.0);
 
             ui.horizontal(|ui| {
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("🔒 Algorithms").strong());
-                    ui.add_space(2.0);
-                    ui.label("XChaCha20-Poly1305");
-                    ui.label("AES-256-GCM");
-                    ui.label("AES-256-GCM-SIV");
+                    ui.label(egui::RichText::new("Algorithms").size(13.0).strong());
+                    ui.add_space(3.0);
+                    ui.label(egui::RichText::new("XChaCha20-Poly1305").size(13.0));
+                    ui.label(egui::RichText::new("AES-256-GCM").size(13.0));
+                    ui.label(egui::RichText::new("AES-256-GCM-SIV").size(13.0));
                 });
 
-                ui.add_space(20.0);
+                ui.add_space(24.0);
 
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("🔑 Key Derivation").strong());
-                    ui.add_space(2.0);
-                    ui.label("Argon2id");
-                    ui.label(egui::RichText::new("• Interactive, Moderate, Sensitive").weak());
+                    ui.label(egui::RichText::new("Key Derivation").size(13.0).strong());
+                    ui.add_space(3.0);
+                    ui.label(egui::RichText::new("Argon2id").size(13.0));
+                    ui.label(
+                        egui::RichText::new("Interactive · Moderate · Sensitive")
+                            .size(12.0)
+                            .weak(),
+                    );
                 });
             });
 

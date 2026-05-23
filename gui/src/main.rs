@@ -8,6 +8,19 @@ mod ui;
 
 use eframe::egui;
 
+fn setup_fonts(ctx: &egui::Context) {
+    let mut style = (*ctx.style()).clone();
+    style.text_styles = [
+        (egui::TextStyle::Heading, egui::FontId::proportional(20.0)),
+        (egui::TextStyle::Body, egui::FontId::proportional(15.0)),
+        (egui::TextStyle::Button, egui::FontId::proportional(15.0)),
+        (egui::TextStyle::Small, egui::FontId::proportional(12.0)),
+        (egui::TextStyle::Monospace, egui::FontId::monospace(14.0)),
+    ]
+    .into();
+    ctx.set_style(style);
+}
+
 fn main() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -24,6 +37,7 @@ fn main() -> Result<(), eframe::Error> {
         "Cryptyrust",
         options,
         Box::new(|cc| {
+            setup_fonts(&cc.egui_ctx);
             let system_dark = cc
                 .egui_ctx
                 .system_theme()
