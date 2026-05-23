@@ -119,86 +119,88 @@ pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
 }
 
 pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
-    egui::Window::new("About Cryptyrust")
-        .collapsible(false)
-        .resizable(false)
-        .movable(false)
-        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .fixed_size(egui::vec2(380.0, 200.0))
-        .show(ctx, |ui| {
-            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
-                app.show_about = false;
-            }
+    let modal =
+        egui::Modal::new(egui::Id::new("about_modal")).backdrop_color(egui::Color32::TRANSPARENT);
 
-            ui.add_space(8.0);
+    let response = modal.show(ctx, |ui| {
+        ui.set_min_width(380.0);
 
-            ui.vertical_centered(|ui| {
-                ui.horizontal(|ui| {
-                    ui.label(egui::RichText::new("🔐").size(32.0));
-                    ui.add_space(10.0);
-                    ui.vertical(|ui| {
-                        ui.label(egui::RichText::new("Cryptyrust").size(22.0).strong());
-                        ui.label(
-                            egui::RichText::new(format!(
-                                "v{}  —  by Antidote1911",
-                                env!("CARGO_PKG_VERSION")
-                            ))
-                            .size(13.0)
-                            .weak(),
-                        );
-                        ui.label(
-                            egui::RichText::new("Fast, authenticated file encryption")
-                                .size(13.0)
-                                .weak(),
-                        );
-                    });
-                });
-            });
+        if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+            app.show_about = false;
+        }
 
-            ui.add_space(10.0);
-            ui.separator();
-            ui.add_space(8.0);
+        ui.add_space(8.0);
 
+        ui.vertical_centered(|ui| {
             ui.horizontal(|ui| {
+                ui.label(egui::RichText::new("🔐").size(32.0));
+                ui.add_space(10.0);
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("Algorithms").size(13.0).strong());
-                    ui.add_space(3.0);
-                    ui.label(egui::RichText::new("XChaCha20-Poly1305").size(13.0));
-                    ui.label(egui::RichText::new("AES-256-GCM").size(13.0));
-                    ui.label(egui::RichText::new("AES-256-GCM-SIV").size(13.0));
-                });
-
-                ui.add_space(24.0);
-
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("Key Derivation").size(13.0).strong());
-                    ui.add_space(3.0);
-                    ui.label(egui::RichText::new("Argon2id").size(13.0));
+                    ui.label(egui::RichText::new("Cryptyrust").size(22.0).strong());
                     ui.label(
-                        egui::RichText::new("Interactive · Moderate · Sensitive")
-                            .size(12.0)
+                        egui::RichText::new(format!(
+                            "v{}  —  by Antidote1911",
+                            env!("CARGO_PKG_VERSION")
+                        ))
+                        .size(13.0)
+                        .weak(),
+                    );
+                    ui.label(
+                        egui::RichText::new("Fast, authenticated file encryption")
+                            .size(13.0)
                             .weak(),
                     );
                 });
             });
+        });
 
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(4.0);
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(8.0);
 
-            ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("Built with Rust • eframe/egui").weak());
+        ui.horizontal(|ui| {
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("Algorithms").size(13.0).strong());
+                ui.add_space(3.0);
+                ui.label(egui::RichText::new("XChaCha20-Poly1305").size(13.0));
+                ui.label(egui::RichText::new("AES-256-GCM").size(13.0));
+                ui.label(egui::RichText::new("AES-256-GCM-SIV").size(13.0));
+            });
 
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    if ui
-                        .add(egui::Button::new("Close").min_size(egui::vec2(50.0, 20.0)))
-                        .clicked()
-                    {
-                        app.show_about = false;
-                    }
-                });
+            ui.add_space(24.0);
+
+            ui.vertical(|ui| {
+                ui.label(egui::RichText::new("Key Derivation").size(13.0).strong());
+                ui.add_space(3.0);
+                ui.label(egui::RichText::new("Argon2id").size(13.0));
+                ui.label(
+                    egui::RichText::new("Interactive · Moderate · Sensitive")
+                        .size(12.0)
+                        .weak(),
+                );
             });
         });
+
+        ui.add_space(8.0);
+        ui.separator();
+        ui.add_space(4.0);
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Built with Rust • eframe/egui").weak());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui
+                    .add(egui::Button::new("Close").min_size(egui::vec2(50.0, 20.0)))
+                    .clicked()
+                {
+                    app.show_about = false;
+                }
+            });
+        });
+    });
+
+    if response.should_close() {
+        app.show_about = false;
+    }
 }
 
 pub fn render_warning_banner(ui: &mut egui::Ui) {
