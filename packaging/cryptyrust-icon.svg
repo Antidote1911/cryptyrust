@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <defs>
+    <!-- Masque : blanc = visible, noir = découpé -->
+    <mask id="keyhole">
+      <rect width="1024" height="1024" fill="white"/>
+      <circle cx="512" cy="652" r="66" fill="black"/>
+      <rect x="479" y="652" width="66" height="96" rx="17" fill="black"/>
+    </mask>
+  </defs>
+
+  <!-- Shackle -->
+  <path d="M 330 560 L 330 395 A 182 182 0 0 1 694 395 L 694 560"
+        fill="none"
+        stroke="#f0a500"
+        stroke-width="76"
+        stroke-linecap="round"/>
+
+  <!-- Corps avec trou de serrure découpé -->
+  <rect x="205" y="526" width="614" height="318" rx="62" fill="#f0a500" mask="url(#keyhole)"/>
+</svg>

@@ -134,9 +134,11 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
         ui.vertical_centered(|ui| {
             ui.horizontal(|ui| {
                 ui.add(
-                    egui::Image::new(egui::include_image!("../../../packaging/cryptyrust.png"))
-                        .fit_to_exact_size(egui::vec2(120.0, 120.0))
-                        .rounding(12.0),
+                    egui::Image::new(egui::include_image!(
+                        "../../../packaging/cryptyrust-icon.png"
+                    ))
+                    .fit_to_exact_size(egui::vec2(120.0, 120.0))
+                    .rounding(12.0),
                 );
                 ui.add_space(10.0);
                 ui.vertical(|ui| {
