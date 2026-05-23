@@ -13,7 +13,12 @@ fn main() -> Result<(), eframe::Error> {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([900.0, 600.0])
             .with_min_inner_size([600.0, 400.0])
-            .with_icon(eframe::icon_data::from_png_bytes(&[]).unwrap_or_default()),
+            .with_icon(
+                eframe::icon_data::from_png_bytes(
+                    include_bytes!("../../packaging/cryptyrust.png"),
+                )
+                .unwrap_or_default(),
+            ),
         ..Default::default()
     };
 
