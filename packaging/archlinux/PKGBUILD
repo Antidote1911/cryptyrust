@@ -1,6 +1,6 @@
 # Maintainer: Fabrice Corraire <antidote1911@gmail.com>
 pkgname=cryptyrust
-pkgver=1.2.0
+pkgver=1.2.1
 pkgrel=1
 pkgdesc="Simple cross-platform file encryption with a drag-and-drop GUI and a CLI"
 arch=('x86_64' 'aarch64')
@@ -35,7 +35,11 @@ package() {
     cd "$pkgname-$pkgver"
     install -Dm755 "target/release/cryptyrust_cli" "$pkgdir/usr/bin/cryptyrust_cli"
     install -Dm755 "target/release/cryptyrust"     "$pkgdir/usr/bin/cryptyrust"
-    install -Dm644 "LICENSE"    "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
-    install -Dm644 "README.md"  "$pkgdir/usr/share/doc/$pkgname/README.md"
-    install -Dm644 "FORMAT.md"  "$pkgdir/usr/share/doc/$pkgname/FORMAT.md"
+    install -Dm644 "packaging/linux/cryptyrust.desktop" \
+        "$pkgdir/usr/share/applications/cryptyrust.desktop"
+    install -Dm644 "packaging/icon.png" \
+        "$pkgdir/usr/share/icons/hicolor/1024x1024/apps/cryptyrust.png"
+    install -Dm644 "LICENSE"   "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
+    install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm644 "FORMAT.md" "$pkgdir/usr/share/doc/$pkgname/FORMAT.md"
 }

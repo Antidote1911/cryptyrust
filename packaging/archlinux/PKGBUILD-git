@@ -42,7 +42,11 @@ package() {
     cd cryptyrust
     install -Dm755 "target/release/cryptyrust_cli" "$pkgdir/usr/bin/cryptyrust_cli"
     install -Dm755 "target/release/cryptyrust"     "$pkgdir/usr/bin/cryptyrust"
-    install -Dm644 "LICENSE"    "$pkgdir/usr/share/licenses/${pkgname%-git}/LICENSE"
-    install -Dm644 "README.md"  "$pkgdir/usr/share/doc/${pkgname%-git}/README.md"
-    install -Dm644 "FORMAT.md"  "$pkgdir/usr/share/doc/${pkgname%-git}/FORMAT.md"
+    install -Dm644 "packaging/linux/cryptyrust.desktop" \
+        "$pkgdir/usr/share/applications/cryptyrust.desktop"
+    install -Dm644 "packaging/icon.png" \
+        "$pkgdir/usr/share/icons/hicolor/1024x1024/apps/cryptyrust.png"
+    install -Dm644 "LICENSE"   "$pkgdir/usr/share/licenses/${pkgname%-git}/LICENSE"
+    install -Dm644 "README.md" "$pkgdir/usr/share/doc/${pkgname%-git}/README.md"
+    install -Dm644 "FORMAT.md" "$pkgdir/usr/share/doc/${pkgname%-git}/FORMAT.md"
 }
