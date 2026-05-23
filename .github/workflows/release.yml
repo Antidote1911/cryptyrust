@@ -16,16 +16,24 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install rsvg-convert
-        run: sudo apt-get install -y librsvg2-bin
+      - name: Install tools
+        run: sudo apt-get install -y librsvg2-bin imagemagick
 
       - name: SVG → PNG 1024×1024
         run: rsvg-convert -w 1024 -h 1024 packaging/icon.svg -o icon.png
+
+      - name: PNG → ICO (multi-résolution, pour Windows)
+        run: convert icon.png -define icon:auto-resize=256,128,64,48,32,16 icon.ico
 
       - uses: actions/upload-artifact@v4
         with:
           name: icon-png
           path: icon.png
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: icon-ico
+          path: icon.ico
 
   # ── Linux AppImage ─────────────────────────────────────────────────────────
   build-linux:
@@ -206,10 +214,22 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Download icon
+      - name: Download icon PNG
         uses: actions/download-artifact@v4
         with:
           name: icon-png
+
+      - name: Download icon ICO
+        uses: actions/download-artifact@v4
+        with:
+          name: icon-ico
+
+      - name: Place ICO for build.rs
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force gui\assets | Out-Null
+          Copy-Item icon.ico gui\assets\icon.ico
+          if (-not (Test-Path gui\assets\icon.ico)) { throw "icon.ico manquant" }
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -225,12 +245,6 @@ jobs:
             target
           key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: windows-cargo-
-
-      - name: PNG → ICO  (ImageMagick pré-installé sur windows-latest)
-        shell: pwsh
-        run: |
-          New-Item -ItemType Directory -Force gui\assets | Out-Null
-          magick icon.png -define icon:auto-resize=256,128,64,48,32,16 gui\assets\icon.ico
 
       - name: Build release binaries
         run: cargo build --release
