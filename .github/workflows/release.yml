@@ -9,9 +9,29 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
-  build-linux:
-    name: Build – Linux x86_64
+  # ── Render SVG icon once, share as artifact ───────────────────────────────
+  prepare-icons:
+    name: Render icon
     runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install rsvg-convert
+        run: sudo apt-get install -y librsvg2-bin
+
+      - name: SVG → PNG 1024×1024
+        run: rsvg-convert -w 1024 -h 1024 packaging/icon.svg -o icon.png
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: icon-png
+          path: icon.png
+
+  # ── Linux AppImage ─────────────────────────────────────────────────────────
+  build-linux:
+    name: Build – Linux x86_64 (AppImage)
+    runs-on: ubuntu-latest
+    needs: prepare-icons
 
     steps:
       - uses: actions/checkout@v4
@@ -22,6 +42,11 @@ jobs:
           sudo apt-get install -y \
             libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
             libxkbcommon-dev libssl-dev pkg-config
+
+      - name: Download icon
+        uses: actions/download-artifact@v4
+        with:
+          name: icon-png
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -39,25 +64,57 @@ jobs:
       - name: Build release binaries
         run: cargo build --release
 
-      - name: Package
+      - name: Download appimagetool
         run: |
-          mkdir dist
-          cp target/release/cryptyrust_cli dist/
-          cp target/release/cryptyrust     dist/
-          tar -czf cryptyrust-linux-x86_64.tar.gz -C dist .
+          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" \
+            -O appimagetool
+          chmod +x appimagetool
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Create AppDir
+        run: |
+          mkdir -p AppDir/usr/bin
+          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
+          mkdir -p AppDir/usr/share/applications
+
+          cp target/release/cryptyrust     AppDir/usr/bin/
+          cp target/release/cryptyrust_cli AppDir/usr/bin/
+          cp icon.png AppDir/cryptyrust.png
+          cp icon.png AppDir/usr/share/icons/hicolor/256x256/apps/cryptyrust.png
+          cp packaging/linux/cryptyrust.desktop AppDir/cryptyrust.desktop
+          cp packaging/linux/cryptyrust.desktop AppDir/usr/share/applications/cryptyrust.desktop
+
+          cat > AppDir/AppRun << 'APPRUN'
+          #!/bin/bash
+          SELF="$(readlink -f "$0")"
+          HERE="${SELF%/*}"
+          exec "${HERE}/usr/bin/cryptyrust" "$@"
+          APPRUN
+          chmod +x AppDir/AppRun
+
+      - name: Build AppImage
+        env:
+          ARCH: x86_64
+          APPIMAGE_EXTRACT_AND_RUN: "1"
+        run: ./appimagetool AppDir cryptyrust-linux-x86_64.AppImage
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: cryptyrust-linux-x86_64
-          path: cryptyrust-linux-x86_64.tar.gz
+          name: cryptyrust-linux-appimage
+          path: cryptyrust-linux-x86_64.AppImage
 
+  # ── macOS Universal DMG ────────────────────────────────────────────────────
   build-macos:
-    name: Build – macOS x86_64 + arm64
+    name: Build – macOS Universal (DMG)
     runs-on: macos-latest
+    needs: prepare-icons
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download icon
+        uses: actions/download-artifact@v4
+        with:
+          name: icon-png
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -82,7 +139,7 @@ jobs:
 
       - name: Create universal binaries
         run: |
-          mkdir dist
+          mkdir -p dist
           lipo -create \
             target/x86_64-apple-darwin/release/cryptyrust_cli \
             target/aarch64-apple-darwin/release/cryptyrust_cli \
@@ -91,20 +148,68 @@ jobs:
             target/x86_64-apple-darwin/release/cryptyrust \
             target/aarch64-apple-darwin/release/cryptyrust \
             -output dist/cryptyrust
-          tar -czf cryptyrust-macos-universal.tar.gz -C dist .
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: PNG → .icns
+        run: |
+          mkdir -p cryptyrust.iconset
+          sips -z 16   16   icon.png --out cryptyrust.iconset/icon_16x16.png
+          sips -z 32   32   icon.png --out cryptyrust.iconset/icon_16x16@2x.png
+          sips -z 32   32   icon.png --out cryptyrust.iconset/icon_32x32.png
+          sips -z 64   64   icon.png --out cryptyrust.iconset/icon_32x32@2x.png
+          sips -z 128  128  icon.png --out cryptyrust.iconset/icon_128x128.png
+          sips -z 256  256  icon.png --out cryptyrust.iconset/icon_128x128@2x.png
+          sips -z 256  256  icon.png --out cryptyrust.iconset/icon_256x256.png
+          sips -z 512  512  icon.png --out cryptyrust.iconset/icon_256x256@2x.png
+          sips -z 512  512  icon.png --out cryptyrust.iconset/icon_512x512.png
+          sips -z 1024 1024 icon.png --out cryptyrust.iconset/icon_512x512@2x.png
+          iconutil -c icns cryptyrust.iconset -o cryptyrust.icns
+
+      - name: Create .app bundle
+        run: |
+          mkdir -p "Cryptyrust.app/Contents/MacOS"
+          mkdir -p "Cryptyrust.app/Contents/Resources"
+          cp dist/cryptyrust              "Cryptyrust.app/Contents/MacOS/cryptyrust"
+          cp dist/cryptyrust_cli          "Cryptyrust.app/Contents/MacOS/cryptyrust_cli"
+          cp cryptyrust.icns              "Cryptyrust.app/Contents/Resources/cryptyrust.icns"
+          cp packaging/macos/Info.plist   "Cryptyrust.app/Contents/Info.plist"
+
+      - name: Install create-dmg
+        run: brew install create-dmg
+
+      - name: Create DMG
+        run: |
+          mkdir dmg-staging
+          cp -r "Cryptyrust.app" dmg-staging/
+          create-dmg \
+            --volname "Cryptyrust" \
+            --volicon "cryptyrust.icns" \
+            --window-pos 200 120 \
+            --window-size 660 400 \
+            --icon-size 100 \
+            --icon "Cryptyrust.app" 180 170 \
+            --hide-extension "Cryptyrust.app" \
+            --app-drop-link 480 170 \
+            "cryptyrust-macos.dmg" \
+            "dmg-staging/"
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: cryptyrust-macos-universal
-          path: cryptyrust-macos-universal.tar.gz
+          name: cryptyrust-macos-dmg
+          path: cryptyrust-macos.dmg
 
+  # ── Windows portable + installer ──────────────────────────────────────────
   build-windows:
     name: Build – Windows x86_64
     runs-on: windows-latest
+    needs: prepare-icons
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Download icon
+        uses: actions/download-artifact@v4
+        with:
+          name: icon-png
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -121,23 +226,50 @@ jobs:
           key: windows-cargo-${{ hashFiles('**/Cargo.lock') }}
           restore-keys: windows-cargo-
 
+      - name: PNG → ICO  (ImageMagick pré-installé sur windows-latest)
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force gui\assets | Out-Null
+          magick icon.png -define icon:auto-resize=256,128,64,48,32,16 gui\assets\icon.ico
+
       - name: Build release binaries
         run: cargo build --release
 
-      - name: Package
+      - name: Get version
+        id: version
         shell: pwsh
         run: |
-          New-Item -ItemType Directory -Force dist
-          Copy-Item target\release\cryptyrust_cli.exe dist\
+          $v = "${{ github.ref_name }}" -replace '^v', ''
+          "VERSION=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
+
+      - name: Package portable ZIP
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target\release\cryptyrust.exe     dist\
-          Compress-Archive -Path dist\* -DestinationPath cryptyrust-windows-x86_64.zip
+          Copy-Item target\release\cryptyrust_cli.exe dist\
+          Compress-Archive -Path dist\* -DestinationPath cryptyrust-windows-portable.zip
 
-      - name: Upload artifact
-        uses: actions/upload-artifact@v4
+      - name: Build NSIS installer
+        shell: pwsh
+        run: |
+          Copy-Item target\release\cryptyrust.exe     packaging\windows\
+          Copy-Item target\release\cryptyrust_cli.exe packaging\windows\
+          Copy-Item gui\assets\icon.ico               packaging\windows\
+          makensis /DVERSION=${{ steps.version.outputs.VERSION }} packaging\windows\installer.nsi
+          Move-Item packaging\windows\cryptyrust-windows-setup.exe .
+
+      - uses: actions/upload-artifact@v4
         with:
-          name: cryptyrust-windows-x86_64
-          path: cryptyrust-windows-x86_64.zip
+          name: cryptyrust-windows-portable
+          path: cryptyrust-windows-portable.zip
 
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cryptyrust-windows-setup
+          path: cryptyrust-windows-setup.exe
+
+  # ── GitHub Release ─────────────────────────────────────────────────────────
   release:
     name: Create GitHub Release
     needs: [build-linux, build-macos, build-windows]
@@ -146,26 +278,18 @@ jobs:
       contents: write
 
     steps:
-      - name: Download Linux artifact
+      - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
-          name: cryptyrust-linux-x86_64
-
-      - name: Download macOS artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: cryptyrust-macos-universal
-
-      - name: Download Windows artifact
-        uses: actions/download-artifact@v4
-        with:
-          name: cryptyrust-windows-x86_64
+          pattern: cryptyrust-*
+          merge-multiple: true
 
       - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            cryptyrust-linux-x86_64.tar.gz
-            cryptyrust-macos-universal.tar.gz
-            cryptyrust-windows-x86_64.zip
+            cryptyrust-linux-x86_64.AppImage
+            cryptyrust-macos.dmg
+            cryptyrust-windows-portable.zip
+            cryptyrust-windows-setup.exe
           generate_release_notes: true

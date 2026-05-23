@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=Cryptyrust
+Comment=Simple cross-platform file encryption
+Exec=cryptyrust
+Icon=cryptyrust
+Type=Application
+Categories=Utility;Security;
+Terminal=false
+StartupNotify=true

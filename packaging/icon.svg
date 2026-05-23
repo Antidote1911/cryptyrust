@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024">
+  <!-- Dark background, rounded corners like macOS/Windows icons -->
+  <rect width="1024" height="1024" rx="200" fill="#1e1e2e"/>
+
+  <!-- Padlock shackle: two vertical legs + top arc -->
+  <!-- Arc center at (512, 395), radius 182 → legs at x=330 and x=694 -->
+  <path d="M 330 560 L 330 395 A 182 182 0 0 1 694 395 L 694 560"
+        fill="none"
+        stroke="#f0a500"
+        stroke-width="76"
+        stroke-linecap="round"/>
+
+  <!-- Padlock body -->
+  <rect x="205" y="526" width="614" height="318" rx="62" fill="#f0a500"/>
+
+  <!-- Keyhole: circle + downward stem -->
+  <circle cx="512" cy="652" r="66" fill="#1e1e2e"/>
+  <rect x="479" y="652" width="66" height="96" rx="17" fill="#1e1e2e"/>
+</svg>
