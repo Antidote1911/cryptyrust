@@ -60,7 +60,7 @@ fn setup_fonts(ctx: &egui::Context) {
 
     ctx.set_fonts(fonts);
 
-    let mut style = (*ctx.style()).clone();
+    let mut style = (*ctx.global_style()).clone();
     style.text_styles = [
         (egui::TextStyle::Heading, egui::FontId::proportional(20.0)),
         (egui::TextStyle::Body, egui::FontId::proportional(15.0)),
@@ -69,7 +69,7 @@ fn setup_fonts(ctx: &egui::Context) {
         (egui::TextStyle::Monospace, egui::FontId::monospace(14.0)),
     ]
     .into();
-    ctx.set_style(style);
+    ctx.set_global_style(style);
 }
 
 fn main() -> Result<(), eframe::Error> {

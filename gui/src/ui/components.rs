@@ -138,7 +138,7 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
                         "../../../packaging/cryptyrust-icon.png"
                     ))
                     .fit_to_exact_size(egui::vec2(120.0, 120.0))
-                    .rounding(12.0),
+                    .corner_radius(12.0),
                 );
                 ui.add_space(10.0);
                 ui.vertical(|ui| {
