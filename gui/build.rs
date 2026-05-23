@@ -7,11 +7,7 @@ fn main() {
         let icon = std::path::PathBuf::from(&manifest)
             .join("assets")
             .join("icon.ico");
-        assert!(
-            icon.exists(),
-            "icon.ico introuvable : {}",
-            icon.display()
-        );
+        assert!(icon.exists(), "icon.ico introuvable : {}", icon.display());
         winres::WindowsResource::new()
             .set_icon(icon.to_str().unwrap())
             .compile()
