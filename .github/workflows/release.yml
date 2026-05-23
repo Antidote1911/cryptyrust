@@ -118,7 +118,7 @@ jobs:
           sips -z 256  256  packaging/icon.png --out cryptyrust.iconset/icon_256x256.png
           sips -z 512  512  packaging/icon.png --out cryptyrust.iconset/icon_256x256@2x.png
           sips -z 512  512  packaging/icon.png --out cryptyrust.iconset/icon_512x512.png
-          sips -z 1024 1024 packaging/icon.png --out cryptyrust.iconset/icon_512x512@2x.png
+          cp cryptyrust.iconset/icon_512x512.png cryptyrust.iconset/icon_512x512@2x.png
           iconutil -c icns cryptyrust.iconset -o cryptyrust.icns
 
       - name: Create .app bundle
