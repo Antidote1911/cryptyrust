@@ -23,6 +23,7 @@ _rustc_info.json
 .vscode
 build-cryptyrust-*
 .DS_Store
+Thumbs.db
 gui/.qmake.stash
 gui/Makefile
 gui/Makefile.Debug
