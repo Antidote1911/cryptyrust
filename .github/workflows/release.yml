@@ -40,38 +40,25 @@ jobs:
       - name: Build release binaries
         run: cargo build --release
 
-      - name: Download appimagetool
+      - name: Download linuxdeploy
         run: |
-          wget -q "https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage" \
-            -O appimagetool
-          chmod +x appimagetool
+          wget -q "https://github.com/linuxdeploy/linuxdeploy/releases/download/continuous/linuxdeploy-x86_64.AppImage" \
+            -O linuxdeploy
+          chmod +x linuxdeploy
 
-      - name: Create AppDir
-        run: |
-          mkdir -p AppDir/usr/bin
-          mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
-          mkdir -p AppDir/usr/share/applications
-
-          cp target/release/cryptyrust     AppDir/usr/bin/
-          cp target/release/cryptyrust_cli AppDir/usr/bin/
-          cp packaging/icon.png AppDir/cryptyrust.png
-          cp packaging/icon.png AppDir/usr/share/icons/hicolor/256x256/apps/cryptyrust.png
-          cp packaging/linux/cryptyrust.desktop AppDir/cryptyrust.desktop
-          cp packaging/linux/cryptyrust.desktop AppDir/usr/share/applications/cryptyrust.desktop
-
-          cat > AppDir/AppRun << 'APPRUN'
-          #!/bin/bash
-          SELF="$(readlink -f "$0")"
-          HERE="${SELF%/*}"
-          exec "${HERE}/usr/bin/cryptyrust" "$@"
-          APPRUN
-          chmod +x AppDir/AppRun
-
-      - name: Build AppImage
+      - name: Build AppImage (linuxdeploy bundle les .so)
         env:
           ARCH: x86_64
           APPIMAGE_EXTRACT_AND_RUN: "1"
-        run: ./appimagetool AppDir cryptyrust-linux-x86_64.AppImage
+          OUTPUT: cryptyrust-linux-x86_64.AppImage
+        run: |
+          ./linuxdeploy \
+            --appdir AppDir \
+            --executable target/release/cryptyrust \
+            --executable target/release/cryptyrust_cli \
+            --desktop-file packaging/linux/cryptyrust.desktop \
+            --icon-file packaging/icon.png \
+            --output appimage
 
       - uses: actions/upload-artifact@v4
         with:
