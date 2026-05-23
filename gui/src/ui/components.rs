@@ -119,26 +119,6 @@ pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
 }
 
 pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
-    let screen_rect = ctx.viewport_rect();
-    let overlay_id = egui::Id::new("about_overlay");
-
-    egui::Area::new(overlay_id)
-        .fixed_pos(screen_rect.min)
-        .show(ctx, |ui| {
-            let overlay_rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), screen_rect.size());
-            ui.scope_builder(egui::UiBuilder::new().max_rect(overlay_rect), |ui| {
-                let (rect, response) =
-                    ui.allocate_exact_size(overlay_rect.size(), egui::Sense::click());
-
-                ui.painter()
-                    .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(128));
-
-                if response.clicked() {
-                    app.show_about = false;
-                }
-            });
-        });
-
     egui::Window::new("About Cryptyrust")
         .collapsible(false)
         .resizable(false)
