@@ -1,6 +1,6 @@
 # Maintainer: Fabrice Corraire <antidote1911@gmail.com>
 pkgname=cryptyrust
-pkgver=1.2.1
+pkgver=1.2.2
 pkgrel=1
 pkgdesc="Simple cross-platform file encryption with a drag-and-drop GUI and a CLI"
 arch=('x86_64' 'aarch64')
