@@ -133,7 +133,11 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
 
         ui.vertical_centered(|ui| {
             ui.horizontal(|ui| {
-                ui.label(egui::RichText::new("🔐").size(32.0));
+                ui.add(
+                    egui::Image::new(egui::include_image!("../../../packaging/cryptyrust.png"))
+                        .max_size(egui::vec2(52.0, 52.0))
+                        .rounding(8.0),
+                );
                 ui.add_space(10.0);
                 ui.vertical(|ui| {
                     ui.label(egui::RichText::new("Cryptyrust").size(22.0).strong());
