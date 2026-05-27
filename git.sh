@@ -275,19 +275,23 @@ do_init() {
 }
 
 do_full_reset() {
-  title "⚠️  Reset total du dépôt"
+  title "⚠️  Reset total du dépôt (Clean Slate)"
 
   local branch remote confirm_word init_msg
-  branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "main")
+  branch=$(git symbolic-ref --short HEAD 2>/dev/null || echo "master")
   remote=$(git remote get-url origin 2>/dev/null || echo "")
 
   echo -e "  ${RED}${BOLD}ATTENTION — Cette opération est IRRÉVERSIBLE.${RESET}"
   echo ""
   echo -e "  Ce qui va se passer :"
-  echo -e "  ${GREEN}✔${RESET} Tes fichiers actuels sont conservés"
+  echo -e "  ${GREEN}✔${RESET} Tes fichiers actuels sont conservés localement"
   echo -e "  ${RED}✖${RESET} Tout l'historique Git local est supprimé"
   [[ -n "$remote" ]] && \
-  echo -e "  ${RED}✖${RESET} L'historique sur GitHub est écrasé (force push)"
+  echo -e "  ${RED}✖${RESET} L'historique GitHub est écrasé (force push)"
+  [[ -n "$remote" ]] && \
+  echo -e "  ${RED}✖${RESET} TOUS les Tags distants seront supprimés"
+  echo -e "  ${RED}✖${RESET} TOUTES les Releases GitHub seront supprimées (via 'gh')"
+  echo -e "  ${RED}✖${RESET} TOUTES les Pull Requests ouvertes seront fermées (via 'gh')"
   echo -e "  ${GREEN}✔${RESET} Un seul nouveau commit initial sera créé"
   echo ""
   echo -e "  Branche : ${GREEN}${branch}${RESET}"
@@ -306,7 +310,50 @@ do_full_reset() {
   init_msg="${init_msg:-Initial commit}"
 
   echo ""
-  info "Suppression du dossier .git..."
+  if [[ -n "$remote" ]]; then
+    info "Nettoyage distant (GitHub) en cours..."
+    
+    # 1. Suppression de tous les tags distants
+    info "Suppression des tags distants..."
+    local remote_tags
+    remote_tags=$(git ls-remote --tags origin 2>/dev/null | awk -F/ '{print $3}' | sed 's/\^{}//' | sort -u)
+    if [[ -n "$remote_tags" ]]; then
+      while IFS= read -r t; do
+        [[ -n "$t" ]] && git push origin --delete "$t" 2>/dev/null || true
+      done <<< "$remote_tags"
+      success "Tags distants supprimés."
+    else
+      info "Aucun tag distant trouvé."
+    fi
+
+    # 2. Utilisation de GitHub CLI pour PRs et Releases
+    if command -v gh &>/dev/null && gh auth status &>/dev/null; then
+      info "Fermeture des Pull Requests (GitHub)..."
+      local prs
+      prs=$(gh pr list --state open --json number --jq '.[].number' 2>/dev/null)
+      if [[ -n "$prs" ]]; then
+        while IFS= read -r pr; do
+          [[ -n "$pr" ]] && gh pr close "$pr" -m "Fermeture automatique (Reset total du dépôt)" 2>/dev/null || true
+        done <<< "$prs"
+        success "Pull Requests fermées."
+      fi
+      
+      info "Suppression des Releases (GitHub)..."
+      local releases
+      releases=$(gh release list 2>/dev/null | awk '{print $1}')
+      if [[ -n "$releases" ]]; then
+        while IFS= read -r r; do
+          [[ -n "$r" ]] && gh release delete "$r" --yes 2>/dev/null || true
+        done <<< "$releases"
+        success "Releases supprimées."
+      fi
+    else
+      warn "CLI GitHub ('gh') non trouvée ou non connectée. Ignoré pour les PRs et Releases."
+    fi
+  fi
+
+  # 3. Nettoyage local
+  info "Suppression du dossier .git local..."
   rm -rf .git
 
   info "Réinitialisation du dépôt..."
@@ -319,6 +366,7 @@ do_full_reset() {
   git commit -m "$init_msg"
   success "Nouveau commit initial créé : \"${init_msg}\""
 
+  # 4. Push du dépôt tout neuf
   if [[ -n "$remote" ]]; then
     git remote add origin "$remote"
     info "Force push vers origin/${branch}..."
@@ -329,7 +377,7 @@ do_full_reset() {
   fi
 
   echo ""
-  success "✅ Reset terminé. Historique effacé, fichiers intacts."
+  success "✅ Reset total terminé. Le dépôt est vierge (historique, tags, releases effacés)."
 }
 
 do_purge_large_file() {
