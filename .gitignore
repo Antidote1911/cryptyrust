@@ -138,3 +138,4 @@ dist/
 __pycache__/
 .idea/
 build/
+.claude/
