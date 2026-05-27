@@ -1,7 +1,7 @@
 use eframe::egui;
 
 use crate::app::CryptyApp;
-use crate::file_utils::{algo_label, Mode};
+use crate::file_utils::{arsenic_strength_label, is_cryptyrust_file, Mode};
 use crate::job::JobState;
 use crate::ui::components;
 
@@ -60,12 +60,12 @@ pub fn render_bottom_bar(app: &CryptyApp, ui: &mut egui::Ui) {
         .show_inside(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.label(egui::RichText::new("🔒").size(13.0).weak());
-                ui.label(egui::RichText::new(algo_label(app.algorithm)));
+                ui.label(egui::RichText::new("Arsenic V2"));
                 ui.separator();
                 ui.label(egui::RichText::new("🔑").size(13.0).weak());
                 ui.label(egui::RichText::new(format!(
-                    "Argon2id · {:?}",
-                    app.strength
+                    "Argon2id · {}",
+                    arsenic_strength_label(app.arsenic_strength)
                 )));
             });
         });
@@ -79,7 +79,13 @@ pub fn render_action_bar(
 ) {
     let can_act = !app.files.is_empty() && !app.mixed && !is_running && !popup_open;
 
+    let can_change_pw = app.files.len() == 1
+        && is_cryptyrust_file(&app.files[0])
+        && !is_running
+        && !popup_open;
+
     let mut do_open_popup = false;
+    let mut do_change_pw = false;
     let mut do_clear = false;
     let mut do_add = false;
 
@@ -102,6 +108,18 @@ pub fn render_action_bar(
 
                 if ui.add_enabled(can_act, btn).clicked() {
                     do_open_popup = true;
+                }
+
+                ui.add_space(12.0);
+
+                if ui
+                    .add_enabled(
+                        can_change_pw,
+                        egui::Button::new("🔑  Change password").min_size(egui::vec2(140.0, 32.0)),
+                    )
+                    .clicked()
+                {
+                    do_change_pw = true;
                 }
 
                 ui.add_space(12.0);
@@ -132,6 +150,9 @@ pub fn render_action_bar(
 
     if do_open_popup {
         app.open_popup();
+    }
+    if do_change_pw {
+        app.open_change_pw_popup();
     }
     if do_clear {
         app.clear_all();

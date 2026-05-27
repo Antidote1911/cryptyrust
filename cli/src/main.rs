@@ -1,3 +1,4 @@
+use cryptyrust_core::arsenic::ArsenicParams;
 use cryptyrust_core::pem::{is_pem_cryptyrust_file, PemReader, PemWriter};
 use cryptyrust_core::*;
 mod cli;
@@ -16,6 +17,7 @@ use std::result::Result::Ok;
 
 const FILE_EXTENSION: &str = ".crypty";
 const PEM_EXTENSION: &str = ".crypty.pem";
+const ARSENIC_EXTENSION: &str = ".arsn";
 
 struct ProgressUpdater {
     mode: Direction,
@@ -91,8 +93,19 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
         None
     };
 
-    // --pem triggers PEM output on encrypt; on decrypt it is always auto-detected
-    let is_pem = match &direction {
+    // Detect format: Arsenic V2 (.arsn) takes priority over PEM.
+    // On encrypt: --arsenic flag selects Arsenic V2.
+    // On decrypt: auto-detect by magic bytes.
+    let is_arsenic = match &direction {
+        Direction::Encrypt => app.arsenic(),
+        Direction::Decrypt => filename
+            .map(|f| is_arsenic_file(Path::new(f)))
+            .unwrap_or(false),
+    };
+
+    // --pem triggers PEM output on encrypt; on decrypt it is always auto-detected.
+    // PEM is skipped when Arsenic V2 is in use.
+    let is_pem = !is_arsenic && match &direction {
         Direction::Encrypt => app.pem(),
         Direction::Decrypt => filename
             .map(|f| is_pem_cryptyrust_file(Path::new(f)))
@@ -100,7 +113,7 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
     };
 
     let output_path = {
-        let s = generate_output_path(&direction, filename, app.output(), is_pem)
+        let s = generate_output_path(&direction, filename, app.output(), is_pem, is_arsenic)
             .unwrap()
             .to_str()
             .ok_or("could not convert output path to string")
@@ -123,7 +136,21 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
 
     let out_str = output_path.as_deref().unwrap();
 
-    let duration = if is_pem {
+    let duration = if is_arsenic {
+        let ui = Box::new(ProgressUpdater::new(direction.clone()));
+        let params = ArsenicParams::from(app.arsenic_strength());
+        match arsenic_main_routine(
+            &direction,
+            filename,
+            Some(out_str),
+            &password,
+            ui,
+            Some(params),
+        ) {
+            Ok(d) => d,
+            Err(e) => return Err(anyhow!(e)),
+        }
+    } else if is_pem {
         let in_path = filename.unwrap();
         let ui = ProgressUpdater::new(direction.clone());
         let start = Instant::now();
@@ -229,11 +256,12 @@ fn generate_output_path(
     input: Option<&str>,
     output: Option<&str>,
     is_pem: bool,
+    is_arsenic: bool,
 ) -> Result<PathBuf, String> {
     if let Some(output) = output {
         let p = PathBuf::from(output);
         if p.exists() && p.is_dir() {
-            generate_default_filename(mode, p, input, is_pem)
+            generate_default_filename(mode, p, input, is_pem, is_arsenic)
         } else if p.exists() && p.is_file() {
             Err(format!("Error: file {:?} already exists. Must choose new filename or specify directory to generate default filename.", p))
         } else {
@@ -241,7 +269,7 @@ fn generate_output_path(
         }
     } else {
         let cwd = env::current_dir().map_err(|e| e.to_string())?;
-        generate_default_filename(mode, cwd, input, is_pem)
+        generate_default_filename(mode, cwd, input, is_pem, is_arsenic)
     }
 }
 
@@ -250,12 +278,15 @@ fn generate_default_filename(
     path: PathBuf,
     name: Option<&str>,
     is_pem: bool,
+    is_arsenic: bool,
 ) -> Result<PathBuf, String> {
     let mut path = path;
     let f = match mode {
         Direction::Encrypt => {
             let base = name.unwrap_or("encrypted").to_string();
-            let ext = if is_pem {
+            let ext = if is_arsenic {
+                ARSENIC_EXTENSION
+            } else if is_pem {
                 PEM_EXTENSION
             } else {
                 FILE_EXTENSION
@@ -264,7 +295,9 @@ fn generate_default_filename(
         }
         Direction::Decrypt => {
             let name = name.unwrap_or("stdin");
-            if name.ends_with(PEM_EXTENSION) {
+            if name.ends_with(ARSENIC_EXTENSION) {
+                name.strip_suffix(ARSENIC_EXTENSION).unwrap().to_string()
+            } else if name.ends_with(PEM_EXTENSION) {
                 name.strip_suffix(PEM_EXTENSION).unwrap().to_string()
             } else if name.ends_with(".pem") {
                 name.strip_suffix(".pem").unwrap().to_string()

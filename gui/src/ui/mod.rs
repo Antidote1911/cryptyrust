@@ -12,7 +12,7 @@ impl UI {
     pub fn render(app: &mut CryptyApp, ui: &mut egui::Ui) {
         let ctx = ui.ctx().clone();
         let is_running = matches!(app.job, JobState::Running { .. });
-        let popup_open = app.popup == PasswordPopup::Open;
+        let popup_open = !matches!(app.popup, PasswordPopup::Closed);
 
         // Menu bar
         layouts::render_menu_bar(app, ui, is_running, popup_open);
@@ -31,6 +31,9 @@ impl UI {
         // Popup
         if app.popup == PasswordPopup::Open {
             components::render_password_popup(app, &ctx);
+        }
+        if app.popup == PasswordPopup::ChangePw {
+            components::render_change_pw_popup(app, &ctx);
         }
 
         // About window

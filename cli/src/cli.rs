@@ -1,5 +1,5 @@
 use clap::{ArgGroup, Parser};
-use cryptyrust_core::{Algorithm, BenchMode, DeriveStrength, HashMode};
+use cryptyrust_core::{Algorithm, ArsenicStrength, BenchMode, DeriveStrength, HashMode};
 
 const ABOUT: &str = "
 A simple but strong file encryption utility in Rust.
@@ -61,6 +61,20 @@ pub struct Cli {
     /// Encrypt to PEM (base64 text) format with .crypty.pem extension. Ignored during decryption (auto-detected).
     #[clap(long)]
     pem: bool,
+
+    /// Use Arsenic V2 format (.arsn). Ignored during decryption (auto-detected).
+    #[clap(long)]
+    arsenic: bool,
+
+    /// Argon2id strength for Arsenic V2 format. Ignored during decryption.
+    #[clap(long, value_enum, value_name = "ARSENIC_STRENGTH", default_value = "interactive")]
+    arsenic_strength: ArsenicStrengthArg,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
+pub enum ArsenicStrengthArg {
+    Interactive,
+    Sensitive,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
@@ -126,5 +140,16 @@ impl Cli {
 
     pub fn pem(&self) -> bool {
         self.pem
+    }
+
+    pub fn arsenic(&self) -> bool {
+        self.arsenic
+    }
+
+    pub fn arsenic_strength(&self) -> ArsenicStrength {
+        match self.arsenic_strength {
+            ArsenicStrengthArg::Interactive => ArsenicStrength::Interactive,
+            ArsenicStrengthArg::Sensitive => ArsenicStrength::Sensitive,
+        }
     }
 }

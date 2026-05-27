@@ -1,46 +1,28 @@
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use crate::app::CryptyApp;
-use crate::file_utils::{
-    algo_label, derive_label, get_file_size, is_cryptyrust_file, read_encryption_info, Mode,
-};
-use cryptyrust_core::{Algorithm, DeriveStrength};
+use crate::file_utils::{arsenic_strength_label, get_file_size, is_cryptyrust_file, Mode};
+use crate::job::PasswordPopup;
+use cryptyrust_core::ArsenicStrength;
 
 pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool) {
     ui.menu_button("Config", |ui| {
         ui.add_enabled_ui(!is_running, |ui| {
-            ui.label(egui::RichText::new("Algorithm").strong());
-            ui.separator();
-            ui.selectable_value(
-                &mut app.algorithm,
-                Algorithm::XChaCha20Poly1305,
-                "XChaCha20Poly1305",
-            );
-            ui.selectable_value(&mut app.algorithm, Algorithm::Aes256Gcm, "AES-256-GCM");
-            ui.selectable_value(
-                &mut app.algorithm,
-                Algorithm::Aes256GcmSiv,
-                "AES-256-GCM-SIV",
-            );
-            ui.separator();
             ui.label(egui::RichText::new("Argon2 strength").strong());
             ui.separator();
             ui.selectable_value(
-                &mut app.strength,
-                DeriveStrength::Interactive,
-                "Interactive  (fast)",
+                &mut app.arsenic_strength,
+                ArsenicStrength::Interactive,
+                arsenic_strength_label(ArsenicStrength::Interactive),
             );
-            ui.selectable_value(&mut app.strength, DeriveStrength::Moderate, "Moderate");
             ui.selectable_value(
-                &mut app.strength,
-                DeriveStrength::Sensitive,
-                "Sensitive  (slow)",
+                &mut app.arsenic_strength,
+                ArsenicStrength::Sensitive,
+                arsenic_strength_label(ArsenicStrength::Sensitive),
             );
-            ui.separator();
-            ui.checkbox(&mut app.pem_output, "PEM output (text)");
         });
     });
 }
@@ -118,6 +100,79 @@ pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
     }
 }
 
+pub fn render_change_pw_popup(app: &mut CryptyApp, ctx: &egui::Context) {
+    let mut do_ok = false;
+    let mut do_cancel = false;
+
+    egui::Window::new("Change password")
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
+        .fixed_size(egui::vec2(310.0, 10.0))
+        .show(ctx, |ui| {
+            ui.add_space(6.0);
+
+            let resp = ui.add(
+                egui::TextEdit::singleline(&mut app.cpw_old)
+                    .password(!app.cpw_show)
+                    .hint_text("Current password…")
+                    .desired_width(260.0),
+            );
+            if app.cpw_focus {
+                resp.request_focus();
+                app.cpw_focus = false;
+            }
+
+            ui.add_space(4.0);
+            ui.add(
+                egui::TextEdit::singleline(&mut app.cpw_new)
+                    .password(!app.cpw_show)
+                    .hint_text("New password…")
+                    .desired_width(260.0),
+            );
+
+            ui.add_space(4.0);
+            ui.add(
+                egui::TextEdit::singleline(&mut app.cpw_confirm)
+                    .password(!app.cpw_show)
+                    .hint_text("Confirm new password…")
+                    .desired_width(260.0),
+            );
+
+            ui.add_space(4.0);
+            ui.checkbox(&mut app.cpw_show, "Show passwords");
+
+            if let Some(err) = &app.cpw_error {
+                ui.add_space(4.0);
+                ui.colored_label(ui.visuals().error_fg_color, err);
+            }
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button("  OK  ").clicked() {
+                    do_ok = true;
+                }
+                if ui.button("Cancel").clicked() {
+                    do_cancel = true;
+                }
+            });
+
+            if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+                do_ok = true;
+            }
+            if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                do_cancel = true;
+            }
+        });
+
+    if do_ok {
+        app.validate_and_change_pw(ctx);
+    }
+    if do_cancel {
+        app.popup = PasswordPopup::Closed;
+    }
+}
+
 pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
     let modal =
         egui::Modal::new(egui::Id::new("about_modal")).backdrop_color(egui::Color32::TRANSPARENT);
@@ -166,11 +221,11 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
 
         ui.horizontal(|ui| {
             ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Algorithms").size(13.0).strong());
+                ui.label(egui::RichText::new("Arsenic V2 format").size(13.0).strong());
                 ui.add_space(3.0);
-                ui.label(egui::RichText::new("XChaCha20-Poly1305").size(13.0));
-                ui.label(egui::RichText::new("AES-256-GCM").size(13.0));
-                ui.label(egui::RichText::new("AES-256-GCM-SIV").size(13.0));
+                ui.label(egui::RichText::new("XChaCha20-Poly1305 (payload)").size(13.0));
+                ui.label(egui::RichText::new("Serpent-256-GCM (header)").size(13.0));
+                ui.label(egui::RichText::new("BLAKE3 Merkle tree integrity").size(13.0));
             });
 
             ui.add_space(24.0);
@@ -180,7 +235,7 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
                 ui.add_space(3.0);
                 ui.label(egui::RichText::new("Argon2id").size(13.0));
                 ui.label(
-                    egui::RichText::new("Interactive · Moderate · Sensitive")
+                    egui::RichText::new("Interactive · Sensitive")
                         .size(12.0)
                         .weak(),
                 );
@@ -225,7 +280,7 @@ fn header_label(ui: &mut egui::Ui, text: &str) {
     ui.label(egui::RichText::new(text).small().strong());
 }
 
-fn render_type_cell(ui: &mut egui::Ui, path: &Path, is_encrypted: bool) {
+fn render_type_cell(ui: &mut egui::Ui, is_encrypted: bool) {
     let (icon, badge) = if is_encrypted {
         ("🔒", "encrypted")
     } else {
@@ -239,9 +294,7 @@ fn render_type_cell(ui: &mut egui::Ui, path: &Path, is_encrypted: bool) {
         })
         .response;
     if is_encrypted {
-        if let Some((algo, derive)) = read_encryption_info(path) {
-            resp.on_hover_text(format!("{} · {}", algo_label(algo), derive_label(derive)));
-        }
+        resp.on_hover_text("Arsenic V2 · XChaCha20-Poly1305");
     }
 }
 
@@ -299,7 +352,7 @@ pub fn render_file_table(ui: &mut egui::Ui, files: &[PathBuf]) -> Option<usize> 
                         }
                     });
                     row.col(|ui| {
-                        render_type_cell(ui, path, is_enc);
+                        render_type_cell(ui, is_enc);
                     });
                     row.col(|ui| {
                         let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -365,7 +418,7 @@ pub fn render_processing_table(
                         }
                     });
                     row.col(|ui| {
-                        render_type_cell(ui, path, is_enc);
+                        render_type_cell(ui, is_enc);
                     });
                     row.col(|ui| {
                         let name = path.file_name().unwrap_or_default().to_string_lossy();
@@ -434,7 +487,7 @@ pub fn render_completed_table(
                         ui.label(egui::RichText::new(icon).size(14.0));
                     });
                     row.col(|ui| {
-                        render_type_cell(ui, path, is_enc);
+                        render_type_cell(ui, is_enc);
                     });
                     row.col(|ui| {
                         let name = path.file_name().unwrap_or_default().to_string_lossy();

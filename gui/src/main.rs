@@ -3,7 +3,6 @@
 mod app;
 mod file_utils;
 mod job;
-mod pem;
 mod ui;
 
 use eframe::egui;

@@ -1,4 +1,4 @@
-use cryptyrust_core::{Algorithm, DeriveStrength};
+use cryptyrust_core::ArsenicStrength;
 use eframe::egui;
 use std::path::PathBuf;
 
@@ -17,11 +17,16 @@ pub struct CryptyApp {
     pub pw_show: bool,
     pub pw_error: Option<String>,
     pub pw_focus: bool,
-    pub algorithm: Algorithm,
-    pub strength: DeriveStrength,
+    pub arsenic_strength: ArsenicStrength,
     pub show_about: bool,
     pub dark_mode: bool,
-    pub pem_output: bool,
+    // Change-password popup state
+    pub cpw_old: String,
+    pub cpw_new: String,
+    pub cpw_confirm: String,
+    pub cpw_show: bool,
+    pub cpw_error: Option<String>,
+    pub cpw_focus: bool,
 }
 
 impl CryptyApp {
@@ -31,30 +36,14 @@ impl CryptyApp {
             .and_then(|s| s.parse().ok())
             .unwrap_or(system_dark);
 
-        let pem_output = storage
-            .and_then(|s| s.get_string("pem_output"))
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(false);
-
-        let algorithm = storage
-            .and_then(|s| s.get_string("algorithm"))
+        let arsenic_strength = storage
+            .and_then(|s| s.get_string("arsenic_strength"))
             .and_then(|s| match s.as_str() {
-                "xchacha20" => Some(Algorithm::XChaCha20Poly1305),
-                "aes256gcm" => Some(Algorithm::Aes256Gcm),
-                "aes256gcmsiv" => Some(Algorithm::Aes256GcmSiv),
+                "interactive" => Some(ArsenicStrength::Interactive),
+                "sensitive" => Some(ArsenicStrength::Sensitive),
                 _ => None,
             })
-            .unwrap_or(Algorithm::XChaCha20Poly1305);
-
-        let strength = storage
-            .and_then(|s| s.get_string("strength"))
-            .and_then(|s| match s.as_str() {
-                "interactive" => Some(DeriveStrength::Interactive),
-                "moderate" => Some(DeriveStrength::Moderate),
-                "sensitive" => Some(DeriveStrength::Sensitive),
-                _ => None,
-            })
-            .unwrap_or(DeriveStrength::Moderate);
+            .unwrap_or(ArsenicStrength::Interactive);
 
         Self {
             files: vec![],
@@ -67,11 +56,15 @@ impl CryptyApp {
             pw_show: false,
             pw_error: None,
             pw_focus: false,
-            algorithm,
-            strength,
+            arsenic_strength,
             show_about: false,
             dark_mode,
-            pem_output,
+            cpw_old: String::new(),
+            cpw_new: String::new(),
+            cpw_confirm: String::new(),
+            cpw_show: false,
+            cpw_error: None,
+            cpw_focus: false,
         }
     }
 }
@@ -123,6 +116,16 @@ impl CryptyApp {
         self.popup = PasswordPopup::Open;
     }
 
+    pub fn open_change_pw_popup(&mut self) {
+        self.cpw_old.clear();
+        self.cpw_new.clear();
+        self.cpw_confirm.clear();
+        self.cpw_error = None;
+        self.cpw_show = false;
+        self.cpw_focus = true;
+        self.popup = PasswordPopup::ChangePw;
+    }
+
     pub fn validate_and_start(&mut self, ctx: &egui::Context) {
         if self.pw.is_empty() {
             self.pw_error = Some("Password cannot be empty.".into());
@@ -139,14 +142,33 @@ impl CryptyApp {
         self.start_job(ctx.clone(), password);
     }
 
+    pub fn validate_and_change_pw(&mut self, ctx: &egui::Context) {
+        if self.cpw_old.is_empty() {
+            self.cpw_error = Some("Current password cannot be empty.".into());
+            return;
+        }
+        if self.cpw_new.is_empty() {
+            self.cpw_error = Some("New password cannot be empty.".into());
+            return;
+        }
+        if self.cpw_new != self.cpw_confirm {
+            self.cpw_error = Some("New passwords do not match.".into());
+            return;
+        }
+        let old_pw = std::mem::take(&mut self.cpw_old);
+        let new_pw = std::mem::take(&mut self.cpw_new);
+        self.cpw_confirm.clear();
+        let file = self.files[0].clone();
+        self.popup = PasswordPopup::Closed;
+        self.job.start_change_pw(file, old_pw, new_pw, ctx.clone());
+    }
+
     fn start_job(&mut self, ctx: egui::Context, password: String) {
         self.job.start(
             self.files.clone(),
             self.mode,
-            self.algorithm,
-            self.strength,
+            self.arsenic_strength,
             password,
-            self.pem_output,
             ctx,
         );
     }
@@ -156,21 +178,10 @@ impl eframe::App for CryptyApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string("dark_mode", self.dark_mode.to_string());
         storage.set_string(
-            "algorithm",
-            match self.algorithm {
-                Algorithm::XChaCha20Poly1305 => "xchacha20",
-                Algorithm::Aes256Gcm => "aes256gcm",
-                Algorithm::Aes256GcmSiv => "aes256gcmsiv",
-            }
-            .to_string(),
-        );
-        storage.set_string("pem_output", self.pem_output.to_string());
-        storage.set_string(
-            "strength",
-            match self.strength {
-                DeriveStrength::Interactive => "interactive",
-                DeriveStrength::Moderate => "moderate",
-                DeriveStrength::Sensitive => "sensitive",
+            "arsenic_strength",
+            match self.arsenic_strength {
+                ArsenicStrength::Interactive => "interactive",
+                ArsenicStrength::Sensitive => "sensitive",
             }
             .to_string(),
         );
@@ -217,7 +228,6 @@ impl eframe::App for CryptyApp {
 
             let current = *current_file.lock().unwrap();
             if current == usize::MAX {
-                // Job terminé, créer les statuses finaux
                 let progress_map = progress.lock().unwrap();
                 let mut statuses = Vec::new();
 
@@ -233,7 +243,6 @@ impl eframe::App for CryptyApp {
             }
         }
 
-        // Mettre à jour l'état du job en dehors du if let
         if let Some((files, statuses)) = job_completed {
             self.job = JobState::Completed { files, statuses };
         }
