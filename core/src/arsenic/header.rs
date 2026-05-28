@@ -20,12 +20,13 @@
 //              GCM tag (16 B)
 // 0xC3-0xFF  Padding zeros                  (51)
 
-use hmac::{Hmac, Mac, KeyInit};
+use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
 use crate::errors::CoreErr;
 
 type HmacSha256 = Hmac<Sha256>;
+type ParsedHeader = (PublicHeader, [u8; PRE_MAC_LEN], [u8; 32], Vec<u8>);
 
 pub const MAGIC: [u8; 4] = [0x41, 0x52, 0x53, 0x4E]; // "ARSN"
 pub const VERSION: [u8; 2] = [0x00, 0x02];
@@ -90,16 +91,14 @@ pub fn serialize_pre_mac(hdr: &PublicHeader) -> [u8; PRE_MAC_LEN] {
 
 /// PreKey = HMAC-SHA256(key=password, data=salt)
 pub fn compute_prekey(password: &[u8], salt: &[u8; 16]) -> [u8; 32] {
-    let mut mac = HmacSha256::new_from_slice(password)
-        .expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(password).expect("HMAC accepts any key length");
     mac.update(salt);
     mac.finalize().into_bytes().into()
 }
 
 /// HeaderMAC = HMAC-SHA256(key=prekey, data=header[0x00..0x4C])
 pub fn compute_header_mac(prekey: &[u8; 32], pre_mac_bytes: &[u8; PRE_MAC_LEN]) -> [u8; 32] {
-    let mut mac = HmacSha256::new_from_slice(prekey)
-        .expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(prekey).expect("HMAC accepts any key length");
     mac.update(pre_mac_bytes);
     mac.finalize().into_bytes().into()
 }
@@ -110,8 +109,7 @@ pub fn verify_header_mac(
     pre_mac_bytes: &[u8; PRE_MAC_LEN],
     expected_mac: &[u8; 32],
 ) -> bool {
-    let mut mac = HmacSha256::new_from_slice(prekey)
-        .expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(prekey).expect("HMAC accepts any key length");
     mac.update(pre_mac_bytes);
     mac.verify_slice(expected_mac).is_ok()
 }
@@ -132,17 +130,30 @@ pub fn deserialize_envelope(buf: &[u8]) -> Result<EnvelopeContent, CoreErr> {
     if buf.len() < ENVELOPE_PT_LEN {
         return Err(CoreErr::DecryptFail("Envelope too short".into()));
     }
-    let dek: [u8; 32] = buf[0..32].try_into().map_err(|_| CoreErr::DecryptFail("DEK".into()))?;
-    let merkle_root: [u8; 32] =
-        buf[32..64].try_into().map_err(|_| CoreErr::DecryptFail("Merkle".into()))?;
+    let dek: [u8; 32] = buf[0..32]
+        .try_into()
+        .map_err(|_| CoreErr::DecryptFail("DEK".into()))?;
+    let merkle_root: [u8; 32] = buf[32..64]
+        .try_into()
+        .map_err(|_| CoreErr::DecryptFail("Merkle".into()))?;
     let original_size = u64::from_le_bytes(
-        buf[64..72].try_into().map_err(|_| CoreErr::DecryptFail("orig_size".into()))?,
+        buf[64..72]
+            .try_into()
+            .map_err(|_| CoreErr::DecryptFail("orig_size".into()))?,
     );
     let compressed_size = u64::from_le_bytes(
-        buf[72..80].try_into().map_err(|_| CoreErr::DecryptFail("comp_size".into()))?,
+        buf[72..80]
+            .try_into()
+            .map_err(|_| CoreErr::DecryptFail("comp_size".into()))?,
     );
     let block_size_id = buf[80];
-    Ok(EnvelopeContent { dek, merkle_root, original_size, compressed_size, block_size_id })
+    Ok(EnvelopeContent {
+        dek,
+        merkle_root,
+        original_size,
+        compressed_size,
+        block_size_id,
+    })
 }
 
 /// Write the complete 256-byte header to `buf`.
@@ -157,18 +168,15 @@ pub fn build_header_bytes(
     );
     let mut buf = [0u8; TOTAL_HEADER_LEN];
     let pre_mac = serialize_pre_mac(hdr);
-    buf[..PRE_MAC_LEN].copy_from_slice(&pre_mac);               // 0x00..0x4C
+    buf[..PRE_MAC_LEN].copy_from_slice(&pre_mac); // 0x00..0x4C
     buf[PRE_MAC_LEN..PUB_HEADER_LEN].copy_from_slice(header_mac); // 0x4C..0x6C
-    buf[PUB_HEADER_LEN..PUB_HEADER_LEN + ENVELOPE_ENC_LEN]
-        .copy_from_slice(encrypted_envelope);                   // 0x6C..0xC3
-    // 0xC3..0x100 remain zero (padding)
+    buf[PUB_HEADER_LEN..PUB_HEADER_LEN + ENVELOPE_ENC_LEN].copy_from_slice(encrypted_envelope); // 0x6C..0xC3
+                                                                                                // 0xC3..0x100 remain zero (padding)
     buf
 }
 
 /// Parse the 256-byte header bytes, returning the public header and the raw encrypted envelope.
-pub fn parse_header_bytes(
-    bytes: &[u8; TOTAL_HEADER_LEN],
-) -> Result<(PublicHeader, [u8; PRE_MAC_LEN], [u8; 32], Vec<u8>), CoreErr> {
+pub fn parse_header_bytes(bytes: &[u8; TOTAL_HEADER_LEN]) -> Result<ParsedHeader, CoreErr> {
     // Check magic
     if bytes[0..4] != MAGIC {
         return Err(CoreErr::BadSignature);
@@ -177,11 +185,13 @@ pub fn parse_header_bytes(
         return Err(CoreErr::BadHeaderVersion);
     }
 
-    let pre_mac: [u8; PRE_MAC_LEN] =
-        bytes[..PRE_MAC_LEN].try_into().expect("slice is exactly PRE_MAC_LEN");
+    let pre_mac: [u8; PRE_MAC_LEN] = bytes[..PRE_MAC_LEN]
+        .try_into()
+        .expect("slice is exactly PRE_MAC_LEN");
 
-    let header_mac: [u8; 32] =
-        bytes[PRE_MAC_LEN..PUB_HEADER_LEN].try_into().expect("32 bytes");
+    let header_mac: [u8; 32] = bytes[PRE_MAC_LEN..PUB_HEADER_LEN]
+        .try_into()
+        .expect("32 bytes");
 
     let header_total_size = u16::from_le_bytes([bytes[10], bytes[11]]);
 

@@ -79,10 +79,8 @@ pub fn render_action_bar(
 ) {
     let can_act = !app.files.is_empty() && !app.mixed && !is_running && !popup_open;
 
-    let can_change_pw = app.files.len() == 1
-        && is_cryptyrust_file(&app.files[0])
-        && !is_running
-        && !popup_open;
+    let can_change_pw =
+        app.files.len() == 1 && is_cryptyrust_file(&app.files[0]) && !is_running && !popup_open;
 
     let mut do_open_popup = false;
     let mut do_change_pw = false;

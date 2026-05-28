@@ -52,7 +52,6 @@ impl Ui for ScaledProgress {
     }
 }
 
-
 impl JobState {
     pub fn start(
         &mut self,
@@ -89,39 +88,37 @@ impl JobState {
                     let in_path = path.to_string_lossy().to_string();
 
                     let success = match mode {
-                        Mode::Encrypt => {
-                            match create_unique_output_file(&in_path, ".arsn") {
-                                Err(e) => {
-                                    report_error(&file_statuses, i, e.to_string());
-                                    false
-                                }
-                                Ok((out_path, _claim)) => {
-                                    let ui: Box<dyn Ui> = Box::new(ScaledProgress {
-                                        tx: tx.clone(),
-                                        file_index: i,
-                                    });
-                                    let params = ArsenicParams::from(arsenic_strength);
-                                    match arsenic_main_routine(
-                                        &Direction::Encrypt,
-                                        Some(&in_path),
-                                        Some(&out_path),
-                                        &Secret::new(password.clone()),
-                                        ui,
-                                        Some(params),
-                                    ) {
-                                        Ok(_) => {
-                                            let _ = tx.send((i, 100));
-                                            true
-                                        }
-                                        Err(e) => {
-                                            let _ = std::fs::remove_file(&out_path);
-                                            report_error(&file_statuses, i, e.to_string());
-                                            false
-                                        }
+                        Mode::Encrypt => match create_unique_output_file(&in_path, ".arsn") {
+                            Err(e) => {
+                                report_error(&file_statuses, i, e.to_string());
+                                false
+                            }
+                            Ok((out_path, _claim)) => {
+                                let ui: Box<dyn Ui> = Box::new(ScaledProgress {
+                                    tx: tx.clone(),
+                                    file_index: i,
+                                });
+                                let params = ArsenicParams::from(arsenic_strength);
+                                match arsenic_main_routine(
+                                    &Direction::Encrypt,
+                                    Some(&in_path),
+                                    Some(&out_path),
+                                    &Secret::new(password.clone()),
+                                    ui,
+                                    Some(params),
+                                ) {
+                                    Ok(_) => {
+                                        let _ = tx.send((i, 100));
+                                        true
+                                    }
+                                    Err(e) => {
+                                        let _ = std::fs::remove_file(&out_path);
+                                        report_error(&file_statuses, i, e.to_string());
+                                        false
                                     }
                                 }
                             }
-                        }
+                        },
                         Mode::Decrypt => {
                             let base = if in_path.ends_with(".arsn") {
                                 in_path.trim_end_matches(".arsn").to_string()
@@ -234,7 +231,10 @@ fn do_change_pw_arsenic(
         path,
         &Secret::new(old_pw.to_string()),
         &Secret::new(new_pw.to_string()),
-        &ScaledProgress { tx: tx.clone(), file_index: 0 },
+        &ScaledProgress {
+            tx: tx.clone(),
+            file_index: 0,
+        },
     )?;
     Ok(())
 }

@@ -3,6 +3,7 @@ pub(crate) mod header;
 mod serpent_gcm;
 
 pub use crypto::{decrypt_arsenic, encrypt_arsenic, rekey_arsenic};
+pub use header::TOTAL_HEADER_LEN;
 
 // Safety limits (DoS protection)
 pub const MAX_ARGON2_RAM_KB: u32 = 8 * 1024 * 1024; // 8 GB

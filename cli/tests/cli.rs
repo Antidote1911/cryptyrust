@@ -4,20 +4,10 @@ use std::process::Command;
 
 const ORIGINAL: &str = "tests/loremipsum.txt";
 
-fn encrypt_file(input: &str, output: &std::path::Path, password: &str, algo: &str) {
+fn encrypt_file(input: &str, output: &std::path::Path, password: &str) {
     Command::cargo_bin("cryptyrust_cli")
         .unwrap()
-        .args([
-            "-e",
-            input,
-            "-p",
-            password,
-            "-s",
-            "interactive",
-            "-a",
-            algo,
-            "-o",
-        ])
+        .args(["-e", input, "-p", password, "-o"])
         .arg(output)
         .assert()
         .success();
@@ -34,101 +24,70 @@ fn decrypt_file(input: &std::path::Path, output: &std::path::Path, password: &st
         .success();
 }
 
-fn check_roundtrip(algo: &str) {
+fn check_roundtrip(strength: &str) {
     let temp = assert_fs::TempDir::new().unwrap();
-    let encrypted = temp.child("out.crypty");
+    let encrypted = temp.child("out.arsn");
     let decrypted = temp.child("out.txt");
 
-    encrypt_file(ORIGINAL, encrypted.path(), "testpassword", algo);
-    decrypt_file(encrypted.path(), decrypted.path(), "testpassword");
-
-    let original_bytes = std::fs::read(ORIGINAL).unwrap();
-    let decrypted_bytes = std::fs::read(decrypted.path()).unwrap();
-    assert_eq!(
-        original_bytes, decrypted_bytes,
-        "round-trip mismatch for algo={}",
-        algo
-    );
-
-    temp.close().unwrap();
-}
-
-#[test]
-fn roundtrip_xchacha20() {
-    check_roundtrip("chacha");
-}
-
-#[test]
-fn roundtrip_aesgcm() {
-    check_roundtrip("aesgcm");
-}
-
-#[test]
-fn roundtrip_aesgcmsiv() {
-    check_roundtrip("aesgcmsiv");
-}
-
-fn encrypt_file_pem(input: &str, output: &std::path::Path, password: &str, algo: &str) {
     Command::cargo_bin("cryptyrust_cli")
         .unwrap()
         .args([
             "-e",
-            input,
+            ORIGINAL,
             "-p",
-            password,
-            "-s",
-            "interactive",
-            "-a",
-            algo,
-            "--pem",
+            "testpassword",
+            "--strength",
+            strength,
             "-o",
         ])
-        .arg(output)
+        .arg(encrypted.path())
         .assert()
         .success();
-}
 
-fn check_roundtrip_pem(algo: &str) {
-    let temp = assert_fs::TempDir::new().unwrap();
-    let encrypted = temp.child("out.crypty.pem");
-    let decrypted = temp.child("out.txt");
-
-    encrypt_file_pem(ORIGINAL, encrypted.path(), "testpassword", algo);
     decrypt_file(encrypted.path(), decrypted.path(), "testpassword");
 
     let original_bytes = std::fs::read(ORIGINAL).unwrap();
     let decrypted_bytes = std::fs::read(decrypted.path()).unwrap();
     assert_eq!(
         original_bytes, decrypted_bytes,
-        "PEM round-trip mismatch for algo={}",
-        algo
+        "round-trip mismatch for strength={}",
+        strength
     );
 
     temp.close().unwrap();
 }
 
 #[test]
-fn roundtrip_pem_xchacha20() {
-    check_roundtrip_pem("chacha");
+fn roundtrip_interactive() {
+    check_roundtrip("interactive");
 }
 
 #[test]
-fn roundtrip_pem_aesgcm() {
-    check_roundtrip_pem("aesgcm");
-}
+fn roundtrip_default() {
+    let temp = assert_fs::TempDir::new().unwrap();
+    let encrypted = temp.child("out.arsn");
+    let decrypted = temp.child("out.txt");
 
-#[test]
-fn roundtrip_pem_aesgcmsiv() {
-    check_roundtrip_pem("aesgcmsiv");
+    encrypt_file(ORIGINAL, encrypted.path(), "testpassword");
+    decrypt_file(encrypted.path(), decrypted.path(), "testpassword");
+
+    let original_bytes = std::fs::read(ORIGINAL).unwrap();
+    let decrypted_bytes = std::fs::read(decrypted.path()).unwrap();
+    assert_eq!(
+        original_bytes, decrypted_bytes,
+        "default round-trip mismatch"
+    );
+
+    temp.close().unwrap();
 }
 
 #[test]
 fn wrong_password_fails() {
     let temp = assert_fs::TempDir::new().unwrap();
-    let encrypted = temp.child("out.crypty");
+    let encrypted = temp.child("out.arsn");
     let decrypted = temp.child("out.txt");
 
-    encrypt_file(ORIGINAL, encrypted.path(), "correct_password", "aesgcm");
+    encrypt_file(ORIGINAL, encrypted.path(), "correct_password");
 
     Command::cargo_bin("cryptyrust_cli")
         .unwrap()

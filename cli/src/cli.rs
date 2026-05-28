@@ -1,5 +1,5 @@
 use clap::{ArgGroup, Parser};
-use cryptyrust_core::{Algorithm, ArsenicStrength, BenchMode, DeriveStrength, HashMode};
+use cryptyrust_core::ArsenicStrength;
 
 const ABOUT: &str = "
 A simple but strong file encryption utility in Rust.
@@ -10,7 +10,7 @@ Github : https://github.com/Antidote1911/
 #[derive(Parser)]
 #[clap(about=ABOUT, author, version)]
 #[clap(group(ArgGroup::new("mode").required(true)
-.args(&["encrypt", "decrypt"]),
+.args(&["encrypt", "decrypt", "rekey"]),
 ))]
 #[clap(group(ArgGroup::new("passwordflags")
 .args(&["password", "passwordfile"]),
@@ -24,70 +24,35 @@ pub struct Cli {
     #[clap(long, short, value_name = "FILE_TO_DECRYPT")]
     decrypt: Option<String>,
 
-    /// Specifies the output file.
+    /// Change the password of an encrypted .arsn file in-place.
+    #[clap(long, short = 'k', value_name = "FILE_TO_REKEY")]
+    rekey: Option<String>,
+
+    /// Specifies the output file. Ignored in rekey mode.
     #[clap(long, short, value_name = "PATH_TO_OUTPUT_FILE")]
     output: Option<String>,
 
-    /// Not recommended due to the password appearing in shell history.
+    /// Not recommended due to the password appearing in shell history. Ignored in rekey mode.
     #[clap(short, long, value_name = "PASSWORD")]
     password: Option<String>,
 
-    /// Choose algorithm. Ignored in decryption mode
-    #[clap(short, long, value_enum, value_name = "ALGO", default_value = "aesgcm")]
-    algo: Algo,
+    /// File should be valid UTF-8 and contain only the password with no newline. Ignored in rekey mode.
+    #[clap(short = 'f', long, value_name = "PASSWORD_FILE")]
+    passwordfile: Option<String>,
 
-    /// Choose password derivation strength
+    /// Argon2id strength. Ignored during decryption and rekey.
     #[clap(
-        short,
         long,
         value_enum,
         value_name = "STRENGTH",
         default_value = "interactive"
     )]
-    strength: Strength,
-
-    /// File should be valid UTF-8 and contain only the password with no newline.
-    #[clap(short = 'f', long, value_name = "PASSWORD_FILE")]
-    passwordfile: Option<String>,
-
-    /// Optional, output hash
-    #[clap(long)]
-    hash: bool,
-
-    /// Optional, bench mode
-    #[clap(long)]
-    bench: bool,
-
-    /// Encrypt to PEM (base64 text) format with .crypty.pem extension. Ignored during decryption (auto-detected).
-    #[clap(long)]
-    pem: bool,
-
-    /// Use Arsenic V2 format (.arsn). Ignored during decryption (auto-detected).
-    #[clap(long)]
-    arsenic: bool,
-
-    /// Argon2id strength for Arsenic V2 format. Ignored during decryption.
-    #[clap(long, value_enum, value_name = "ARSENIC_STRENGTH", default_value = "interactive")]
-    arsenic_strength: ArsenicStrengthArg,
+    strength: StrengthArg,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
-pub enum ArsenicStrengthArg {
+pub enum StrengthArg {
     Interactive,
-    Sensitive,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
-pub enum Algo {
-    Aesgcm,
-    Chacha,
-    Aesgcmsiv,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
-pub enum Strength {
-    Interactive,
-    Moderate,
     Sensitive,
 }
 
@@ -107,49 +72,14 @@ impl Cli {
     pub fn decrypt(&self) -> Option<&str> {
         self.decrypt.as_deref()
     }
-
-    pub fn algo(&self) -> Algorithm {
-        match self.algo {
-            Algo::Aesgcm => Algorithm::Aes256Gcm,
-            Algo::Aesgcmsiv => Algorithm::Aes256GcmSiv,
-            Algo::Chacha => Algorithm::XChaCha20Poly1305,
-        }
+    pub fn rekey(&self) -> Option<&str> {
+        self.rekey.as_deref()
     }
 
-    pub fn strength(&self) -> DeriveStrength {
+    pub fn strength(&self) -> ArsenicStrength {
         match self.strength {
-            Strength::Interactive => DeriveStrength::Interactive,
-            Strength::Moderate => DeriveStrength::Moderate,
-            Strength::Sensitive => DeriveStrength::Sensitive,
-        }
-    }
-
-    pub fn hash(&self) -> HashMode {
-        match self.hash {
-            true => HashMode::CalculateHash,
-            false => HashMode::NoHash,
-        }
-    }
-
-    pub fn bench(&self) -> BenchMode {
-        match self.bench {
-            true => BenchMode::BenchmarkInMemory,
-            false => BenchMode::WriteToFilesystem,
-        }
-    }
-
-    pub fn pem(&self) -> bool {
-        self.pem
-    }
-
-    pub fn arsenic(&self) -> bool {
-        self.arsenic
-    }
-
-    pub fn arsenic_strength(&self) -> ArsenicStrength {
-        match self.arsenic_strength {
-            ArsenicStrengthArg::Interactive => ArsenicStrength::Interactive,
-            ArsenicStrengthArg::Sensitive => ArsenicStrength::Sensitive,
+            StrengthArg::Interactive => ArsenicStrength::Interactive,
+            StrengthArg::Sensitive => ArsenicStrength::Sensitive,
         }
     }
 }

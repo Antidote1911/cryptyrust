@@ -13,8 +13,7 @@ pub(crate) struct SerpentGcm {
 
 impl SerpentGcm {
     pub fn new(key: &[u8; 32]) -> Result<Self, CoreErr> {
-        let cipher =
-            SerpentCipher::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
+        let cipher = SerpentCipher::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
         Ok(Self { cipher })
     }
 
@@ -60,10 +59,8 @@ impl SerpentGcm {
         if ciphertext_with_tag.len() < 16 {
             return Err(CoreErr::DecryptionError);
         }
-        let (ct, tag_bytes) =
-            ciphertext_with_tag.split_at(ciphertext_with_tag.len() - 16);
-        let tag: [u8; 16] =
-            tag_bytes.try_into().map_err(|_| CoreErr::DecryptionError)?;
+        let (ct, tag_bytes) = ciphertext_with_tag.split_at(ciphertext_with_tag.len() - 16);
+        let tag: [u8; 16] = tag_bytes.try_into().map_err(|_| CoreErr::DecryptionError)?;
 
         let h = self.encrypt_raw(&[0u8; 16]);
         let mut j0 = [0u8; 16];

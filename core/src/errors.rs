@@ -1,17 +1,7 @@
 use thiserror::Error;
 
-/// WordCountError enumerates all possible errors returned by this library.
 #[derive(Error, Debug)]
 pub enum CoreErr {
-    #[error("Decryption failed: Cant read signature.")]
-    ReadSignature,
-
-    #[error("Decryption failed: Cant read salt.")]
-    ReadSalt,
-
-    #[error("Decryption failed: Cant read nonce.")]
-    ReadNonce,
-
     #[error("Error: Unable to create cipher with argon2id hashed key.")]
     CreateCipher,
 
@@ -21,15 +11,12 @@ pub enum CoreErr {
     #[error("Error: unable to hash password with Argon2")]
     Argon2Hash,
 
-    /// Represents a failure in decryption routine
     #[error("Decryption failed: Incorrect password or corrupted file.")]
     DecryptionError,
 
-    /// Represents a failure to read from input.
     #[error("Read error")]
     ReadError { source: std::io::Error },
 
-    /// Represents all other cases of `std::io::Error`.
     #[error("Read error: {0}")]
     IOError(#[from] std::io::Error),
 
@@ -42,8 +29,7 @@ pub enum CoreErr {
     #[error("Encryption failed: {0}")]
     EncryptFail(String),
 
-    //// Header errors
-    #[error("Decryption failed: Incorrect signature. Not a Cryptyrust encrypted file.")]
+    #[error("Decryption failed: Incorrect signature. Not a valid Arsenic V2 file.")]
     BadSignature,
 
     #[error("Decryption failed: Incorrect header version.")]

@@ -3,7 +3,7 @@
 
 # Cryptyrust
 
-**Simple cross-platform file encryption with a drag-and-drop GUI and a CLI.**
+**Cross-platform file encryption with a drag-and-drop GUI and a CLI.**
 
 Pre-built binaries for Linux, macOS (universal), and Windows are available on the [releases page](https://github.com/Antidote1911/cryptyrust/releases/latest).
 
@@ -16,139 +16,169 @@ Pre-built binaries for Linux, macOS (universal), and Windows are available on th
 - [Features](#features)
 - [Project Structure](#project-structure)
 - [CLI Usage](#cli-usage)
-- [Cryptographic Primitives](#cryptographic-primitives)
-- [Technical Description](#technical-description)
+- [GUI Usage](#gui-usage)
+- [Cryptographic Design](#cryptographic-design)
 - [Build Instructions](#build-instructions)
-  - [Linux](#linux)
-  - [macOS](#macos)
-  - [Windows](#windows)
 - [Data Loss Disclaimer](#data-loss-disclaimer)
 
 ---
 
 ## Features
 
-- Three authenticated encryption algorithms: AES-256-GCM, AES-256-GCM-SIV, XChaCha20Poly1305
-- Password-based key derivation with Argon2id (three strength levels)
-- Streaming encryption — works on files of any size
-- Optional BLAKE3 hash of the output file
-- Automatic algorithm detection on decryption
-- Optional PEM (base64 text) output format — `.crypty.pem` — CLI and GUI
+- **Arsenic V2** format (`.arsn`) — the sole supported format
+- **XChaCha20-Poly1305** block encryption with per-block key and nonce derivation
+- **Serpent-256-GCM** header cipher — protects the Data Encryption Key (DEK) envelope
+- **Argon2id** key derivation with two strength levels (Interactive / Sensitive)
+- **HMAC-SHA256 pre-authentication** — the header MAC is verified *before* running Argon2id, preventing denial-of-service via forged cost parameters
+- **BLAKE3 Merkle tree** over all encrypted blocks — full-file integrity verified before any plaintext is written
+- **Parallel block encryption and decryption** via Rayon — scales with CPU core count
+- **In-place password change** (`--rekey`) — rewrites only the 256-byte header without touching the payload, with automatic crash-safe backup and recovery
+- **DEK separation** — the Data Encryption Key is random and wrapped by the Key Encrypting Key; changing a password does not re-encrypt the payload
 - Cross-platform: Linux, Windows, macOS
-
-> **Compatibility notice:** v1.1.0 files are **not compatible** with v1.0.0. The header is now used as Additional Authenticated Data (AAD), which changes the ciphertext structure.
 
 ---
 
 ## Project Structure
 
-| Crate | Description |
-|---|---|
-| `core` | Rust encryption/decryption library (`cryptyrust_core`) |
-| `cli` | Command-line interface (`cryptyrust_cli`) |
-| `gui` | Native GUI built with [egui](https://github.com/emilk/egui) |
+| Crate | Binary | Description |
+|---|---|---|
+| `core` | — | `cryptyrust_core` library — all cryptographic logic |
+| `cli` | `cryptyrust_cli` | Command-line interface |
+| `gui` | `cryptyrust` | Native GUI built with [egui](https://github.com/emilk/egui) |
 
 ---
 
 ## CLI Usage
 
+### Encrypt a file
+
 ```bash
-# Encrypt a file (default algorithm: AES-256-GCM)
-./cryptyrust_cli -e test.mp4 -p 12345678
+# Default strength (Interactive — 256 MB Argon2id)
+cryptyrust_cli -e secret.pdf -p "correct horse battery staple"
 
-# Decrypt a file (algorithm is auto-detected)
-./cryptyrust_cli -d test.mp4.crypty -p 12345678
+# Sensitive strength (1 GB Argon2id — slower, stronger)
+cryptyrust_cli -e secret.pdf --strength sensitive -p "my passphrase"
 
-# Encrypt and show the BLAKE3 hash of the output
-./cryptyrust_cli -e test.mp4 -p 12345678 --hash
-./cryptyrust_cli -d test.mp4.crypty -p 12345678 --hash
+# Specify output file
+cryptyrust_cli -e secret.pdf -o /tmp/secret.arsn -p "my passphrase"
 
-# Choose an encryption algorithm with -a
-./cryptyrust_cli -e test.mp4 -a aesgcm    -p 12345678   # AES-256-GCM (default)
-./cryptyrust_cli -e test.mp4 -a aesgcmsiv -p 12345678   # AES-256-GCM-SIV
-./cryptyrust_cli -e test.mp4 -a chacha    -p 12345678   # XChaCha20Poly1305
-
-# Choose Argon2 key derivation strength with -s (default: interactive)
-./cryptyrust_cli -e test.mp4 -p 12345678 -s interactive  # fast, for interactive use
-./cryptyrust_cli -e test.mp4 -p 12345678 -s moderate     # balanced
-./cryptyrust_cli -e test.mp4 -p 12345678 -s sensitive    # slow, maximum security
-
-# Read the password from a file (UTF-8, no trailing newline)
-./cryptyrust_cli -e test.mp4 -f /path/to/passfile
-
-# Specify an output file name with -o
-./cryptyrust_cli -e test.mp4 -o myEncryptedFile -p 12345678
-./cryptyrust_cli -d myEncryptedFile -o myDecryptedFile -p 12345678
-
-# Run an in-memory benchmark (no file written)
-./cryptyrust_cli -e test.mp4 -p 12345678 --bench
-
-# Encrypt to PEM (base64 text) format — output: test.mp4.crypty.pem
-./cryptyrust_cli -e test.mp4 --pem -p 12345678
-
-# Decrypt a PEM file (auto-detected from file content)
-./cryptyrust_cli -d test.mp4.crypty.pem -p 12345678
+# Read password from a file (UTF-8, no trailing newline)
+cryptyrust_cli -e secret.pdf -f /path/to/passfile
 ```
 
-If no output file is specified with `-o`, Cryptyrust generates an incremental unique filename with a `.crypty` extension.
+Output: `secret.pdf.arsn` (or the path given with `-o`).
 
-The `-a` flag is ignored during decryption — the algorithm is read from the file header.
+### Decrypt a file
+
+```bash
+cryptyrust_cli -d secret.pdf.arsn -p "correct horse battery staple"
+
+# Specify output file
+cryptyrust_cli -d secret.pdf.arsn -o /tmp/secret.pdf -p "my passphrase"
+```
+
+If no `-o` is given, Cryptyrust strips the `.arsn` suffix and resolves naming collisions automatically.
+
+### Change password (rekey)
+
+```bash
+cryptyrust_cli --rekey secret.pdf.arsn
+# Prompts interactively:
+#   Current password:
+#   New password (minimum 8 characters, longer is better):
+#   Confirm new password:
+```
+
+Rekey rewrites only the 256-byte header in-place. The encrypted payload is never touched — the operation takes the same time regardless of file size. A `.bak` copy of the old header is written and flushed to disk *before* any modification; on success it is removed. If the process is interrupted (power cut, crash), the next `--rekey` call automatically restores the header from the backup.
+
+### Full flag reference
+
+```
+cryptyrust_cli [OPTIONS] --encrypt <FILE> | --decrypt <FILE> | --rekey <FILE>
+
+Options:
+  -e, --encrypt <FILE>      File to encrypt
+  -d, --decrypt <FILE>      File to decrypt
+  -k, --rekey   <FILE>      Change password of an encrypted file in-place
+  -o, --output  <PATH>      Output file or directory
+  -p, --password <PASSWORD> Password (shell history risk — prefer interactive prompt)
+  -f, --passwordfile <FILE> Read password from a file (UTF-8, no trailing newline)
+      --strength <LEVEL>    Argon2id cost: interactive (default) | sensitive
+  -h, --help                Print help
+  -V, --version             Print version
+```
 
 ---
 
-## Cryptographic Primitives
+## GUI Usage
+
+1. **Drag and drop** files onto the window (or use *File → Add files…*).
+2. Cryptyrust auto-detects the mode:
+   - All dropped files are `.arsn` → **Decrypt** mode
+   - All dropped files are plaintext → **Encrypt** mode
+   - Mixed → mode selector appears
+3. Enter your password (and confirm on encryption).
+4. Click **Encrypt** or **Decrypt**. Multiple files are processed in parallel.
+5. To **change the password** of an `.arsn` file, select it alone and use the *Change password* action from the menu.
+
+The Argon2id strength level and dark/light theme are persisted across sessions.
+
+---
+
+## Cryptographic Design
+
+### Key hierarchy
+
+```
+Password ─── Argon2id(salt, t, m, p) ──► KEK (32 bytes)
+                                            │
+                                            └─ Serpent-256-GCM ──► DEK (32 random bytes)
+                                                                      │
+                                            ┌─────────────────────────┘
+                                            │
+                         per-block key = BLAKE3_keyed_hash(DEK, block_index)
+                         per-block nonce = BLAKE3_derive_key("Arsenic V2 Block Nonce",
+                                                              base_nonce ‖ block_index)
+                                            │
+                                            └─ XChaCha20-Poly1305 ──► encrypted block
+```
+
+- The **DEK** (Data Encryption Key) is generated fresh for every encryption and stored encrypted inside the header envelope. Changing a password only re-wraps the DEK under a new KEK — the payload is untouched.
+- Block keys and nonces are deterministically derived from the DEK and the block index, so all blocks can be **encrypted and decrypted in parallel**.
+
+### Header pre-authentication
+
+Before running the expensive Argon2id derivation, Cryptyrust verifies a cheap **HMAC-SHA256 header MAC**:
+
+```
+PreKey     = HMAC-SHA256(key = password,  data = salt)
+HeaderMAC  = HMAC-SHA256(key = PreKey,    data = header[0x00..0x4C])
+```
+
+A forged or corrupted header is rejected immediately without spending Argon2id memory, preventing denial-of-service attacks based on inflated `m_cost` parameters.
+
+### Integrity verification
+
+Every encrypted block is hashed with **BLAKE3** to produce a leaf. After all blocks are decrypted, the Merkle root is recomputed and compared with the root stored in the header envelope. **No plaintext is written until the entire file passes Merkle verification.**
+
+### Argon2id strength levels
+
+| Level | t (iterations) | m (memory) | p (parallelism) | Typical cost |
+|---|---|---|---|---|
+| Interactive (default) | 4 | 256 MB | 4 | ~1–3 s |
+| Sensitive | 12 | 1 GB | 4 | ~10–30 s |
+
+### Algorithms summary
 
 | Role | Algorithm | Library |
 |---|---|---|
-| Key derivation | [Argon2id](https://github.com/RustCrypto/password-hashes/tree/master/argon2) | RustCrypto |
-| Encryption | [AES-256-GCM](https://github.com/RustCrypto/AEADs/tree/master/aes-gcm) (stream mode) | RustCrypto |
-| Encryption | [AES-256-GCM-SIV](https://github.com/RustCrypto/AEADs/tree/master/aes-gcm-siv) (stream mode) | RustCrypto |
-| Encryption | [XChaCha20Poly1305](https://github.com/RustCrypto/AEADs/tree/master/chacha20poly1305) (stream mode) | RustCrypto |
-| Integrity check | [BLAKE3](https://github.com/BLAKE3-team/BLAKE3) | BLAKE3 team |
-
-All AEAD ciphers are used in [STREAM mode](https://github.com/miscreant/meta/wiki/STREAM), which provides authenticated encryption over arbitrarily large files.
-
----
-
-## Technical Description
-
-### Key Derivation
-
-A 32-byte key is derived from the user's password and a 16-byte random salt using **Argon2id**. The salt is stored in the file header and is unique per encryption, preventing pre-computation attacks.
-
-### Nonce
-
-A random nonce is generated for each encryption:
-
-| Algorithm | Nonce length |
-|---|---|
-| AES-256-GCM | 8 bytes |
-| AES-256-GCM-SIV | 8 bytes |
-| XChaCha20Poly1305 | 20 bytes |
-
-Nonces are 4 bytes shorter than the standard size for each algorithm because STREAM mode reserves the last 4 bytes for a little-endian counter, which is incremented after each encrypted chunk.
-
-### Additional Authenticated Data (AAD)
-
-The entire 64-byte header is passed as AAD to the AEAD stream cipher. Any modification to the header (magic number, algorithm, salt, nonce, or padding) causes decryption to fail with an authentication error. This is what makes v1.1.0 files incompatible with v1.0.0.
-
-### File Format
-
-```
-[ 4 bytes ] Magic number (43 52 59 50)
-[ 2 bytes ] Header version
-[ 2 bytes ] Algorithm identifier
-[ 2 bytes ] Argon2 strength
-[16 bytes ] Argon2 salt (random)
-[16 bytes ] Reserved (zeros, for future use)
-[ N bytes ] Nonce (8 bytes for AES, 20 bytes for XChaCha20Poly1305)
-[ P bytes ] Padding (zeros, to reach a fixed 64-byte header)
-[ ...     ] Encrypted chunks (BUFFER_SIZE + 16-byte authentication tag each)
-```
-
-See [FORMAT.md](FORMAT.md) for the detailed binary format with examples.
-
-Both the CLI (`--pem` flag) and the GUI support a PEM output variant (`.crypty.pem`): the same binary structure is base64-encoded and wrapped between `-----BEGIN CRYPTYRUST ENCRYPTED DATA-----` and `-----END CRYPTYRUST ENCRYPTED DATA-----` lines, making the encrypted file safe to copy-paste as plain text. PEM files are auto-detected on decryption — no flag needed.
+| Password-based key derivation | Argon2id | RustCrypto |
+| Header envelope encryption | Serpent-256-GCM | custom (NIST SP 800-38D) |
+| Header MAC (pre-auth) | HMAC-SHA256 | RustCrypto |
+| Block encryption | XChaCha20-Poly1305 | RustCrypto |
+| Block key/nonce derivation | BLAKE3 keyed hash / derive\_key | BLAKE3 team |
+| File integrity (Merkle leaves) | BLAKE3 hash | BLAKE3 team |
+| In-memory secret handling | `Secret<T>` (zeroize on drop) | custom |
 
 ---
 
@@ -157,8 +187,15 @@ Both the CLI (`--pem` flag) and the GUI support a PEM output variant (`.crypty.p
 ### Prerequisites
 
 - [Rust toolchain](https://rustup.rs/) (stable)
+- **Linux only:** development packages for X11 (required by egui):
+  ```bash
+  # Debian / Ubuntu
+  sudo apt install libx11-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev
+  # Fedora
+  sudo dnf install libX11-devel libXrandr-devel libXi-devel
+  ```
 
-### Linux
+### Linux / macOS
 
 ```bash
 cargo build --release
@@ -166,15 +203,7 @@ cargo build --release
 # GUI:  target/release/cryptyrust
 ```
 
-### macOS
-
-```bash
-cargo build --release
-# CLI:  target/release/cryptyrust_cli
-# GUI:  target/release/cryptyrust
-```
-
-To build a universal binary (Intel + Apple Silicon):
+#### macOS universal binary (Intel + Apple Silicon)
 
 ```bash
 rustup target add x86_64-apple-darwin aarch64-apple-darwin
@@ -183,16 +212,16 @@ cargo build --release --target aarch64-apple-darwin
 lipo -create \
   target/x86_64-apple-darwin/release/cryptyrust_cli \
   target/aarch64-apple-darwin/release/cryptyrust_cli \
-  -output cryptyrust_cli
+  -output cryptyrust_cli_universal
 lipo -create \
   target/x86_64-apple-darwin/release/cryptyrust \
   target/aarch64-apple-darwin/release/cryptyrust \
-  -output cryptyrust
+  -output cryptyrust_universal
 ```
 
 ### Windows
 
-1. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **C++ build tools** workload.
+1. Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **Desktop development with C++** workload.
 2. Ensure the MSVC target is active:
    ```bat
    rustup default stable-x86_64-pc-windows-msvc
@@ -208,3 +237,5 @@ lipo -create \
 ## Data Loss Disclaimer
 
 If you lose or forget your password, **your data cannot be recovered.** There is no back door and no password recovery mechanism. Use a password manager or another secure backup of your passphrase.
+
+The `--rekey` crash-safety mechanism protects against header corruption during a password change, but it does **not** protect against forgetting the new password before it has been confirmed to work.

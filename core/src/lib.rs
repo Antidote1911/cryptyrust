@@ -1,81 +1,20 @@
+pub mod arsenic;
 mod config;
 mod constants;
-mod crypto;
 mod errors;
-mod header;
-mod keygen;
-pub mod pem;
 mod secret;
-pub mod arsenic;
 
-pub use crate::config::*;
+pub use crate::arsenic::{ArsenicParams, ArsenicStrength};
+pub use crate::config::{Direction, Ui};
 pub use crate::constants::*;
-pub use crate::crypto::*;
 pub use crate::errors::CoreErr;
 pub use crate::secret::*;
-pub use crate::arsenic::{ArsenicParams, ArsenicStrength};
 
 use std::fs::{remove_file, File, OpenOptions};
 use std::time::Instant;
 
 pub const fn get_version() -> &'static str {
     APP_VERSION
-}
-
-pub fn main_routine(c: &Config) -> Result<f64, CoreErr> {
-    let mut in_file = File::open(c.filename.as_deref().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "no input filename provided",
-        )
-    })?)?;
-    let mut out_file = File::create(c.out_file.as_deref().ok_or_else(|| {
-        std::io::Error::new(
-            std::io::ErrorKind::InvalidInput,
-            "no output filename provided",
-        )
-    })?)?;
-    let filesize = in_file.metadata()?.len();
-
-    let start = Instant::now();
-    match c.direction {
-        Direction::Encrypt => {
-            if let Err(e) = encrypt(
-                &mut in_file,
-                &mut out_file,
-                &c.password,
-                &*c.ui,
-                filesize,
-                c.algorithm,
-                c.derivestrength,
-                c.hashmode,
-                c.benchmode,
-            ) {
-                if let Some(out_file) = &c.out_file {
-                    let _ = remove_file(out_file);
-                }
-                return Err(e);
-            }
-        }
-        Direction::Decrypt => {
-            if let Err(e) = decrypt(
-                &mut in_file,
-                &mut out_file,
-                &c.password,
-                &*c.ui,
-                filesize,
-                c.hashmode,
-                c.benchmode,
-            ) {
-                if let Some(out_file) = &c.out_file {
-                    let _ = remove_file(out_file);
-                }
-                return Err(e);
-            }
-        }
-    }
-    let duration = start.elapsed().as_secs_f64();
-    Ok(duration)
 }
 
 /// Read the Argon2id parameters stored in an Arsenic V2 file header.
@@ -95,25 +34,87 @@ pub fn arsenic_read_params(path: &std::path::Path) -> Option<ArsenicParams> {
 
 /// Change the password of an Arsenic V2 file without decrypting the payload.
 ///
-/// Only the 256-byte header is rewritten: a fresh Argon2id salt is generated,
-/// the DEK envelope is re-encrypted under the new KEK, and the header MAC is
-/// recomputed. The payload blocks are not touched.
+/// A 256-byte backup of the current header is written to `<path>.bak` and
+/// flushed to disk before the in-place write begins.  On success the backup
+/// is removed.  If the process is interrupted (power cut, crash) the backup
+/// remains and is automatically used to restore the header on the next call.
 pub fn arsenic_rekey(
     path: &std::path::Path,
     old_password: &Secret<String>,
     new_password: &Secret<String>,
     ui: &dyn Ui,
 ) -> Result<(), CoreErr> {
-    let mut f = OpenOptions::new().read(true).write(true).open(path)?;
-    arsenic::rekey_arsenic(&mut f, old_password, new_password, ui)
+    use std::io::{Read, Write};
+
+    let bak_path = {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(".bak");
+        path.with_file_name(name)
+    };
+
+    // ── Detect and handle an interrupted previous rekey ───────────────────
+    if bak_path.exists() {
+        // Check whether the main file still starts with the "ARSN" magic.
+        let magic_intact = {
+            let mut magic = [0u8; 4];
+            File::open(path)
+                .and_then(|mut f| f.read_exact(&mut magic))
+                .is_ok_and(|_| magic == arsenic::header::MAGIC)
+        };
+
+        if !magic_intact {
+            // The in-place write was interrupted mid-header.  Restore from backup.
+            let backup = std::fs::read(&bak_path)?;
+            if backup.len() == arsenic::header::TOTAL_HEADER_LEN {
+                let mut f = OpenOptions::new().write(true).open(path)?;
+                f.write_all(&backup)?;
+                f.sync_all()?;
+            }
+            let _ = remove_file(&bak_path);
+            return Err(CoreErr::DecryptFail(
+                "A previous rekey was interrupted and the header was corrupted. \
+                 It has been restored from the backup. Please retry."
+                    .into(),
+            ));
+        }
+        // Magic intact → the previous rekey succeeded but cleanup was skipped.
+        // The stale backup will be overwritten in the next step.
+    }
+
+    // ── Save current 256-byte header to backup, flush to disk ────────────
+    {
+        let mut current_hdr = [0u8; arsenic::header::TOTAL_HEADER_LEN];
+        File::open(path)?.read_exact(&mut current_hdr)?;
+        let mut bak = File::create(&bak_path)?;
+        bak.write_all(&current_hdr)?;
+        // sync_all() ensures the backup is on physical storage before we
+        // modify the source file.
+        bak.sync_all()?;
+    }
+
+    // ── Perform the in-place rekey ────────────────────────────────────────
+    let result = {
+        let mut f = OpenOptions::new().read(true).write(true).open(path)?;
+        arsenic::rekey_arsenic(&mut f, old_password, new_password, ui)
+    };
+
+    // ── Remove backup only after a confirmed success ──────────────────────
+    if result.is_ok() {
+        let _ = remove_file(&bak_path);
+    }
+
+    result
 }
 
 /// Detect whether a file starts with the Arsenic V2 magic ("ARSN").
 pub fn is_arsenic_file(path: &std::path::Path) -> bool {
     use std::io::Read;
-    let Ok(mut f) = File::open(path) else { return false };
+    let Ok(mut f) = File::open(path) else {
+        return false;
+    };
     let mut magic = [0u8; 4];
-    f.read_exact(&mut magic).map_or(false, |_| magic == arsenic::header::MAGIC)
+    f.read_exact(&mut magic)
+        .is_ok_and(|_| magic == arsenic::header::MAGIC)
 }
 
 /// Encrypt or decrypt a file in Arsenic V2 format.

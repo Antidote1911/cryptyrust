@@ -1,4 +1,5 @@
 use cryptyrust_core::{
+    arsenic::TOTAL_HEADER_LEN,
     arsenic::{decrypt_arsenic, encrypt_arsenic, ArsenicParams, BLOCK_SIZE_4MB},
     arsenic_rekey, is_arsenic_file, Secret, Ui,
 };
@@ -15,7 +16,11 @@ const WRONG_PASSWORD: &str = "wrong_arsenic_password";
 
 /// Minimal Argon2id params — keeps tests fast (< 1 ms KDF).
 fn fast_params() -> ArsenicParams {
-    ArsenicParams { t_cost: 1, m_cost: 64, p_cost: 1 }
+    ArsenicParams {
+        t_cost: 1,
+        m_cost: 64,
+        p_cost: 1,
+    }
 }
 
 // ── helpers ───────────────────────────────────────────────────────────────────
@@ -238,7 +243,9 @@ fn is_arsenic_file_negative_plaintext() {
 
 #[test]
 fn is_arsenic_file_negative_nonexistent() {
-    assert!(!is_arsenic_file(std::path::Path::new("/tmp/does_not_exist_xyz.arsn")));
+    assert!(!is_arsenic_file(std::path::Path::new(
+        "/tmp/does_not_exist_xyz.arsn"
+    )));
 }
 
 // ── nonce / salt randomness ───────────────────────────────────────────────────
@@ -248,7 +255,10 @@ fn ciphertexts_are_not_deterministic() {
     let data = b"same plaintext";
     let ct1 = do_encrypt(data);
     let ct2 = do_encrypt(data);
-    assert_ne!(ct1, ct2, "random salt/nonce must produce different ciphertexts");
+    assert_ne!(
+        ct1, ct2,
+        "random salt/nonce must produce different ciphertexts"
+    );
 }
 
 // ── header fields survive a round-trip ───────────────────────────────────────
@@ -298,7 +308,10 @@ fn rekey_then_decrypt_with_new_password() {
 fn rekey_old_password_no_longer_works() {
     let tmp = do_rekey_file(b"secret", PASSWORD, "totally_different_pw");
     let rekeyed = std::fs::read(tmp.path()).expect("read");
-    assert!(do_decrypt(&rekeyed, PASSWORD).is_err(), "old password must be rejected");
+    assert!(
+        do_decrypt(&rekeyed, PASSWORD).is_err(),
+        "old password must be rejected"
+    );
 }
 
 #[test]
@@ -342,7 +355,11 @@ fn rekey_payload_unchanged() {
     let ct_after = std::fs::read(tmp.path()).expect("read");
     assert_eq!(ct_before.len(), ct_after.len(), "file size must not change");
     assert_ne!(&ct_before[..256], &ct_after[..256], "header must change");
-    assert_eq!(&ct_before[256..], &ct_after[256..], "payload must be identical");
+    assert_eq!(
+        &ct_before[256..],
+        &ct_after[256..],
+        "payload must be identical"
+    );
 }
 
 #[test]
@@ -362,7 +379,150 @@ fn rekey_large_file_payload_unchanged() {
     .expect("rekey");
 
     let ct_after = std::fs::read(tmp.path()).expect("read");
-    assert_eq!(&ct_before[256..], &ct_after[256..], "payload of 8 MB file must be identical");
+    assert_eq!(
+        &ct_before[256..],
+        &ct_after[256..],
+        "payload of 8 MB file must be identical"
+    );
     let pt = do_decrypt(&ct_after, "new_pw").expect("decrypt 8 MB after rekey");
     assert_eq!(pt, data);
+}
+
+// ── backup / crash-recovery tests ────────────────────────────────────────────
+
+fn bak_path(tmp: &NamedTempFile) -> std::path::PathBuf {
+    let mut name = tmp.path().file_name().unwrap_or_default().to_os_string();
+    name.push(".bak");
+    tmp.path().with_file_name(name)
+}
+
+#[test]
+fn rekey_creates_backup_then_removes_it_on_success() {
+    let ct = do_encrypt(b"backup lifecycle");
+    let mut tmp = NamedTempFile::new().expect("tempfile");
+    std::io::Write::write_all(&mut tmp, &ct).expect("write ct");
+    tmp.as_file_mut().sync_all().expect("sync");
+
+    // No backup before rekey
+    assert!(!bak_path(&tmp).exists(), "no .bak before rekey");
+
+    arsenic_rekey(
+        tmp.path(),
+        &Secret::new(PASSWORD.into()),
+        &Secret::new("newpw1234".into()),
+        &NoUi,
+    )
+    .expect("rekey");
+
+    // Backup must be cleaned up after success
+    assert!(
+        !bak_path(&tmp).exists(),
+        ".bak must be removed after successful rekey"
+    );
+}
+
+#[test]
+fn rekey_keeps_backup_on_failure() {
+    let ct = do_encrypt(b"keep bak on fail");
+    let mut tmp = NamedTempFile::new().expect("tempfile");
+    std::io::Write::write_all(&mut tmp, &ct).expect("write ct");
+    tmp.as_file_mut().sync_all().expect("sync");
+
+    // Wrong old password → rekey fails after backup is written
+    let _ = arsenic_rekey(
+        tmp.path(),
+        &Secret::new(WRONG_PASSWORD.into()),
+        &Secret::new("newpw1234".into()),
+        &NoUi,
+    );
+
+    // Backup must remain so the user can recover
+    assert!(
+        bak_path(&tmp).exists(),
+        ".bak must be kept after a failed rekey"
+    );
+
+    // Backup must contain exactly 256 bytes (the original header)
+    let bak = std::fs::read(bak_path(&tmp)).expect("read bak");
+    assert_eq!(
+        bak.len(),
+        TOTAL_HEADER_LEN,
+        "backup must be exactly one header"
+    );
+
+    // Main file must still be decryptable with the original password
+    let still_ct = std::fs::read(tmp.path()).expect("read main");
+    let pt = do_decrypt(&still_ct, PASSWORD).expect("original password must still work");
+    assert_eq!(pt, b"keep bak on fail");
+}
+
+#[test]
+fn rekey_stale_backup_is_silently_replaced() {
+    // Simulate a previous rekey that succeeded but left a stale .bak behind.
+    let ct = do_encrypt(b"stale bak scenario");
+    let mut tmp = NamedTempFile::new().expect("tempfile");
+    std::io::Write::write_all(&mut tmp, &ct).expect("write ct");
+    tmp.as_file_mut().sync_all().expect("sync");
+
+    // Write a stale backup with arbitrary 256-byte content.
+    let stale_content = vec![0xAB_u8; TOTAL_HEADER_LEN];
+    std::fs::write(bak_path(&tmp), &stale_content).expect("write stale bak");
+
+    // Rekey must succeed despite the stale backup being present.
+    arsenic_rekey(
+        tmp.path(),
+        &Secret::new(PASSWORD.into()),
+        &Secret::new("newpw5678".into()),
+        &NoUi,
+    )
+    .expect("rekey with stale bak must succeed");
+
+    // Backup must be removed after success.
+    assert!(!bak_path(&tmp).exists(), ".bak must be cleaned up");
+
+    // File must be decryptable with the new password.
+    let rekeyed = std::fs::read(tmp.path()).expect("read");
+    let pt = do_decrypt(&rekeyed, "newpw5678").expect("new password must work");
+    assert_eq!(pt, b"stale bak scenario");
+}
+
+#[test]
+fn rekey_corrupted_header_restored_from_backup() {
+    // Simulate a power cut that corrupted the first bytes of the header.
+    let ct = do_encrypt(b"corruption recovery");
+    let mut tmp = NamedTempFile::new().expect("tempfile");
+    std::io::Write::write_all(&mut tmp, &ct).expect("write ct");
+    tmp.as_file_mut().sync_all().expect("sync");
+
+    // Save the genuine header as the backup (as arsenic_rekey would have done).
+    let genuine_header = ct[..TOTAL_HEADER_LEN].to_vec();
+    std::fs::write(bak_path(&tmp), &genuine_header).expect("write genuine bak");
+
+    // Corrupt the first 8 bytes of the main file (wipes the "ARSN" magic).
+    let mut corrupted = ct.clone();
+    corrupted[..8].fill(0xFF);
+    std::fs::write(tmp.path(), &corrupted).expect("write corrupted file");
+
+    // arsenic_rekey must detect the corruption, restore, and return an error.
+    let result = arsenic_rekey(
+        tmp.path(),
+        &Secret::new(PASSWORD.into()),
+        &Secret::new("irrelevant".into()),
+        &NoUi,
+    );
+    assert!(
+        result.is_err(),
+        "must error after restoring corrupted header"
+    );
+
+    // Backup must be cleaned up after restore.
+    assert!(
+        !bak_path(&tmp).exists(),
+        ".bak must be removed after restore"
+    );
+
+    // Main file must now be decryptable with the original password.
+    let restored = std::fs::read(tmp.path()).expect("read restored");
+    let pt = do_decrypt(&restored, PASSWORD).expect("file must be decryptable after restore");
+    assert_eq!(pt, b"corruption recovery");
 }

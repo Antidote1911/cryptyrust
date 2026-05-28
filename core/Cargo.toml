@@ -5,11 +5,9 @@ authors.workspace = true
 edition = "2021"
 
 [dependencies]
-base64ct = { version = "1", features = ["alloc"] }
 argon2 = "0.5.3"
-aead = { version = "0.5.2", features = ["std", "stream"] }
-aes-gcm = "0.10.3"
-aes-gcm-siv = "0.11.1"
+rayon = "1.10"
+aead = { version = "0.5.2", features = ["std"] }
 chacha20poly1305 = "0.10.1"
 blake3 = "1.8.5"
 rand = "0.10.1"

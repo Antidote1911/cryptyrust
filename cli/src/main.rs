@@ -1,11 +1,8 @@
 use cryptyrust_core::arsenic::ArsenicParams;
-use cryptyrust_core::pem::{is_pem_cryptyrust_file, PemReader, PemWriter};
 use cryptyrust_core::*;
 mod cli;
 use clap::Parser;
 use cli::Cli;
-use std::fs::File;
-use std::time::Instant;
 use std::{
     env,
     path::{Path, PathBuf},
@@ -15,9 +12,9 @@ use anyhow::{anyhow, Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::result::Result::Ok;
 
-const FILE_EXTENSION: &str = ".crypty";
-const PEM_EXTENSION: &str = ".crypty.pem";
 const ARSENIC_EXTENSION: &str = ".arsn";
+
+// ── Progress UI ───────────────────────────────────────────────────────────────
 
 struct ProgressUpdater {
     mode: Direction,
@@ -49,26 +46,102 @@ impl Ui for ProgressUpdater {
     }
 }
 
-fn main() {
-    match run() {
-        Ok((output_filename, mode, time)) => {
-            let m = match mode {
-                Direction::Encrypt => "encrypted",
-                Direction::Decrypt => "decrypted",
-            };
-            if let Some(name) = output_filename {
-                println!("\nSuccess! {} has been {} in {} s", name, m, time);
-            }
-        }
-        Err(e) => {
-            eprintln!("\n{}", e);
-            std::process::exit(1);
-        }
-    };
+struct RekeyProgress {
+    pb: ProgressBar,
 }
 
-fn run() -> Result<(Option<String>, Direction, f64)> {
+impl RekeyProgress {
+    fn new() -> Self {
+        let pb = ProgressBar::new(100);
+        pb.set_style(
+            ProgressStyle::with_template("{spinner:.green} [{wide_bar:.cyan/blue}] {pos}%")
+                .unwrap()
+                .progress_chars("#>-"),
+        );
+        Self { pb }
+    }
+}
+
+impl Ui for RekeyProgress {
+    fn output(&self, percentage: i32) {
+        self.pb.set_position(percentage as u64);
+        if percentage >= 100 {
+            self.pb.finish_with_message("Password changed");
+        }
+    }
+}
+
+// ── Entry point ───────────────────────────────────────────────────────────────
+
+fn main() {
     let app = Cli::parse();
+
+    if app.rekey().is_some() {
+        match run_rekey(&app) {
+            Ok(path) => println!("\nSuccess! Password changed for {}", path),
+            Err(e) => {
+                eprintln!("\n{}", e);
+                std::process::exit(1);
+            }
+        }
+    } else {
+        match run_crypt(&app) {
+            Ok((output_filename, mode, time)) => {
+                let m = match mode {
+                    Direction::Encrypt => "encrypted",
+                    Direction::Decrypt => "decrypted",
+                };
+                if let Some(name) = output_filename {
+                    println!("\nSuccess! {} has been {} in {} s", name, m, time);
+                }
+            }
+            Err(e) => {
+                eprintln!("\n{}", e);
+                std::process::exit(1);
+            }
+        }
+    }
+}
+
+// ── Rekey ─────────────────────────────────────────────────────────────────────
+
+fn run_rekey(app: &Cli) -> Result<String> {
+    let f = app.rekey().unwrap();
+    let path = Path::new(f);
+
+    if !(path.exists() && path.is_file()) {
+        return Err(anyhow!("Invalid filename: {}", f));
+    }
+    if !is_arsenic_file(path) {
+        return Err(anyhow!("{} is not a valid Arsenic V2 (.arsn) file", f));
+    }
+
+    let old_password = Secret::new(
+        rpassword::prompt_password("Current password: ")
+            .context("could not read current password")?,
+    );
+    let new_password = Secret::new(
+        rpassword::prompt_password("New password (minimum 8 characters, longer is better): ")
+            .context("could not read new password")?,
+    );
+    if new_password.expose().len() < 8 {
+        return Err(anyhow!("new password must be at least 8 characters"));
+    }
+    let confirm = rpassword::prompt_password("Confirm new password: ")
+        .context("could not read password confirmation")?;
+    if new_password.expose() != &confirm {
+        return Err(anyhow!("new passwords do not match"));
+    }
+
+    let ui = RekeyProgress::new();
+    arsenic_rekey(path, &old_password, &new_password, &ui).map_err(|e| anyhow!(e))?;
+
+    Ok(f.to_string())
+}
+
+// ── Encrypt / Decrypt ─────────────────────────────────────────────────────────
+
+fn run_crypt(app: &Cli) -> Result<(Option<String>, Direction, f64)> {
     let direction = if app.encrypt().is_some() {
         Direction::Encrypt
     } else {
@@ -93,27 +166,8 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
         None
     };
 
-    // Detect format: Arsenic V2 (.arsn) takes priority over PEM.
-    // On encrypt: --arsenic flag selects Arsenic V2.
-    // On decrypt: auto-detect by magic bytes.
-    let is_arsenic = match &direction {
-        Direction::Encrypt => app.arsenic(),
-        Direction::Decrypt => filename
-            .map(|f| is_arsenic_file(Path::new(f)))
-            .unwrap_or(false),
-    };
-
-    // --pem triggers PEM output on encrypt; on decrypt it is always auto-detected.
-    // PEM is skipped when Arsenic V2 is in use.
-    let is_pem = !is_arsenic && match &direction {
-        Direction::Encrypt => app.pem(),
-        Direction::Decrypt => filename
-            .map(|f| is_pem_cryptyrust_file(Path::new(f)))
-            .unwrap_or(false),
-    };
-
     let output_path = {
-        let s = generate_output_path(&direction, filename, app.output(), is_pem, is_arsenic)
+        let s = generate_output_path(&direction, filename, app.output())
             .unwrap()
             .to_str()
             .ok_or("could not convert output path to string")
@@ -135,97 +189,25 @@ fn run() -> Result<(Option<String>, Direction, f64)> {
     };
 
     let out_str = output_path.as_deref().unwrap();
+    let ui = Box::new(ProgressUpdater::new(direction.clone()));
+    let params = ArsenicParams::from(app.strength());
 
-    let duration = if is_arsenic {
-        let ui = Box::new(ProgressUpdater::new(direction.clone()));
-        let params = ArsenicParams::from(app.arsenic_strength());
-        match arsenic_main_routine(
-            &direction,
-            filename,
-            Some(out_str),
-            &password,
-            ui,
-            Some(params),
-        ) {
-            Ok(d) => d,
-            Err(e) => return Err(anyhow!(e)),
-        }
-    } else if is_pem {
-        let in_path = filename.unwrap();
-        let ui = ProgressUpdater::new(direction.clone());
-        let start = Instant::now();
-
-        let result: Result<()> = (|| -> Result<()> {
-            let out_file =
-                File::create(out_str).with_context(|| format!("could not create {}", out_str))?;
-            let mut in_file =
-                File::open(in_path).with_context(|| format!("could not open {}", in_path))?;
-            let filesize = in_file.metadata()?.len();
-
-            match &direction {
-                Direction::Encrypt => {
-                    let mut writer = PemWriter::new(out_file, env!("CARGO_PKG_VERSION"))
-                        .context("could not initialize PEM writer")?;
-                    encrypt(
-                        &mut in_file,
-                        &mut writer,
-                        &password,
-                        &ui,
-                        filesize,
-                        app.algo(),
-                        app.strength(),
-                        app.hash(),
-                        app.bench(),
-                    )
-                    .map_err(|e| anyhow!(e))?;
-                    let _ = writer.finish().context("could not finalize PEM output")?;
-                    Ok(())
-                }
-                Direction::Decrypt => {
-                    let approx_size = (filesize * 3) / 4;
-                    let mut reader =
-                        PemReader::new(Path::new(in_path)).context("could not open PEM reader")?;
-                    let mut out = out_file;
-                    decrypt(
-                        &mut reader,
-                        &mut out,
-                        &password,
-                        &ui,
-                        approx_size,
-                        app.hash(),
-                        app.bench(),
-                    )
-                    .map_err(|e| anyhow!(e))
-                }
-            }
-        })();
-
-        if let Err(e) = result {
-            let _ = std::fs::remove_file(out_str);
-            return Err(e);
-        }
-        start.elapsed().as_secs_f64()
-    } else {
-        let ui = Box::new(ProgressUpdater::new(direction.clone()));
-        let config = Config::new(
-            direction.clone(),
-            app.algo(),
-            app.strength(),
-            password,
-            filename.map(|f| f.to_string()),
-            output_path.clone(),
-            ui,
-            app.hash(),
-            app.bench(),
-        );
-        match main_routine(&config) {
-            Ok(d) => d,
-            Err(e) => return Err(anyhow!(e)),
-        }
+    let duration = match arsenic_main_routine(
+        &direction,
+        filename,
+        Some(out_str),
+        &password,
+        ui,
+        Some(params),
+    ) {
+        Ok(d) => d,
+        Err(e) => return Err(anyhow!(e)),
     };
 
     Ok((output_path, direction, duration))
 }
+
+// ── Password prompts ──────────────────────────────────────────────────────────
 
 fn get_password(mode: &Direction) -> Result<Secret<String>> {
     match mode {
@@ -251,17 +233,17 @@ fn get_password(mode: &Direction) -> Result<Secret<String>> {
     }
 }
 
+// ── Output path helpers ───────────────────────────────────────────────────────
+
 fn generate_output_path(
     mode: &Direction,
     input: Option<&str>,
     output: Option<&str>,
-    is_pem: bool,
-    is_arsenic: bool,
 ) -> Result<PathBuf, String> {
     if let Some(output) = output {
         let p = PathBuf::from(output);
         if p.exists() && p.is_dir() {
-            generate_default_filename(mode, p, input, is_pem, is_arsenic)
+            generate_default_filename(mode, p, input)
         } else if p.exists() && p.is_file() {
             Err(format!("Error: file {:?} already exists. Must choose new filename or specify directory to generate default filename.", p))
         } else {
@@ -269,7 +251,7 @@ fn generate_output_path(
         }
     } else {
         let cwd = env::current_dir().map_err(|e| e.to_string())?;
-        generate_default_filename(mode, cwd, input, is_pem, is_arsenic)
+        generate_default_filename(mode, cwd, input)
     }
 }
 
@@ -277,32 +259,17 @@ fn generate_default_filename(
     mode: &Direction,
     path: PathBuf,
     name: Option<&str>,
-    is_pem: bool,
-    is_arsenic: bool,
 ) -> Result<PathBuf, String> {
     let mut path = path;
     let f = match mode {
         Direction::Encrypt => {
             let base = name.unwrap_or("encrypted").to_string();
-            let ext = if is_arsenic {
-                ARSENIC_EXTENSION
-            } else if is_pem {
-                PEM_EXTENSION
-            } else {
-                FILE_EXTENSION
-            };
-            format!("{}{}", base, ext)
+            format!("{}{}", base, ARSENIC_EXTENSION)
         }
         Direction::Decrypt => {
             let name = name.unwrap_or("stdin");
             if name.ends_with(ARSENIC_EXTENSION) {
                 name.strip_suffix(ARSENIC_EXTENSION).unwrap().to_string()
-            } else if name.ends_with(PEM_EXTENSION) {
-                name.strip_suffix(PEM_EXTENSION).unwrap().to_string()
-            } else if name.ends_with(".pem") {
-                name.strip_suffix(".pem").unwrap().to_string()
-            } else if name.ends_with(FILE_EXTENSION) {
-                name.strip_suffix(FILE_EXTENSION).unwrap().to_string()
             } else {
                 prepend("decrypted_".to_string(), name)
                     .ok_or(format!("could not prepend decrypted_ to filename {}", name))?
