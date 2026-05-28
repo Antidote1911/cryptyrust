@@ -46,10 +46,12 @@ pub(crate) fn envelope_encrypt(
             Ok(s.encrypt(kek_nonce, aad, plaintext))
         }
         CipherId::Aes256GcmSiv => {
-            let cipher =
-                Aes256GcmSiv::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
+            let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
             let nonce = AesGcmSivNonce::from_slice(kek_nonce);
-            let payload = Payload { msg: plaintext, aad };
+            let payload = Payload {
+                msg: plaintext,
+                aad,
+            };
             cipher
                 .encrypt(nonce, payload)
                 .map_err(|_| CoreErr::EncryptFail("Envelope encryption failed".into()))
@@ -59,7 +61,10 @@ pub(crate) fn envelope_encrypt(
             let cipher =
                 XChaCha20Poly1305::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
             let nonce = XNonce::from_slice(&nonce24);
-            let payload = Payload { msg: plaintext, aad };
+            let payload = Payload {
+                msg: plaintext,
+                aad,
+            };
             cipher
                 .encrypt(nonce, payload)
                 .map_err(|_| CoreErr::EncryptFail("Envelope encryption failed".into()))
@@ -81,19 +86,28 @@ pub(crate) fn envelope_decrypt(
             s.decrypt(kek_nonce, aad, ciphertext)
         }
         CipherId::Aes256GcmSiv => {
-            let cipher =
-                Aes256GcmSiv::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
+            let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
             let nonce = AesGcmSivNonce::from_slice(kek_nonce);
-            let payload = Payload { msg: ciphertext, aad };
-            cipher.decrypt(nonce, payload).map_err(|_| CoreErr::DecryptionError)
+            let payload = Payload {
+                msg: ciphertext,
+                aad,
+            };
+            cipher
+                .decrypt(nonce, payload)
+                .map_err(|_| CoreErr::DecryptionError)
         }
         CipherId::XChaCha20Poly1305 => {
             let nonce24 = expand_12_to_24(kek_nonce);
             let cipher =
                 XChaCha20Poly1305::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
             let nonce = XNonce::from_slice(&nonce24);
-            let payload = Payload { msg: ciphertext, aad };
-            cipher.decrypt(nonce, payload).map_err(|_| CoreErr::DecryptionError)
+            let payload = Payload {
+                msg: ciphertext,
+                aad,
+            };
+            cipher
+                .decrypt(nonce, payload)
+                .map_err(|_| CoreErr::DecryptionError)
         }
     }
 }
@@ -114,16 +128,21 @@ pub(crate) fn block_encrypt(
             let cipher =
                 XChaCha20Poly1305::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
             let nonce = XNonce::from_slice(nonce24);
-            let payload = Payload { msg: plaintext, aad };
+            let payload = Payload {
+                msg: plaintext,
+                aad,
+            };
             cipher
                 .encrypt(nonce, payload)
                 .map_err(|_| CoreErr::EncryptFail("Block encryption failed".into()))
         }
         CipherId::Aes256GcmSiv => {
-            let cipher =
-                Aes256GcmSiv::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
+            let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
             let nonce = AesGcmSivNonce::from_slice(&nonce24[..12]);
-            let payload = Payload { msg: plaintext, aad };
+            let payload = Payload {
+                msg: plaintext,
+                aad,
+            };
             cipher
                 .encrypt(nonce, payload)
                 .map_err(|_| CoreErr::EncryptFail("Block encryption failed".into()))
@@ -149,15 +168,24 @@ pub(crate) fn block_decrypt(
             let cipher =
                 XChaCha20Poly1305::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
             let nonce = XNonce::from_slice(nonce24);
-            let payload = Payload { msg: ciphertext, aad };
-            cipher.decrypt(nonce, payload).map_err(|_| CoreErr::DecryptionError)
+            let payload = Payload {
+                msg: ciphertext,
+                aad,
+            };
+            cipher
+                .decrypt(nonce, payload)
+                .map_err(|_| CoreErr::DecryptionError)
         }
         CipherId::Aes256GcmSiv => {
-            let cipher =
-                Aes256GcmSiv::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
+            let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
             let nonce = AesGcmSivNonce::from_slice(&nonce24[..12]);
-            let payload = Payload { msg: ciphertext, aad };
-            cipher.decrypt(nonce, payload).map_err(|_| CoreErr::DecryptionError)
+            let payload = Payload {
+                msg: ciphertext,
+                aad,
+            };
+            cipher
+                .decrypt(nonce, payload)
+                .map_err(|_| CoreErr::DecryptionError)
         }
         CipherId::SerpentGcm => {
             let s = SerpentGcm::new(key)?;

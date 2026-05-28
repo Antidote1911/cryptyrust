@@ -50,8 +50,15 @@ fn minimal(pld_cipher: CipherId) -> ArsenicParams {
 fn v2_encrypt(data: &[u8], params: &ArsenicParams) -> Vec<u8> {
     let mut input = Cursor::new(data);
     let mut output = Cursor::new(Vec::with_capacity(data.len() + 512));
-    arsenic::encrypt_arsenic(&mut input, &mut output, &pw(), &NoUi, data.len() as u64, params)
-        .unwrap();
+    arsenic::encrypt_arsenic(
+        &mut input,
+        &mut output,
+        &pw(),
+        &NoUi,
+        data.len() as u64,
+        params,
+    )
+    .unwrap();
     output.into_inner()
 }
 

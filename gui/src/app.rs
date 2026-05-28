@@ -185,7 +185,8 @@ impl CryptyApp {
             pld_cipher: self.pld_cipher,
             ..ArsenicParams::from(self.arsenic_strength)
         };
-        self.job.start(self.files.clone(), self.mode, params, password, ctx);
+        self.job
+            .start(self.files.clone(), self.mode, params, password, ctx);
     }
 }
 

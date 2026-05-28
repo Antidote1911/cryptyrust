@@ -175,8 +175,13 @@ where
             let block_nonce = derive_block_nonce(&file_base_nonce, block_index as u64);
             let block_key_bytes = derive_block_key(&dek, block_index as u64);
             let aad = (block_index as u64).to_le_bytes();
-            let encrypted =
-                cipher_dispatch::block_encrypt(pld_cipher, &block_key_bytes, &block_nonce, &aad, &plaintext)?;
+            let encrypted = cipher_dispatch::block_encrypt(
+                pld_cipher,
+                &block_key_bytes,
+                &block_nonce,
+                &aad,
+                &plaintext,
+            )?;
             let leaf = compute_leaf(&encrypted);
             Ok((encrypted, leaf))
         })
@@ -214,8 +219,13 @@ where
         params.p_cost,
     )?;
 
-    let enc_env =
-        cipher_dispatch::envelope_encrypt(params.hdr_cipher, kek.expose(), &kek_nonce, &[], &env_pt)?;
+    let enc_env = cipher_dispatch::envelope_encrypt(
+        params.hdr_cipher,
+        kek.expose(),
+        &kek_nonce,
+        &[],
+        &env_pt,
+    )?;
     assert_eq!(enc_env.len(), ENVELOPE_PT_LEN + GCM_TAG);
     let enc_env_arr: [u8; ENVELOPE_PT_LEN + GCM_TAG] =
         enc_env.try_into().expect("exactly 97 bytes");
@@ -301,8 +311,13 @@ where
     if enc_env.len() != ENVELOPE_ENC_LEN {
         return Err(CoreErr::DecryptFail("Envelope size mismatch".into()));
     }
-    let env_pt =
-        cipher_dispatch::envelope_decrypt(hdr_cipher, kek.expose(), &pub_hdr.kek_nonce, &[], &enc_env)?;
+    let env_pt = cipher_dispatch::envelope_decrypt(
+        hdr_cipher,
+        kek.expose(),
+        &pub_hdr.kek_nonce,
+        &[],
+        &enc_env,
+    )?;
     let env = deserialize_envelope(&env_pt)?;
 
     let block_size = block_size_from_id(env.block_size_id)?;
@@ -341,8 +356,13 @@ where
             let block_key_bytes = derive_block_key(&dek, block_index as u64);
             let block_nonce = derive_block_nonce(&file_base_nonce, block_index as u64);
             let aad = (block_index as u64).to_le_bytes();
-            let plaintext =
-                cipher_dispatch::block_decrypt(pld_cipher, &block_key_bytes, &block_nonce, &aad, &enc_buf)?;
+            let plaintext = cipher_dispatch::block_decrypt(
+                pld_cipher,
+                &block_key_bytes,
+                &block_nonce,
+                &aad,
+                &enc_buf,
+            )?;
             Ok((plaintext, leaf))
         })
         .collect();
@@ -409,8 +429,13 @@ where
         pub_hdr.m_cost,
         pub_hdr.p_cost,
     )?;
-    let env_pt =
-        cipher_dispatch::envelope_decrypt(hdr_cipher, kek_old.expose(), &pub_hdr.kek_nonce, &[], &enc_env)?;
+    let env_pt = cipher_dispatch::envelope_decrypt(
+        hdr_cipher,
+        kek_old.expose(),
+        &pub_hdr.kek_nonce,
+        &[],
+        &enc_env,
+    )?;
 
     ui.output(50);
 
@@ -423,8 +448,13 @@ where
         pub_hdr.m_cost,
         pub_hdr.p_cost,
     )?;
-    let enc_env_new =
-        cipher_dispatch::envelope_encrypt(hdr_cipher, kek_new.expose(), &new_kek_nonce, &[], &env_pt)?;
+    let enc_env_new = cipher_dispatch::envelope_encrypt(
+        hdr_cipher,
+        kek_new.expose(),
+        &new_kek_nonce,
+        &[],
+        &env_pt,
+    )?;
     let enc_env_arr: [u8; ENVELOPE_PT_LEN + GCM_TAG] = enc_env_new
         .try_into()
         .expect("encrypt always produces exactly ENVELOPE_ENC_LEN bytes");

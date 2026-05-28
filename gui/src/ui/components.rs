@@ -264,11 +264,8 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
                 ui.label(egui::RichText::new("Arsenic V2 format").size(13.0).strong());
                 ui.add_space(3.0);
                 ui.label(
-                    egui::RichText::new(format!(
-                        "{} (header)",
-                        cipher_short_label(app.hdr_cipher)
-                    ))
-                    .size(13.0),
+                    egui::RichText::new(format!("{} (header)", cipher_short_label(app.hdr_cipher)))
+                        .size(13.0),
                 );
                 ui.label(
                     egui::RichText::new(format!(
