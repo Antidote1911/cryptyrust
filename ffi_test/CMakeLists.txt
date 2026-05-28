@@ -95,7 +95,6 @@ add_custom_target(run_test
     COMMAND dd if=/dev/urandom
                 bs=1024 count=1024
                 of="${CMAKE_BINARY_DIR}/test_data/sample.bin"
-                2>/dev/null
     COMMAND "${CMAKE_COMMAND}" -E echo "--- encrypting ---"
     COMMAND "${CMAKE_BINARY_DIR}/arsenic_test"
             encrypt
