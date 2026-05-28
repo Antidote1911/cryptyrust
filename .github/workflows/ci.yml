@@ -98,4 +98,15 @@ jobs:
         run: cmake --build ffi_test/build
 
       - name: Run encrypt / decrypt round-trip
-        run: cmake --build ffi_test/build --target run_test
+        run: |
+          mkdir -p ffi_test/build/test_data
+          dd if=/dev/urandom bs=1024 count=1024 \
+             of=ffi_test/build/test_data/sample.bin 2>/dev/null
+          cp ffi_test/build/test_data/sample.bin \
+             ffi_test/build/test_data/sample.bin.orig
+          ./ffi_test/build/arsenic_test \
+            encrypt ffi_test/build/test_data/sample.bin test_password_1234
+          ./ffi_test/build/arsenic_test \
+            decrypt ffi_test/build/test_data/sample.bin.arsn test_password_1234
+          cmp ffi_test/build/test_data/sample.bin \
+              ffi_test/build/test_data/sample.bin.orig
