@@ -1,0 +1,17 @@
+[package]
+name = "cryptyrust_ffi"
+version.workspace = true
+authors.workspace = true
+edition = "2021"
+
+[lib]
+# cdylib  → shared library (.so / .dll / .dylib) for runtime linking
+# staticlib → static archive (.a / .lib) for link-time embedding
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+cryptyrust_core = { path = "../core" }
+
+# FFI requires unsafe code — do not inherit workspace's unsafe_code = "forbid"
+[lints.rust]
+unsafe_code = "allow"

@@ -18,6 +18,7 @@ Pre-built binaries for Linux, macOS (universal), and Windows are available on th
 - [CLI Usage](#cli-usage)
 - [GUI Usage](#gui-usage)
 - [Cryptographic Design](#cryptographic-design)
+- [C / C++ FFI](#c--c-ffi)
 - [Build Instructions](#build-instructions)
 - [Data Loss Disclaimer](#data-loss-disclaimer)
 
@@ -49,11 +50,13 @@ Pre-built binaries for Linux, macOS (universal), and Windows are available on th
 
 ## Project Structure
 
-| Crate | Binary | Description |
+| Crate / Dir | Binary / Output | Description |
 |---|---|---|
 | `core` | — | `cryptyrust_core` library — all cryptographic logic |
 | `cli` | `cryptyrust_cli` | Command-line interface |
 | `gui` | `cryptyrust` | Native GUI built with [egui](https://github.com/emilk/egui) |
+| `ffi` | `libcryptyrust_ffi.so` / `.a` | C-compatible FFI layer for embedding in C / C++ / Qt projects |
+| `ffi_test/` | `arsenic_test` | Minimal C++ CLI demo (encrypt / decrypt / bench) |
 
 ---
 
@@ -264,6 +267,197 @@ All three supported ciphers provide authenticated encryption with a 16-byte tag.
 | Key material erasure         | `Secret<T>` (zeroize on drop)                   |
 
 For the complete byte-level format specification, see [FORMAT.md](FORMAT.md) and [arsenic_V1.html](arsenic_V1.html).
+
+---
+
+## C / C++ FFI
+
+The `ffi` crate exposes the entire `cryptyrust_core` API as a plain C interface suitable for linking from any language with C FFI support (C++, Qt, Python via ctypes, etc.).
+
+### Crate layout
+
+| Crate | Output | Description |
+|---|---|---|
+| `cryptyrust_ffi` | `libcryptyrust_ffi.so` / `.a` / `.dll` | C-compatible shared and static libraries |
+| `ffi_test/` | `arsenic_test` binary | Minimal C++ CLI demo (encrypt / decrypt / bench) |
+
+### Building the libraries
+
+```bash
+cargo build --release -p cryptyrust_ffi
+# → target/release/libcryptyrust_ffi.so   (Linux shared library)
+# → target/release/libcryptyrust_ffi.a    (static archive, embeds Rust runtime)
+# → target/release/cryptyrust_ffi.dll     (Windows DLL)
+```
+
+### Generating the C header
+
+Requires [`cbindgen`](https://github.com/mozilla/cbindgen):
+
+```bash
+cargo install cbindgen
+cbindgen --config ffi/cbindgen.toml --crate cryptyrust_ffi --output cryptyrust.h
+```
+
+The header is also pre-generated at [`ffi_test/cryptyrust.h`](ffi_test/cryptyrust.h).
+It includes `extern "C"` guards and is ready to include from C++ without modification.
+
+### C API reference
+
+#### Types
+
+```c
+// Binary buffer returned by Rust — free with arsenic_free_buffer().
+typedef struct ArsBuffer { uint8_t *ptr; size_t len; } ArsBuffer;
+
+// Encryption parameters — fill manually or use arsenic_default_params().
+typedef struct ArsParams {
+    uint8_t hdr_cipher;   // 0x02 Deoxys-II-256 · 0x03 XChaCha20 · 0x04 AES-GCM-SIV
+    uint8_t pld_cipher;
+    uint8_t strength;     // 0 = Interactive (256 MiB) · 1 = Sensitive (1 GiB)
+    uint8_t compress;     // 0 = none · 1 = zstd level 3
+} ArsParams;
+
+// Optional progress callback — percentage ∈ [0, 100], user_data forwarded as-is.
+typedef void (*ArsProgressFn)(int32_t percentage, void *user_data);
+```
+
+#### Error codes
+
+| Constant | Value | Meaning |
+|---|---|---|
+| `ARSENIC_OK` | 0 | Success |
+| `ARSENIC_ERR_DECRYPT` | -1 | Wrong password or corrupted data |
+| `ARSENIC_ERR_IO` | -2 | File I/O error |
+| `ARSENIC_ERR_PARAMS` | -3 | Invalid cipher ID or strength |
+| `ARSENIC_ERR_BAD_MAGIC` | -4 | Not an Arsenic V1 file |
+| `ARSENIC_ERR_NULL_PTR` | -5 | Required pointer was null |
+
+Call `arsenic_last_error()` after any failure for a human-readable UTF-8 string.
+The pointer is valid until the next `arsenic_*` call on the same thread.
+
+#### Functions
+
+```c
+// Default params: Deoxys-II-256 header · XChaCha20-Poly1305 payload · Interactive · no compression
+ArsParams arsenic_default_params(void);
+
+// Encrypt/decrypt in-memory buffers. Cipher params for decrypt come from the file header.
+int32_t arsenic_encrypt(const uint8_t *pt, size_t pt_len,
+                        const char *password, const ArsParams *params,
+                        ArsProgressFn cb, void *user_data,
+                        ArsBuffer *out);
+
+int32_t arsenic_decrypt(const uint8_t *ct, size_t ct_len,
+                        const char *password,
+                        ArsProgressFn cb, void *user_data,
+                        ArsBuffer *out);
+
+// Change the password of a .arsn file in-place (crash-safe).
+int32_t arsenic_rekey_file(const char *path,
+                           const char *old_pw, const char *new_pw,
+                           ArsProgressFn cb, void *user_data);
+
+// 1 if the file starts with the Arsenic V1 magic, 0 otherwise.
+int32_t arsenic_is_arsenic_file(const char *path);
+
+// Free a buffer allocated by arsenic_encrypt / arsenic_decrypt. Safe to call with null.
+void arsenic_free_buffer(ArsBuffer *buf);
+
+// Benchmark the 3 AEAD ciphers. Returns an array sorted fastest-first.
+ArsBenchArray arsenic_bench(size_t payload_mib);          // 32 is a good default
+void          arsenic_free_bench_array(ArsBenchArray arr);
+void          arsenic_bench_best_combo(const ArsBenchArray *arr,
+                                       uint8_t *hdr_out, uint8_t *pld_out);
+
+// Thread-local last error (valid until next arsenic_* call on this thread).
+const char *arsenic_last_error(void);
+```
+
+> **Progress note:** the progress callback fires between 0 % and 100 % *after* the Argon2id key derivation completes. For Interactive strength, expect ~2 s of silence before the bar moves — this is the KDF, not a hang.
+
+> **Benchmark note:** only the **payload cipher** is benchmarked on large data. The header cipher processes only 32 bytes (the DEK) — its choice has no measurable effect on throughput. `arsenic_bench_best_combo` therefore recommends the same fastest cipher for both `hdr_cipher` and `pld_cipher`.
+
+### Using in a CMake / Qt project
+
+#### 1. Static linking (simplest)
+
+```cmake
+# In your CMakeLists.txt
+target_include_directories(MyTarget PRIVATE /path/to/cryptyrust.h)
+target_link_libraries(MyTarget PRIVATE
+    /path/to/libcryptyrust_ffi.a
+    pthread dl m          # Linux — not needed on macOS / Windows
+)
+```
+
+#### 2. With Corrosion (builds Rust automatically)
+
+[Corrosion](https://github.com/corrosion-rs/corrosion) integrates Rust crates as native CMake targets:
+
+```cmake
+find_package(Corrosion REQUIRED)
+
+corrosion_import_crate(
+    MANIFEST_PATH /path/to/cryptyrust/Cargo.toml
+    CRATES cryptyrust_ffi
+)
+
+target_link_libraries(MyTarget PRIVATE cryptyrust_ffi)
+target_include_directories(MyTarget PRIVATE /path/to/ffi_test)  # cryptyrust.h
+```
+
+#### 3. Qt progress bar — minimal pattern
+
+```cpp
+#include "cryptyrust.h"
+#include <QProgressDialog>
+
+struct ProgressCtx { QProgressDialog* dlg; };
+
+static void on_progress(int32_t pct, void* ud) {
+    auto* ctx = static_cast<ProgressCtx*>(ud);
+    ctx->dlg->setValue(pct);
+    QCoreApplication::processEvents();   // keep UI responsive
+}
+
+// In your slot:
+QProgressDialog dlg("Encrypting…", QString(), 0, 100, this);
+dlg.setWindowModality(Qt::WindowModal);
+dlg.show();
+
+ProgressCtx ctx{&dlg};
+ArsParams params = arsenic_default_params();
+ArsBuffer out{};
+
+int32_t rc = arsenic_encrypt(
+    data.constData(), data.size(),
+    password.toUtf8().constData(), &params,
+    on_progress, &ctx,
+    &out
+);
+
+if (rc != ARSENIC_OK) {
+    QMessageBox::critical(this, "Error", arsenic_last_error());
+} else {
+    QByteArray ciphertext(reinterpret_cast<char*>(out.ptr), out.len);
+    arsenic_free_buffer(&out);
+}
+```
+
+### Running the C++ demo
+
+The `ffi_test/` directory contains a self-contained CMake project:
+
+```bash
+cd ffi_test
+cmake -S . -B build         # -DBUILD_RUST=ON (default) runs cargo automatically
+cmake --build build
+
+./build/arsenic_test encrypt  secret.pdf    "my passphrase"
+./build/arsenic_test decrypt  secret.pdf.arsn  "my passphrase"
+./build/arsenic_test bench    32
+```
 
 ---
 
