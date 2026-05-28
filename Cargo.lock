@@ -1153,7 +1153,7 @@ dependencies = [
 
 [[package]]
 name = "cryptyrust"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "cryptyrust_core",
  "eframe",
@@ -1167,7 +1167,7 @@ dependencies = [
 
 [[package]]
 name = "cryptyrust_cli"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1180,7 +1180,7 @@ dependencies = [
 
 [[package]]
 name = "cryptyrust_core"
-version = "1.2.2"
+version = "1.2.3"
 dependencies = [
  "aead",
  "argon2",
