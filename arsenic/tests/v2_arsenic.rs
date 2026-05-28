@@ -1,8 +1,6 @@
-use cryptyrust_core::{
-    arsenic::{
-        decrypt_arsenic, encrypt_arsenic, ArsenicParams, CipherId, Compression, EnvelopeMetadata,
-        BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE, ZSTD_DEFAULT_LEVEL,
-    },
+use arsenic::{
+    decrypt_arsenic, encrypt_arsenic, ArsenicParams, ArsenicStrength, CipherId, Compression, EnvelopeMetadata,
+    BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE, ZSTD_DEFAULT_LEVEL,
     arsenic_rekey, is_arsenic_file, Secret, Ui,
 };
 use std::io::Cursor;
@@ -78,7 +76,7 @@ fn do_encrypt_with(data: &[u8], pwd: &str, params: ArsenicParams) -> Vec<u8> {
     output.into_inner()
 }
 
-fn do_decrypt(ct: &[u8], pwd: &str) -> Result<Vec<u8>, cryptyrust_core::CoreErr> {
+fn do_decrypt(ct: &[u8], pwd: &str) -> Result<Vec<u8>, arsenic::CoreErr> {
     let mut input = Cursor::new(ct);
     let mut output = Cursor::new(Vec::new());
     decrypt_arsenic(
@@ -95,7 +93,7 @@ fn do_decrypt(ct: &[u8], pwd: &str) -> Result<Vec<u8>, cryptyrust_core::CoreErr>
 fn do_decrypt_with_meta(
     ct: &[u8],
     pwd: &str,
-) -> Result<(Vec<u8>, EnvelopeMetadata), cryptyrust_core::CoreErr> {
+) -> Result<(Vec<u8>, EnvelopeMetadata), arsenic::CoreErr> {
     let mut input = Cursor::new(ct);
     let mut output = Cursor::new(Vec::new());
     let meta = decrypt_arsenic(
@@ -175,7 +173,7 @@ fn round_trip_utf8_text() {
 
 #[test]
 fn round_trip_interactive_strength() {
-    let params = ArsenicParams::from(cryptyrust_core::arsenic::ArsenicStrength::Interactive);
+    let params = ArsenicParams::from(ArsenicStrength::Interactive);
     let data = b"interactive strength round-trip";
     let ct = do_encrypt_with(data, PASSWORD, params);
     let pt = do_decrypt(&ct, PASSWORD).unwrap();

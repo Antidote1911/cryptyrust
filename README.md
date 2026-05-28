@@ -52,7 +52,7 @@ Pre-built binaries for Linux, macOS (universal), and Windows are available on th
 
 | Crate / Dir | Binary / Output | Description |
 |---|---|---|
-| `core` | — | `cryptyrust_core` library — all cryptographic logic |
+| `core` | — | `arsenic` library — all cryptographic logic |
 | `cli` | `cryptyrust_cli` | Command-line interface |
 | `gui` | `cryptyrust` | Native GUI built with [egui](https://github.com/emilk/egui) |
 | `ffi` | `libcryptyrust_ffi.so` / `.a` | C-compatible FFI layer for embedding in C / C++ / Qt projects |
@@ -266,13 +266,13 @@ All three supported ciphers provide authenticated encryption with a 16-byte tag.
 | File integrity (Merkle)      | BLAKE3 derive\_key (domain-separated)            |
 | Key material erasure         | `Secret<T>` (zeroize on drop)                   |
 
-For the complete byte-level format specification, see [FORMAT.md](FORMAT.md) and [arsenic_V1.html](arsenic_V1.html).
+For the complete byte-level format specification, see [FORMAT.md](arsenic/FORMAT.md) and [arsenic_V1.html](arsenic_V1.html).
 
 ---
 
 ## C / C++ FFI
 
-The `ffi` crate exposes the entire `cryptyrust_core` API as a plain C interface suitable for linking from any language with C FFI support (C++, Qt, Python via ctypes, etc.).
+The `ffi` crate exposes the entire `arsenic` API as a plain C interface suitable for linking from any language with C FFI support (C++, Qt, Python via ctypes, etc.).
 
 ### Crate layout
 

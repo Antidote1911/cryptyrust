@@ -257,7 +257,7 @@ jobs:
             cryptyrust-${{ steps.version.outputs.VERSION }}-macos-universal.dmg
             cryptyrust-${{ steps.version.outputs.VERSION }}-win-portable.zip
             cryptyrust-${{ steps.version.outputs.VERSION }}-win-setup.exe
-            FORMAT.md
+            arsenic/FORMAT.md
             README.md
             arsenic_V1.html
           generate_release_notes: true

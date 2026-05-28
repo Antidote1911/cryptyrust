@@ -7,7 +7,7 @@ repository = "https://github.com/Antidote1911/cryptyrust/"
 edition = "2021"
 
 [dependencies]
-cryptyrust_core = { path = "../core" }
+arsenic = { path = "../arsenic" }
 rpassword = "7.5.2"
 clap = { version = "4.6.1", features = ["derive","cargo"] }
 anyhow = "1.0.102"

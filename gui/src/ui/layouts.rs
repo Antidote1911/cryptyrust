@@ -5,7 +5,7 @@ use crate::file_utils::{arsenic_strength_label, cipher_short_label, is_cryptyrus
 use crate::job::JobState;
 use crate::ui::components;
 use crate::ui::components::compression_short_label;
-use cryptyrust_core::Compression;
+use arsenic::Compression;
 
 pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool, popup_open: bool) {
     egui::Panel::top("menubar").show_inside(ui, |ui| {

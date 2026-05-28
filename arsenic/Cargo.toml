@@ -1,5 +1,5 @@
 [package]
-name = "cryptyrust_core"
+name = "arsenic"
 version.workspace = true
 authors.workspace = true
 edition = "2021"

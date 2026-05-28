@@ -8,6 +8,8 @@ pub use crate::arsenic::bench::{bench_cipher_combinations, best_combination, Cip
 pub use crate::arsenic::header::{PREKEY_M_COST_KB, PREKEY_P_COST, PREKEY_T_COST};
 pub use crate::arsenic::{
     ArsenicParams, ArsenicStrength, CipherId, Compression, EnvelopeMetadata, ZSTD_DEFAULT_LEVEL,
+    decrypt_arsenic, encrypt_arsenic, rekey_arsenic,
+    BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE,
 };
 pub use crate::config::{Direction, Ui};
 pub use crate::constants::*;

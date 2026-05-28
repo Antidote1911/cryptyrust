@@ -1,5 +1,5 @@
 use clap::{ArgGroup, Parser};
-use cryptyrust_core::{ArsenicStrength, CipherId};
+use arsenic::{ArsenicStrength, CipherId};
 
 const ABOUT: &str = "
 A simple but strong file encryption utility in Rust.

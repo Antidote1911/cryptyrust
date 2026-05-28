@@ -1,4 +1,4 @@
-use cryptyrust_core::{
+use arsenic::{
     bench_cipher_combinations, ArsenicParams, ArsenicStrength, CipherBenchResult, CipherId,
     Compression, Ui, ZSTD_DEFAULT_LEVEL,
 };

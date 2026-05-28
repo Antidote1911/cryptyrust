@@ -9,7 +9,7 @@ use crate::file_utils::{
     Mode,
 };
 use crate::job::PasswordPopup;
-use cryptyrust_core::{best_combination, ArsenicStrength, CipherId, Compression};
+use arsenic::{best_combination, ArsenicStrength, CipherId, Compression};
 
 pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool) {
     ui.menu_button("Config", |ui| {

@@ -4,7 +4,7 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use cryptyrust_core::{arsenic_main_routine, arsenic_rekey, ArsenicParams, Direction, Secret, Ui};
+use arsenic::{arsenic_main_routine, arsenic_rekey, ArsenicParams, Direction, Secret, Ui};
 
 use crate::file_utils::{create_unique_output_file, Mode};
 

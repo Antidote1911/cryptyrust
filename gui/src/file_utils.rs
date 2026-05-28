@@ -1,4 +1,4 @@
-use cryptyrust_core::{ArsenicStrength, CipherId};
+use arsenic::{ArsenicStrength, CipherId};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};

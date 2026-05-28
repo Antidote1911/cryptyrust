@@ -8,7 +8,7 @@ eframe = { version = "0.34.2", features = ["persistence"] }
 egui = "0.34.2"
 egui_extras = { version = "0.34.2", features = ["image"] }
 rfd = "0.17.2"
-cryptyrust_core = { path = "../core" }
+arsenic = { path = "../arsenic" }
 rayon = "1.12.0"
 tempfile = "3"
 

@@ -1,4 +1,4 @@
-//! C-compatible FFI wrapper around `cryptyrust_core`.
+//! C-compatible FFI wrapper around `arsenic`.
 //!
 //! # Building
 //! ```sh
@@ -18,9 +18,10 @@ use std::io::Cursor;
 use std::os::raw::{c_char, c_void};
 use std::path::Path;
 
-use cryptyrust_core::{
-    arsenic::{self, ArsenicParams, ArsenicStrength, CipherId, Compression},
+use arsenic::{
+    ArsenicParams, ArsenicStrength, CipherId, Compression,
     arsenic_rekey, bench_cipher_combinations, is_arsenic_file,
+    encrypt_arsenic, decrypt_arsenic,
     CoreErr, Secret, Ui, ZSTD_DEFAULT_LEVEL,
 };
 
@@ -269,7 +270,7 @@ pub unsafe extern "C" fn arsenic_encrypt(
     let mut output = Cursor::new(Vec::new());
     let ui = FfiUi { cb: progress_fn, user_data };
 
-    match arsenic::encrypt_arsenic(
+    match encrypt_arsenic(
         &mut input, &mut output,
         &Secret::new(pwd), &ui,
         plaintext_len as u64, &core_params,
@@ -324,7 +325,7 @@ pub unsafe extern "C" fn arsenic_decrypt(
     let mut output = Cursor::new(Vec::new());
     let ui = FfiUi { cb: progress_fn, user_data };
 
-    match arsenic::decrypt_arsenic(
+    match decrypt_arsenic(
         &mut input, &mut output,
         &Secret::new(pwd), &ui,
         ciphertext_len as u64,

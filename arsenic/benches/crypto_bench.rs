@@ -17,8 +17,9 @@
 // HTML report generated under target/criterion/
 
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
-use cryptyrust_core::{
-    arsenic::{self, ArsenicParams, ArsenicStrength, CipherId},
+use arsenic::{
+    ArsenicParams, ArsenicStrength, CipherId,
+    encrypt_arsenic, decrypt_arsenic,
     Secret, Ui,
 };
 use std::io::Cursor;
@@ -51,7 +52,7 @@ fn minimal(pld_cipher: CipherId) -> ArsenicParams {
 fn v2_encrypt(data: &[u8], params: &ArsenicParams) -> Vec<u8> {
     let mut input = Cursor::new(data);
     let mut output = Cursor::new(Vec::with_capacity(data.len() + 512));
-    arsenic::encrypt_arsenic(
+    encrypt_arsenic(
         &mut input,
         &mut output,
         &pw(),
@@ -66,7 +67,7 @@ fn v2_encrypt(data: &[u8], params: &ArsenicParams) -> Vec<u8> {
 fn v2_decrypt(ct: &[u8]) {
     let mut input = Cursor::new(ct);
     let mut output = Cursor::new(Vec::with_capacity(ct.len()));
-    arsenic::decrypt_arsenic(&mut input, &mut output, &pw(), &NoUi, ct.len() as u64).unwrap();
+    decrypt_arsenic(&mut input, &mut output, &pw(), &NoUi, ct.len() as u64).unwrap();
 }
 
 // ── Payload ciphers × data sizes (encrypt) ───────────────────────────────────

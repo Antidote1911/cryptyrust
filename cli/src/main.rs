@@ -1,5 +1,8 @@
-use cryptyrust_core::arsenic::ArsenicParams;
-use cryptyrust_core::*;
+use arsenic::{
+    arsenic_main_routine, arsenic_rekey, is_arsenic_file,
+    ArsenicParams, Direction, Secret, Ui,
+    bench_cipher_combinations, best_combination, CipherId,
+};
 mod cli;
 use clap::Parser;
 use cli::Cli;
@@ -7,8 +10,6 @@ use std::{
     env,
     path::{Path, PathBuf},
 };
-
-use cryptyrust_core::{bench_cipher_combinations, best_combination, CipherId};
 
 use anyhow::{anyhow, Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};

@@ -10,7 +10,7 @@ edition = "2021"
 crate-type = ["cdylib", "staticlib"]
 
 [dependencies]
-cryptyrust_core = { path = "../core" }
+arsenic = { path = "../arsenic" }
 
 # FFI requires unsafe code — do not inherit workspace's unsafe_code = "forbid"
 [lints.rust]
