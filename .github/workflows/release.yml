@@ -195,17 +195,13 @@ jobs:
           Copy-Item target\release\cryptyrust_cli.exe dist\
           Compress-Archive -Path dist\* -DestinationPath cryptyrust-windows-portable.zip
 
-      - name: Install NSIS
-        shell: pwsh
-        run: choco install nsis -y --no-progress
-
-      - name: Build NSIS installer
+      - name: Build Inno Setup installer
         shell: pwsh
         run: |
           Copy-Item target\release\cryptyrust.exe     packaging\windows\
           Copy-Item target\release\cryptyrust_cli.exe packaging\windows\
           Copy-Item gui\assets\icon.ico               packaging\windows\
-          & "C:\Program Files (x86)\NSIS\makensis.exe" /DVERSION=${{ steps.version.outputs.VERSION }} packaging\windows\installer.nsi
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DVERSION=${{ steps.version.outputs.VERSION }} packaging\windows\installer.iss
           Move-Item packaging\windows\cryptyrust-windows-setup.exe .
 
       - uses: actions/upload-artifact@v4
@@ -227,6 +223,8 @@ jobs:
       contents: write
 
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -241,4 +239,7 @@ jobs:
             cryptyrust-macos.dmg
             cryptyrust-windows-portable.zip
             cryptyrust-windows-setup.exe
+            FORMAT.md
+            README.md
+            arsenic_V1.html
           generate_release_notes: true
