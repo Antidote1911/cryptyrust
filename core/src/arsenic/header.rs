@@ -31,8 +31,12 @@ type ParsedHeader = (PublicHeader, [u8; PRE_MAC_LEN], [u8; 32], Vec<u8>);
 pub const MAGIC: [u8; 4] = [0x41, 0x52, 0x53, 0x4E]; // "ARSN"
 pub const VERSION: [u8; 2] = [0x00, 0x02];
 pub const KDF_ID_ARGON2ID: u8 = 0x01;
+#[allow(dead_code)]
 pub const HDR_CIPHER_SERPENT_GCM: u8 = 0x02;
+#[allow(dead_code)]
 pub const PLD_CIPHER_XCHACHA20: u8 = 0x03;
+#[allow(dead_code)]
+pub const CIPHER_AES256_GCM_SIV: u8 = 0x04;
 pub const COMPRESS_NONE: u8 = 0x00;
 pub const DEFAULT_HEADER_SIZE: u16 = 256;
 
@@ -59,6 +63,10 @@ pub struct PublicHeader {
     pub p_cost: u32,
     pub file_base_nonce: [u8; 24],
     pub kek_nonce: [u8; 12],
+    /// Cipher used to wrap the key envelope (byte 0x07).
+    pub hdr_cipher_id: u8,
+    /// Cipher used for payload blocks (byte 0x08).
+    pub pld_cipher_id: u8,
 }
 
 /// Plaintext content of the encrypted envelope.
@@ -76,8 +84,8 @@ pub fn serialize_pre_mac(hdr: &PublicHeader) -> [u8; PRE_MAC_LEN] {
     buf[0..4].copy_from_slice(&MAGIC);
     buf[4..6].copy_from_slice(&VERSION);
     buf[6] = KDF_ID_ARGON2ID;
-    buf[7] = HDR_CIPHER_SERPENT_GCM;
-    buf[8] = PLD_CIPHER_XCHACHA20;
+    buf[7] = hdr.hdr_cipher_id;
+    buf[8] = hdr.pld_cipher_id;
     buf[9] = hdr.compression_id;
     buf[10..12].copy_from_slice(&hdr.header_total_size.to_le_bytes());
     buf[12..28].copy_from_slice(&hdr.salt);
@@ -204,6 +212,8 @@ pub fn parse_header_bytes(bytes: &[u8; TOTAL_HEADER_LEN]) -> Result<ParsedHeader
         p_cost: u32::from_le_bytes(bytes[36..40].try_into().expect("4 bytes")),
         file_base_nonce: bytes[40..64].try_into().expect("24 bytes"),
         kek_nonce: bytes[64..76].try_into().expect("12 bytes"),
+        hdr_cipher_id: bytes[7],
+        pld_cipher_id: bytes[8],
     };
 
     let enc_envelope = bytes[PUB_HEADER_LEN..PUB_HEADER_LEN + ENVELOPE_ENC_LEN].to_vec();

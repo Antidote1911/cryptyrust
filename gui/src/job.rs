@@ -7,7 +7,7 @@ use std::thread;
 use rayon::prelude::*;
 
 use cryptyrust_core::{
-    arsenic_main_routine, arsenic_rekey, ArsenicParams, ArsenicStrength, Direction, Secret, Ui,
+    arsenic_main_routine, arsenic_rekey, ArsenicParams, Direction, Secret, Ui,
 };
 
 use crate::file_utils::{create_unique_output_file, Mode};
@@ -57,7 +57,7 @@ impl JobState {
         &mut self,
         files: Vec<PathBuf>,
         mode: Mode,
-        arsenic_strength: ArsenicStrength,
+        params: ArsenicParams,
         password: String,
         ctx: eframe::egui::Context,
     ) {
@@ -98,7 +98,7 @@ impl JobState {
                                     tx: tx.clone(),
                                     file_index: i,
                                 });
-                                let params = ArsenicParams::from(arsenic_strength);
+                                let params = params.clone();
                                 match arsenic_main_routine(
                                     &Direction::Encrypt,
                                     Some(&in_path),

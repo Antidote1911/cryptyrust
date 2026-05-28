@@ -1,8 +1,8 @@
-use cryptyrust_core::ArsenicStrength;
+use cryptyrust_core::{ArsenicParams, ArsenicStrength, CipherId};
 use eframe::egui;
 use std::path::PathBuf;
 
-use crate::file_utils::{detect_mode, Mode};
+use crate::file_utils::{cipher_from_key, cipher_to_key, detect_mode, Mode};
 use crate::job::{FileStatus, JobState, PasswordPopup};
 use crate::ui::UI;
 
@@ -18,6 +18,10 @@ pub struct CryptyApp {
     pub pw_error: Option<String>,
     pub pw_focus: bool,
     pub arsenic_strength: ArsenicStrength,
+    /// Cipher used to encrypt the key-envelope in the header (encryption only).
+    pub hdr_cipher: CipherId,
+    /// Cipher used to encrypt each payload block (encryption only).
+    pub pld_cipher: CipherId,
     pub show_about: bool,
     pub dark_mode: bool,
     // Change-password popup state
@@ -45,6 +49,16 @@ impl CryptyApp {
             })
             .unwrap_or(ArsenicStrength::Interactive);
 
+        let hdr_cipher = storage
+            .and_then(|s| s.get_string("hdr_cipher"))
+            .and_then(|s| cipher_from_key(&s))
+            .unwrap_or(CipherId::SerpentGcm);
+
+        let pld_cipher = storage
+            .and_then(|s| s.get_string("pld_cipher"))
+            .and_then(|s| cipher_from_key(&s))
+            .unwrap_or(CipherId::XChaCha20Poly1305);
+
         Self {
             files: vec![],
             mode: Mode::Encrypt,
@@ -57,6 +71,8 @@ impl CryptyApp {
             pw_error: None,
             pw_focus: false,
             arsenic_strength,
+            hdr_cipher,
+            pld_cipher,
             show_about: false,
             dark_mode,
             cpw_old: String::new(),
@@ -164,13 +180,12 @@ impl CryptyApp {
     }
 
     fn start_job(&mut self, ctx: egui::Context, password: String) {
-        self.job.start(
-            self.files.clone(),
-            self.mode,
-            self.arsenic_strength,
-            password,
-            ctx,
-        );
+        let params = ArsenicParams {
+            hdr_cipher: self.hdr_cipher,
+            pld_cipher: self.pld_cipher,
+            ..ArsenicParams::from(self.arsenic_strength)
+        };
+        self.job.start(self.files.clone(), self.mode, params, password, ctx);
     }
 }
 
@@ -185,6 +200,8 @@ impl eframe::App for CryptyApp {
             }
             .to_string(),
         );
+        storage.set_string("hdr_cipher", cipher_to_key(self.hdr_cipher).to_string());
+        storage.set_string("pld_cipher", cipher_to_key(self.pld_cipher).to_string());
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {

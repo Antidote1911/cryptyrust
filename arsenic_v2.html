@@ -2,7 +2,7 @@
 <html lang="fr">
 <head>
     <meta charset="UTF-8">
-    <title>Protocole Arsenic V2 - Spécification Stockage & En-tête Évolutif</title>
+    <title>Protocole Arsenic V2 - Spécification Technique</title>
     <style>
         * {
             box-sizing: border-box;
@@ -169,260 +169,446 @@
     <header>
         <h1>Protocole Arsenic V2</h1>
         <div class="meta-info">
-            <strong>Spécification Technique de Référence — Optimisation Stockage & Architecture Évolutive</strong><br>
-            <strong>Auteur :</strong> Direction de l'Architecture Cryptographique<br>
-            <strong>Statut :</strong> Spécification Finale (Gelée pour l'implémentation de stockage à froid et volumes massifs)<br>
-            <strong>Focus Opérationnel :</strong> Opacité totale, performance NVMe brute, résistance DoS mémoire et extensibilité future.
+            <strong>Spécification Technique de Référence — Chiffrement de Fichiers à Haute Sécurité</strong><br>
+            <strong>Auteur :</strong> Fabrice Corraire &lt;antidote1911@gmail.com&gt;<br>
+            <strong>Statut :</strong> Spécification Finale — format <span class="badge">.arsn</span><br>
+            <strong>Focus Opérationnel :</strong> Algorithmes sélectionnables indépendamment (enveloppe et payload), résistance DoS mémoire, intégrité Merkle, parallélisme Rayon.
         </div>
     </header>
 
     <section>
-        <h2>1. Philosophie de l'Architecture Évolutive</h2>
+        <h2>1. Vue d'ensemble de l'Architecture</h2>
         <p>
-            La version V2 du protocole <strong>Arsenic</strong> est exclusivement optimisée pour le <strong>stockage de données hautement confidentielles et de volumes massifs (Cold Storage, archives, Remux UHD)</strong>. Puisque les contraintes de streaming réseau ou de transmission de flux à la volée sont écartées, le protocole utilise un paradigme d'exécution en <strong>deux passes</strong>. Ce choix permet de figer l'intégrité de l'intégralité du fichier avant de sceller définitivement son en-tête.
+            La version V2 du protocole <strong>Arsenic</strong> est conçue pour le <strong>chiffrement de données hautement confidentielles</strong>. Elle utilise un paradigme d'exécution en <strong>deux passes</strong> permettant de figer l'intégrité de l'intégralité du fichier via un arbre de Merkle BLAKE3 avant de sceller définitivement son en-tête.
         </p>
-        
+
         <div class="feature-card">
-            <h4>Le Principe de l'En-tête à Géométrie Variable</h4>
+            <h4>Sélection Indépendante des Algorithmes</h4>
             <p>
-                Pour éviter l'obsolescence du format face aux futures avancées technologiques (comme l'introduction d'algorithmes post-quantiques ou de nouvelles métadonnées applicatives), l'en-tête de la version V2 abandonne la taille fixe rigide. Il introduit un champ dynamique <span class="badge evolution">Header_Total_Size</span> dans sa section en clair, permettant à l'en-tête de s'étendre par blocs alignés. L'évolutivité est gérée à deux niveaux distincts :
+                Une innovation clé de Arsenic V2 est la possibilité de choisir <strong>indépendamment</strong> deux algorithmes AEAD distincts :
             </p>
             <ul>
-                <li><strong>Extensions Publiques :</strong> Gérées par l'ajustement de la taille globale, permettant d'ajouter des paramètres de KDF ou des indicateurs cryptographiques transparents avant le MAC de pré-authentification.</li>
-                <li><strong>Extensions Confidentielles (Structure TLV Chiffrée) :</strong> L'enveloppe chiffrée interne intègre une zone extensible encapsulant des structures Type-Length-Value (TLV). Tout ajout futur de métadonnées applicatives (indexation, étiquettes, arborescences) est ainsi automatiquement chiffré par Serpent et authentifié par GCM, sans altérer la compatibilité descendante des parseurs binitaires fondamentaux.</li>
+                <li><strong>Header Cipher</strong> (octet <span class="badge">0x07</span>) — chiffre l'enveloppe de clé DEK dans l'en-tête.</li>
+                <li><strong>Payload Cipher</strong> (octet <span class="badge">0x08</span>) — chiffre chaque bloc de données du fichier.</li>
             </ul>
+            <p>
+                Les deux IDs sont stockés en clair dans la section pré-MAC et sont couverts par le <span class="badge critical">HeaderMAC</span>. Ils ne peuvent pas être falsifiés sans invalider l'authentification.
+            </p>
+        </div>
+
+        <p>Un fichier Arsenic V2 est structuré comme suit :</p>
+        <div class="formula-box">
+┌──────────────────────────────────────────────┐<br>
+│  En-tête — 256 octets                        │<br>
+│    ├─ Section publique pré-MAC (76 octets)   │<br>
+│    ├─ HeaderMAC HMAC-SHA256 (32 octets)      │<br>
+│    ├─ Enveloppe chiffrée (97 octets)         │  ← header cipher (sélectionnable)<br>
+│    └─ Padding zéro (51 octets)               │<br>
+├──────────────────────────────────────────────┤<br>
+│  Bloc chiffré 0                              │  ← payload cipher (sélectionnable)<br>
+├──────────────────────────────────────────────┤<br>
+│  Bloc chiffré 1                              │<br>
+├──────────────────────────────────────────────┤<br>
+│  …                                           │<br>
+└──────────────────────────────────────────────┘
         </div>
     </section>
 
     <section>
-        <h2>2. Structure Spécifique de l'En-tête Évolutif (Alignement Bloc)</h2>
+        <h2>2. Structure de l'En-tête (256 octets)</h2>
         <p>
-            L'en-tête initial est conçu sur une base alignée de <strong>256 octets</strong> pour garantir des performances d'E/S optimales sur les secteurs physiques modernes (4Kn) et les architectures de stockage SSD. En cas d'évolution, la taille totale augmente par incréments de 64 octets.
+            L'en-tête est aligné sur <strong>256 octets</strong> pour des performances d'E/S optimales. Le champ <span class="badge evolution">Header_Total_Size</span> permet une évolution future sans rupture de format.
         </p>
 
+        <h3>2.1 Section Publique Pré-MAC (octets 0x00–0x4B, 76 octets)</h3>
         <table>
             <thead>
                 <tr>
-                    <th style="width: 15%;">Offsets (Bytes)</th>
+                    <th style="width: 15%;">Offsets</th>
                     <th style="width: 10%;">Taille</th>
-                    <th style="width: 25%;">Nom du Champ</th>
+                    <th style="width: 25%;">Champ</th>
                     <th style="width: 15%;">État</th>
-                    <th style="width: 35%;">Rôle et Spécification Technique</th>
+                    <th style="width: 35%;">Description</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
-                    <td><span class="badge">0x00 - 0x03</span></td>
+                    <td><span class="badge">0x00–0x03</span></td>
                     <td>4 octets</td>
                     <td><strong>Magic Number</strong></td>
                     <td>En Clair</td>
                     <td>Signature immuable : <span class="badge">0x41 0x52 0x53 0x4E</span> (<span class="math">"ARSN"</span>).</td>
                 </tr>
                 <tr>
-                    <td><span class="badge">0x04 - 0x05</span></td>
+                    <td><span class="badge">0x04–0x05</span></td>
                     <td>2 octets</td>
                     <td><strong>Version Info</strong></td>
                     <td>En Clair</td>
-                    <td><span class="badge">0x00 0x02</span> (Spécification V2 Stockage).</td>
+                    <td><span class="badge">0x00 0x02</span> — Arsenic V2.</td>
                 </tr>
                 <tr>
                     <td><span class="badge">0x06</span></td>
                     <td>1 octet</td>
                     <td><strong>KDF_ID</strong></td>
                     <td>En Clair</td>
-                    <td>Identifiant KDF (<span class="badge">0x01</span> = Argon2id, évolutif vers post-quantique).</td>
+                    <td>Identifiant KDF : <span class="badge">0x01</span> = Argon2id.</td>
                 </tr>
                 <tr>
                     <td><span class="badge">0x07</span></td>
                     <td>1 octet</td>
                     <td><strong>Header_Cipher_ID</strong></td>
                     <td>En Clair</td>
-                    <td>Primitive de l'enveloppe (<span class="badge">0x02</span> = Serpent-GCM).</td>
+                    <td>
+                        Algorithme de l'enveloppe de clé — <strong>sélectionnable</strong> :<br>
+                        <span class="badge">0x02</span> = Serpent-256-GCM <em>(défaut)</em><br>
+                        <span class="badge">0x03</span> = XChaCha20-Poly1305<br>
+                        <span class="badge">0x04</span> = AES-256-GCM-SIV<br>
+                        Couvert par le HeaderMAC.
+                    </td>
                 </tr>
                 <tr>
                     <td><span class="badge">0x08</span></td>
                     <td>1 octet</td>
                     <td><strong>Payload_Cipher_ID</strong></td>
                     <td>En Clair</td>
-                    <td>Primitive des données (<span class="badge">0x03</span> = XChaCha20-Poly1305).</td>
+                    <td>
+                        Algorithme des blocs de données — <strong>sélectionnable</strong> :<br>
+                        <span class="badge">0x02</span> = Serpent-256-GCM<br>
+                        <span class="badge">0x03</span> = XChaCha20-Poly1305 <em>(défaut)</em><br>
+                        <span class="badge">0x04</span> = AES-256-GCM-SIV<br>
+                        Couvert par le HeaderMAC.
+                    </td>
                 </tr>
                 <tr>
                     <td><span class="badge">0x09</span></td>
                     <td>1 octet</td>
                     <td><strong>Compression_ID</strong></td>
                     <td>En Clair</td>
-                    <td>Algorithme de compression (<span class="badge">0x00</span> = Aucun, <span class="badge">0x01</span> = ZSTD MT).</td>
+                    <td>Algorithme de compression : <span class="badge">0x00</span> = Aucun.</td>
                 </tr>
                 <tr>
-                    <td><span class="badge evolution">0x0A - 0x0B</span></td>
+                    <td><span class="badge evolution">0x0A–0x0B</span></td>
                     <td>2 octets</td>
                     <td><strong>Header_Total_Size</strong></td>
                     <td>En Clair</td>
-                    <td><strong>Clé de l'évolutivité</strong>. <span class="badge">u16 LE</span> spécifiant la taille totale de l'en-tête (Défaut : <span class="badge">0x0100</span> = 256B). Permet de repousser dynamiquement le début du payload.</td>
+                    <td><span class="badge">u16 LE</span> — taille totale de l'en-tête. Défaut : <span class="badge">0x0100</span> = 256 octets. Permet une évolution future sans rupture.</td>
                 </tr>
                 <tr>
-                    <td><span class="badge">0x0C - 0x1B</span></td>
+                    <td><span class="badge">0x0C–0x1B</span></td>
                     <td>16 octets</td>
                     <td><strong>Argon2id Salt</strong></td>
                     <td>En Clair</td>
-                    <td>Sel cryptographique brut (généré via <span class="badge">OsRng</span>). Base de la <span class="math">PreKey</span>.</td>
+                    <td>Sel cryptographique aléatoire (<span class="badge">OsRng</span>). Base de la <span class="math">PreKey</span>.</td>
                 </tr>
                 <tr>
-                    <td><span class="badge">0x1C - 0x1F</span></td>
+                    <td><span class="badge">0x1C–0x1F</span></td>
                     <td>4 octets</td>
-                    <td><strong>Argon2id t_cost</strong></td>
+                    <td><strong>t_cost</strong></td>
                     <td>En Clair</td>
-                    <td>Itérations KDF (<span class="badge">u32 LE</span>). Soumis aux limites strictes Anti-DoS.</td>
+                    <td>Itérations Argon2id (<span class="badge">u32 LE</span>). Couvert par le HeaderMAC — ne peut pas être dégradé silencieusement.</td>
                 </tr>
                 <tr>
-                    <td><span class="badge">0x20 - 0x23</span></td>
+                    <td><span class="badge">0x20–0x23</span></td>
                     <td>4 octets</td>
-                    <td><strong>Argon2id m_cost</strong></td>
+                    <td><strong>m_cost</strong></td>
                     <td>En Clair</td>
-                    <td>Allocation RAM KDF en Ko (<span class="badge">u32 LE</span>). Limite stricte de validation.</td>
+                    <td>Mémoire Argon2id en Ko (<span class="badge">u32 LE</span>). Validé après vérification du HeaderMAC pour éviter le DoS.</td>
                 </tr>
                 <tr>
-                    <td><span class="badge">0x24 - 0x27</span></td>
+                    <td><span class="badge">0x24–0x27</span></td>
                     <td>4 octets</td>
-                    <td><strong>Argon2id p_cost</strong></td>
+                    <td><strong>p_cost</strong></td>
                     <td>En Clair</td>
-                    <td>Threads parallèles KDF (<span class="badge">u32 LE</span>). Validé avant allocation.</td>
+                    <td>Parallélisme Argon2id (<span class="badge">u32 LE</span>).</td>
                 </tr>
                 <tr>
-                    <td><span class="badge">0x28 - 0x3F</span></td>
+                    <td><span class="badge">0x28–0x3F</span></td>
                     <td>24 octets</td>
                     <td><strong>File Base Nonce</strong></td>
                     <td>En Clair</td>
-                    <td>Nonce maître servant de racine pour le cliquet déterministe HChaCha20.</td>
+                    <td>Nonce maître aléatoire. Sert de base au déterminisme des nonces de blocs via BLAKE3.</td>
                 </tr>
                 <tr>
-                    <td><span class="badge">0x40 - 0x4B</span></td>
+                    <td><span class="badge">0x40–0x4B</span></td>
                     <td>12 octets</td>
                     <td><strong>KEK Nonce</strong></td>
                     <td>En Clair</td>
-                    <td>Vecteur d'initialisation unique pour l'enveloppe Serpent-GCM.</td>
+                    <td>Nonce d'initialisation pour le chiffrement de l'enveloppe (12 octets stockés). Pour XChaCha20-Poly1305, étendu à 24 octets via BLAKE3_derive_key — voir Section 3.2.</td>
                 </tr>
                 <tr>
-                    <td><span class="badge critical">0x4C - 0x6B</span></td>
+                    <td><span class="badge critical">0x4C–0x6B</span></td>
                     <td>32 octets</td>
                     <td><strong>Header MAC</strong></td>
                     <td>En Clair</td>
-                    <td><span class="badge secure">VÉRIFIÉ EN PREMIER</span>. <span class="math">HMAC-SHA256</span> calculé sur les octets <span class="badge">0x00</span> à <span class="badge">0x4B</span> via la <span class="math">PreKey</span>. Neutralise instantanément toute tentative de DoS.</td>
-                </tr>
-                <tr>
-                    <td><span class="badge evolution">0x6C - ...</span></td>
-                    <td>Variable</td>
-                    <td><strong>Encrypted Envelope</strong></td>
-                    <td>Chiffré</td>
-                    <td>Zone confidentielle chiffrée par Serpent. Héberge la <span class="math">DEK</span> (32B), la racine de Merkle (32B), la taille originale (8B), la taille compressée (8B), l'ID de taille de bloc (1B) et la <strong>structure d'extension TLV chiffrée</strong>.</td>
-                </tr>
-                <tr>
-                    <td>Padding Final</td>
-                    <td>16 + Var</td>
-                    <td><strong>GCM Tag & Padding</strong></td>
-                    <td>En Clair</td>
-                    <td>Tag d'authentification GHASH (16B) suivi des octets de bourrage <span class="badge">0x00</span> nécessaires pour atteindre la dimension exacte définie par <span class="badge">Header_Total_Size</span>.</td>
+                    <td><span class="badge secure">VÉRIFIÉ EN PREMIER</span>. <span class="math">HMAC-SHA256</span> sur les octets <span class="badge">0x00–0x4B</span> via la <span class="math">PreKey</span>. Neutralise toute tentative de DoS par <span class="math">m_cost</span> falsifié.</td>
                 </tr>
             </tbody>
         </table>
-    </section>
 
-    <section>
-        <h2>3. Pipeline Cryptographique Révisé & Algorithmes</h2>
-
-        <h3>3.1 Pipeline de Pré-authentification et Immunité DoS</h3>
+        <h3>2.2 Enveloppe Chiffrée (octets 0x6C–0xC2, 97 octets)</h3>
         <p>
-            Avant d'allouer la moindre structure mémoire pour exécuter le processus lourd d'Argon2id, l'application exécute une validation immédiate en mode "zéro allocation" :
+            L'enveloppe est chiffrée par le <strong>header cipher</strong> identifié en octet <span class="badge">0x07</span>, en utilisant la KEK dérivée d'Argon2id. Tous les algorithmes supportés produisent un tag AEAD de 16 octets, donc l'enveloppe chiffrée est toujours exactement <strong>97 octets</strong> (81 octets de plaintext + 16 octets de tag).
         </p>
-        <div class="formula-box">
-            // 1. Dérivation instantanée de la clé de contrôle à l'aide du mot de passe et du sel en clair<br>
-            PreKey = HMAC-SHA256(Key = Password, Data = Header.Salt)<br><br>
-            
-            // 2. Calcul et comparaison en temps constant du MAC de l'en-tête<br>
-            Computed_MAC = HMAC-SHA256(Key = PreKey, Data = Header[0x00 .. 0x4B])<br>
-            if ConstantTimeCompare(Computed_MAC, Header.Header_MAC) != Success {<br>
-            &nbsp;&nbsp;&nbsp;&nbsp;Abort("Échec Critique : Authentification En-tête rejetée. Interruption immédiate.");<br>
-            }<br><br>
-            
-            // 3. Validation des barrières physiques (Hard Sanity Limits) après validation du MAC<br>
-            if Header.m_cost > S_MAX_RAM || Header.Header_Total_Size > S_MAX_HEADER_SIZE {<br>
-            &nbsp;&nbsp;&nbsp;&nbsp;Abort("Échec Critique : Paramètres hors limites de sécurité.");<br>
-            }
-        </div>
-
-        <h3>3.2 Dérivation de Clés de Blocs par Séparation de Domaine (BLAKE3)</h3>
-        <p>
-            Pour éliminer tout risque d'attaque par glissement ou de corrélation inter-blocs, la clé globale des données (<span class="math">DEK</span>) est segmentée via le mécanisme natif de séparation de domaine de BLAKE3, interdisant toute utilisation directe du matériel de clé maître dans les primitives de flux :
-        </p>
-        <div class="formula-box">
-            BlockKey<sub>N</sub> = BLAKE3_Derive_Key(Context = "Arsenic V2 Block Key", Key = DEK, Material = u64_to_le_bytes(N))
-        </div>
-
-        <h3>3.3 Cliquet de Nonce Déterministe (Stateless Threads)</h3>
-        <p>
-            Pour garantir un traitement massivement multithreadé sans aucune synchronisation ou stockage fastidieux de nonces sur disque, les nonces de chaque bloc de données sont calculés via la fonction de hachage à haut débit HChaCha20 :
-        </p>
-        <div class="formula-box">
-            Nonce<sub>N</sub> = HChaCha20(Key = File_Base_Nonce, Counter = u64_to_le_bytes(N))
-        </div>
-    </section>
-
-    <section>
-        <h2>4. Pipeline d'Exécution en Deux Passes Spécialisé Stockage</h2>
-        
-        <h3>4.1 Passe 1 : Compression, Fragmentation et Chiffrement Parallèle</h3>
-        <ol>
-            <li><strong>Compression native :</strong> Le flux binaire original est optionnellement compressé via ZSTD en mode multithread. La taille compressée finale détermine le partitionnement.</li>
-            <li><strong>Segmentation adaptative :</strong> La charge utile est découpée en blocs de taille fixe et optimisée pour l'infrastructure matérielle sous-jacente :
-                <ul>
-                    <li>Volumes standards (&lt; 4 Go) : Blocs de 4 Mo</li>
-                    <li>Volumes de stockage de masse (&gt; 4 Go, fichiers Remux) : Blocs de 32 Mo ou 64 Mo</li>
-                </ul>
-            </li>
-            <li><strong>Chiffrement de flux indépendant :</strong> Chaque thread prend en charge un bloc <span class="math">N</span>, dérive sa <span class="math">BlockKey<sub>N</sub></span> et son <span class="math">Nonce<sub>N</sub></span>, puis applique la primitive <span class="badge">XChaCha20-Poly1305</span>. L'index du bloc est injecté dans les données authentifiées supplémentaires (<span class="badge">AAD = u64_to_le_bytes(N)</span>).</li>
-            <li><strong>Enregistrement volatil des nœuds :</strong> L'empreinte cryptographique élémentaire de chaque bloc chiffré est calculée et stockée temporairement en RAM :
-                <div class="formula-box">Leaf<sub>N</sub> = BLAKE3(Ciphertext<sub>Block_N</sub> || Poly1305_Tag<sub>Block_N</sub>)</div>
-            </li>
-        </ol>
-
-        <h3>4.2 Passe 2 : Clôture de l'Arbre de Merkle et Fixation de l'En-tête Évolutif</h3>
-        <ol>
-            <li><strong>Calcul de la Racine globale :</strong> Les feuilles de l'arbre sont combinées récursivement par paires pour générer le <span class="math">Merkle Root</span> global de 32 octets, scellant mathématiquement l'ordre, l'intégrité et le nombre exact de blocs.</li>
-            <li><strong>Construction de la structure TLV :</strong> Toutes les métadonnées spécifiques ainsi que les éventuelles extensions futures sont packagées sous forme de structures TLV standardisées.</li>
-            <li><strong>Scellement de l'enveloppe Serpent-GCM :</strong> La zone confidentielle (DEK, Racine Merkle, Tailles, Extensions TLV) est chiffrée avec Serpent-GCM via la <span class="math">KEK</span> finale (dérivée d'Argon2id).</li>
-            <li><strong>Repositionnement et écriture physique :</strong> L'application effectue un appel système <span class="badge">Seek(0)</span>, écrit l'en-tête de taille <span class="badge">Header_Total_Size</span> au début du fichier sur le support physique, complétant l'opération de scellement à froid.</li>
-        </ol>
-    </section>
-
-    <section>
-        <h2>5. Matrice de Couverture des Menaces (Modèle de Sécurité)</h2>
         <table>
             <thead>
                 <tr>
-                    <th style="width: 30%;">Vecteur d'Attaque Ciblé</th>
-                    <th style="width: 70%;">Mécanisme de Neutralisation Intégré (Arsenic V2)</th>
+                    <th style="width: 20%;">Offset (dans le plaintext)</th>
+                    <th style="width: 10%;">Taille</th>
+                    <th style="width: 70%;">Champ</th>
                 </tr>
             </thead>
             <tbody>
                 <tr>
-                    <td><strong>DoS par épuisement de RAM (OOM)</strong></td>
-                    <td>La validation obligatoire du <span class="badge critical">Header MAC</span> via la <span class="math">PreKey</span> garantit qu'aucune structure mémoire n'est allouée pour Argon2id si l'en-tête a été modifié par un tiers.</td>
+                    <td>0</td>
+                    <td>32 octets</td>
+                    <td><strong>DEK</strong> — Data Encryption Key, aléatoire, unique par fichier.</td>
                 </tr>
                 <tr>
-                    <td><strong>Analyse de trafic & Fingerprinting</strong></td>
-                    <td>L'activation de la compression ZSTD couplée au masquage obligatoire de la taille réelle du fichier (confinée dans l'enveloppe chiffrée par Serpent) supprime les signatures de taille caractéristiques. L'en-tête est indistinguable d'un bruit de haute entropie.</td>
+                    <td>32</td>
+                    <td>32 octets</td>
+                    <td><strong>Merkle Root</strong> — racine BLAKE3 de l'arbre d'intégrité sur les blocs chiffrés.</td>
                 </tr>
                 <tr>
-                    <td><strong>Troncature ou suppression de blocs finaux</strong></td>
-                    <td>L'inclusion du <span class="math">Merkle Root</span> au cœur de la zone confidentielle chiffrée empêche un attaquant de supprimer silencieusement la fin d'une archive ou d'un fichier vidéo sans provoquer un échec immédiat de validation de l'arbre complet lors de la phase d'ouverture.</td>
+                    <td>64</td>
+                    <td>8 octets</td>
+                    <td><strong>Original Size</strong> — taille originale du fichier (u64 LE).</td>
+                </tr>
+                <tr>
+                    <td>72</td>
+                    <td>8 octets</td>
+                    <td><strong>Compressed Size</strong> — taille du payload compressé (u64 LE).</td>
+                </tr>
+                <tr>
+                    <td>80</td>
+                    <td>1 octet</td>
+                    <td><strong>Block Size ID</strong> — <span class="badge">0x01</span> = blocs 4 Mio (fichiers &lt; 4 Gio) · <span class="badge">0x02</span> = blocs 32 Mio (fichiers ≥ 4 Gio).</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>2.3 Padding (octets 0xC3–0xFF, 51 octets)</h3>
+        <p>Octets zéro, réservés pour les évolutions futures.</p>
+    </section>
+
+    <section>
+        <h2>3. Algorithmes Supportés et Gestion des Nonces</h2>
+
+        <h3>3.1 Tableau des Algorithmes</h3>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 8%;">ID</th>
+                    <th style="width: 25%;">Algorithme</th>
+                    <th style="width: 12%;">Nonce</th>
+                    <th style="width: 55%;">Notes</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><span class="badge">0x02</span></td>
+                    <td><strong>Serpent-256-GCM</strong></td>
+                    <td>96 bits (12 oct.)</td>
+                    <td>Serpent-256 en mode GCM NIST ; implémentation GHASH manuelle. Algorithme d'enveloppe par défaut.</td>
+                </tr>
+                <tr>
+                    <td><span class="badge">0x03</span></td>
+                    <td><strong>XChaCha20-Poly1305</strong></td>
+                    <td>192 bits (24 oct.)</td>
+                    <td>Nonce étendu à 192 bits — risque de collision de nonce quasi nul à grande échelle. Algorithme de payload par défaut.</td>
+                </tr>
+                <tr>
+                    <td><span class="badge">0x04</span></td>
+                    <td><strong>AES-256-GCM-SIV</strong></td>
+                    <td>96 bits (12 oct.)</td>
+                    <td>Variante GCM résistante à la réutilisation de nonce. Sûr même en cas de nonce accidentellement répété.</td>
+                </tr>
+            </tbody>
+        </table>
+        <p>Les trois algorithmes produisent un tag d'authentification de <strong>16 octets</strong>. La taille du ciphertext est toujours <code>plaintext_len + 16</code>, quel que soit l'algorithme.</p>
+
+        <h3>3.2 Gestion du Nonce KEK pour l'Enveloppe</h3>
+        <p>
+            Le champ <span class="badge">KEK_nonce</span> est toujours stocké sur 12 octets en en-tête. Pour Serpent-256-GCM et AES-256-GCM-SIV (nonces 96 bits), ce champ est utilisé directement. Pour XChaCha20-Poly1305 qui nécessite 192 bits, le nonce est étendu déterministiquement par BLAKE3 :
+        </p>
+        <div class="formula-box">
+            // KEK nonce stocké = 12 octets<br>
+            // Pour Serpent-256-GCM et AES-256-GCM-SIV : utilisation directe des 12 octets<br><br>
+            // Pour XChaCha20-Poly1305 en enveloppe :<br>
+            input_32 = KEK_nonce[0..12] ‖ 0x00×20&nbsp;&nbsp;&nbsp;&nbsp;// zéro-pad à 32 octets<br>
+            nonce_24 = BLAKE3_derive_key("Arsenic V2 KEK Nonce XChaCha20", input_32)[0..24]
+        </div>
+
+        <h3>3.3 Dérivation des Clés et Nonces de Blocs (BLAKE3)</h3>
+        <p>
+            Chaque bloc dispose d'une clé et d'un nonce dérivés déterministiquement depuis la DEK et l'index du bloc, permettant le <strong>parallélisme total</strong> sans synchronisation :
+        </p>
+        <div class="formula-box">
+            // Clé de bloc — BLAKE3 keyed hash<br>
+            BlockKey_N = BLAKE3_keyed_hash(key = DEK, data = u64_LE(N))<br><br>
+            // Nonce de bloc — BLAKE3 derive_key (toujours 24 octets dérivés)<br>
+            BlockNonce_N = BLAKE3_derive_key("Arsenic V2 Block Nonce",<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;File_Base_Nonce ‖ u64_LE(N))[0..24]<br><br>
+            // Pour les ciphers à nonce 96 bits (Serpent-GCM, AES-GCM-SIV) :<br>
+            nonce_utilisé = BlockNonce_N[0..12]<br><br>
+            // Pour XChaCha20-Poly1305 : BlockNonce_N[0..24] utilisé en entier
+        </div>
+    </section>
+
+    <section>
+        <h2>4. Pipeline Cryptographique</h2>
+
+        <h3>4.1 Pré-authentification et Immunité DoS</h3>
+        <p>
+            Avant d'allouer la moindre structure mémoire pour Argon2id, une validation bon marché rejette immédiatement toute en-tête falsifiée :
+        </p>
+        <div class="formula-box">
+            // 1. Dérivation de la PreKey (coût : un seul appel HMAC)<br>
+            PreKey = HMAC-SHA256(Key = Password, Data = Header.Salt)<br><br>
+
+            // 2. Vérification en temps constant du MAC<br>
+            Computed_MAC = HMAC-SHA256(Key = PreKey, Data = Header[0x00..0x4B])<br>
+            if ConstantTimeCompare(Computed_MAC, Header.Header_MAC) != Success {<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;Abort("Authentification rejetée — mauvais mot de passe ou en-tête corrompu");<br>
+            }<br><br>
+
+            // 3. Validation des limites de sécurité (après vérification MAC)<br>
+            if Header.m_cost &gt; MAX_ARGON2_RAM_KB {<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;Abort("Paramètres hors limites de sécurité");<br>
+            }
+        </div>
+
+        <h3>4.2 Dérivation de la KEK via Argon2id</h3>
+        <div class="formula-box">
+            KEK = Argon2id(<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;password = mot de passe UTF-8,<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;salt     = Header[0x0C..0x1C]&nbsp;&nbsp;// 16 octets aléatoires,<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;t        = t_cost,<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;m        = m_cost (Ko),<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;p        = p_cost,<br>
+            &nbsp;&nbsp;&nbsp;&nbsp;taglen   = 32<br>
+            )
+        </div>
+
+        <table>
+            <thead>
+                <tr>
+                    <th>Préréglage</th>
+                    <th>t</th>
+                    <th>m (Ko)</th>
+                    <th>p</th>
+                    <th>Mémoire</th>
+                    <th>Durée typique</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>Interactive</strong> (défaut)</td>
+                    <td>4</td>
+                    <td>262 144</td>
+                    <td>4</td>
+                    <td>256 Mio</td>
+                    <td>~1–3 s</td>
+                </tr>
+                <tr>
+                    <td><strong>Sensitive</strong></td>
+                    <td>12</td>
+                    <td>1 048 576</td>
+                    <td>4</td>
+                    <td>1 Gio</td>
+                    <td>~10–30 s</td>
+                </tr>
+            </tbody>
+        </table>
+
+        <h3>4.3 Passe 1 : Fragmentation et Chiffrement Parallèle des Blocs</h3>
+        <ol>
+            <li><strong>Segmentation adaptative :</strong>
+                <ul>
+                    <li>Fichiers &lt; 4 Gio : blocs de 4 Mio (Block ID <span class="badge">0x01</span>)</li>
+                    <li>Fichiers ≥ 4 Gio : blocs de 32 Mio (Block ID <span class="badge">0x02</span>)</li>
+                </ul>
+            </li>
+            <li><strong>Chiffrement indépendant par bloc (parallèle via Rayon) :</strong> Chaque thread dérive sa <span class="math">BlockKey_N</span> et son <span class="math">BlockNonce_N</span> depuis la DEK, puis chiffre avec le <strong>payload cipher</strong> sélectionné. L'index du bloc est injecté dans les données authentifiées supplémentaires :
+                <div class="formula-box">EncBlock_N = PayloadCipher(key=BlockKey_N, nonce=BlockNonce_N, aad=u64_LE(N), msg=plaintext_N)</div>
+            </li>
+            <li><strong>Calcul des feuilles Merkle :</strong> L'empreinte de chaque bloc chiffré est calculée et conservée en RAM :
+                <div class="formula-box">Leaf_N = BLAKE3(EncBlock_N)</div>
+            </li>
+        </ol>
+
+        <h3>4.4 Passe 2 : Clôture de l'Arbre de Merkle et Scellement de l'En-tête</h3>
+        <ol>
+            <li><strong>Calcul de la racine Merkle :</strong> Les feuilles sont combinées récursivement par paires — les nœuds impairs sont promus sans hachage — produisant la <span class="math">Merkle Root</span> de 32 octets. Elle scelle mathématiquement l'ordre, l'intégrité et le nombre exact de blocs.</li>
+            <li><strong>Construction de l'enveloppe :</strong> DEK, Merkle Root, tailles et Block Size ID sont sérialisés (81 octets).</li>
+            <li><strong>Scellement de l'enveloppe :</strong> La zone confidentielle est chiffrée avec le <strong>header cipher</strong> sélectionné via la <span class="math">KEK</span> issue d'Argon2id.</li>
+            <li><strong>Calcul du HeaderMAC</strong> et écriture de l'en-tête complet (256 octets) en début de fichier.</li>
+        </ol>
+    </section>
+
+    <section>
+        <h2>5. Hiérarchie des Clés</h2>
+        <div class="formula-box">
+Password ─── Argon2id(salt, t, m, p) ────────────────► KEK (32 octets)<br>
+                                                          │<br>
+                                          header_cipher ──┤  (Serpent-GCM /<br>
+                                                          │   AES-GCM-SIV /<br>
+                                                          ▼   XChaCha20)<br>
+                                              Enveloppe chiffrée<br>
+                                              └─ DEK (32 octets aléatoires)<br>
+                                              └─ MerkleRoot (32 octets)<br>
+                                              └─ OrigSize, CompSize, BlockSizeID<br>
+                                                          │<br>
+                                                     ┌────┘  DEK<br>
+                                                     ▼<br>
+BlockKey_N   = BLAKE3_keyed_hash(DEK, u64_LE(N))<br>
+BlockNonce_N = BLAKE3_derive_key("Arsenic V2 Block Nonce", base_nonce ‖ u64_LE(N))[0..24]<br>
+                                                     │<br>
+                                     payload_cipher ─┤  (XChaCha20 /<br>
+                                                     │   AES-GCM-SIV /<br>
+                                                     ▼   Serpent-GCM)<br>
+                                              EncBlock_N
+        </div>
+
+        <p>La <strong>DEK</strong> est générée aléatoirement à chaque chiffrement. Un changement de mot de passe (<em>rekey</em>) re-chiffre uniquement l'enveloppe sous une nouvelle KEK — le payload n'est jamais retouché. L'algorithme d'enveloppe d'origine est préservé.</p>
+    </section>
+
+    <section>
+        <h2>6. Matrice de Couverture des Menaces</h2>
+        <table>
+            <thead>
+                <tr>
+                    <th style="width: 30%;">Vecteur d'Attaque</th>
+                    <th style="width: 70%;">Mécanisme de Neutralisation (Arsenic V2)</th>
+                </tr>
+            </thead>
+            <tbody>
+                <tr>
+                    <td><strong>DoS par épuisement RAM (m_cost falsifié)</strong></td>
+                    <td>Le <span class="badge critical">HeaderMAC</span> est vérifié <em>avant</em> tout appel Argon2id. Un en-tête modifié est rejeté immédiatement, sans allocation mémoire. Les paramètres KDF et les IDs de cipher sont couverts par ce MAC.</td>
+                </tr>
+                <tr>
+                    <td><strong>Troncature ou suppression de blocs</strong></td>
+                    <td>Le <span class="math">Merkle Root</span> scellé dans l'enveloppe chiffrée couvre la totalité des blocs. Aucun plaintext n'est écrit tant que la racine recomputée ne correspond pas.</td>
                 </tr>
                 <tr>
                     <td><strong>Permutation ou injection de blocs</strong></td>
-                    <td>L'injection forcée de l'index binaire de bloc (<span class="math">N</span>) dans le champ de données authentifiées associées (<span class="badge">AAD</span>) empêche toute interversion de blocs valides entre eux.</td>
+                    <td>L'index <span class="math">N</span> est injecté dans le champ AAD de chaque bloc. Un bloc valide replacé à un autre index ne passera pas la vérification AEAD.</td>
                 </tr>
                 <tr>
-                    <td><strong>Extraction de clés résiduelles (RAM Dump)</strong></td>
-                    <td>L'intégration systématique du trait de destruction automatique <span class="badge">Zeroize</span> et le verrouillage physique des pages mémoires via <span class="badge critical">mlock()</span> interdisent l'écriture des structures sensibles dans le Swap ou le zram du noyau.</td>
+                    <td><strong>Dégradation silencieuse du cipher ou du KDF</strong></td>
+                    <td>Les IDs de cipher (octets <span class="badge">0x07</span>/<span class="badge">0x08</span>) et les paramètres Argon2id sont couverts par le HeaderMAC. Toute modification invalide l'authentification.</td>
+                </tr>
+                <tr>
+                    <td><strong>Réutilisation accidentelle de nonce</strong></td>
+                    <td>Les nonces de blocs sont dérivés déterministiquement depuis un <span class="math">File_Base_Nonce</span> aléatoire unique par fichier — la collision est structurellement impossible. L'option AES-256-GCM-SIV apporte une résistance supplémentaire à la réutilisation de nonce.</td>
+                </tr>
+                <tr>
+                    <td><strong>Extraction de clés (RAM)</strong></td>
+                    <td>Les structures sensibles (KEK, DEK, clés de blocs) utilisent <span class="badge">Secret&lt;T&gt;</span> avec le trait <span class="badge">Zeroize</span> — la mémoire est effacée à la destruction.</td>
+                </tr>
+                <tr>
+                    <td><strong>Corruption lors d'un rekey</strong></td>
+                    <td>Un backup <span class="badge">.bak</span> de l'en-tête original est flushé sur disque avant toute modification. Si le processus est interrompu, le magic corrompu est détecté et l'en-tête est restauré automatiquement depuis le backup.</td>
                 </tr>
             </tbody>
         </table>

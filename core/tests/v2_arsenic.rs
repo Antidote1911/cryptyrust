@@ -1,6 +1,6 @@
 use cryptyrust_core::{
     arsenic::TOTAL_HEADER_LEN,
-    arsenic::{decrypt_arsenic, encrypt_arsenic, ArsenicParams, BLOCK_SIZE_4MB},
+    arsenic::{decrypt_arsenic, encrypt_arsenic, ArsenicParams, CipherId, BLOCK_SIZE_4MB},
     arsenic_rekey, is_arsenic_file, Secret, Ui,
 };
 use std::io::Cursor;
@@ -16,10 +16,16 @@ const WRONG_PASSWORD: &str = "wrong_arsenic_password";
 
 /// Minimal Argon2id params — keeps tests fast (< 1 ms KDF).
 fn fast_params() -> ArsenicParams {
+    fast_params_with(CipherId::SerpentGcm, CipherId::XChaCha20Poly1305)
+}
+
+fn fast_params_with(hdr: CipherId, pld: CipherId) -> ArsenicParams {
     ArsenicParams {
         t_cost: 1,
         m_cost: 64,
         p_cost: 1,
+        hdr_cipher: hdr,
+        pld_cipher: pld,
     }
 }
 
@@ -525,4 +531,94 @@ fn rekey_corrupted_header_restored_from_backup() {
     let restored = std::fs::read(tmp.path()).expect("read restored");
     let pt = do_decrypt(&restored, PASSWORD).expect("file must be decryptable after restore");
     assert_eq!(pt, b"corruption recovery");
+}
+
+// ── Cipher combination round-trips ────────────────────────────────────────────
+
+#[test]
+fn round_trip_aes_gcm_siv_header_xchacha20_payload() {
+    let params = fast_params_with(CipherId::Aes256GcmSiv, CipherId::XChaCha20Poly1305);
+    let data = b"AES-GCM-SIV header, XChaCha20 payload";
+    let ct = do_encrypt_with(data, PASSWORD, params);
+    assert_eq!(ct[7], 0x04, "hdr_cipher_id = AES-GCM-SIV");
+    assert_eq!(ct[8], 0x03, "pld_cipher_id = XChaCha20");
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn round_trip_xchacha20_header_xchacha20_payload() {
+    let params = fast_params_with(CipherId::XChaCha20Poly1305, CipherId::XChaCha20Poly1305);
+    let data = b"XChaCha20 header and payload";
+    let ct = do_encrypt_with(data, PASSWORD, params);
+    assert_eq!(ct[7], 0x03);
+    assert_eq!(ct[8], 0x03);
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn round_trip_serpent_header_aes_gcm_siv_payload() {
+    let params = fast_params_with(CipherId::SerpentGcm, CipherId::Aes256GcmSiv);
+    let data = b"Serpent header, AES-GCM-SIV payload";
+    let ct = do_encrypt_with(data, PASSWORD, params);
+    assert_eq!(ct[7], 0x02);
+    assert_eq!(ct[8], 0x04, "pld_cipher_id = AES-GCM-SIV");
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn round_trip_all_aes_gcm_siv() {
+    let params = fast_params_with(CipherId::Aes256GcmSiv, CipherId::Aes256GcmSiv);
+    let data = b"AES-GCM-SIV everywhere";
+    let ct = do_encrypt_with(data, PASSWORD, params);
+    assert_eq!(ct[7], 0x04);
+    assert_eq!(ct[8], 0x04);
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn round_trip_all_serpent() {
+    let params = fast_params_with(CipherId::SerpentGcm, CipherId::SerpentGcm);
+    let data = b"Serpent header and payload";
+    let ct = do_encrypt_with(data, PASSWORD, params);
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn round_trip_aes_gcm_siv_header_serpent_payload() {
+    let params = fast_params_with(CipherId::Aes256GcmSiv, CipherId::SerpentGcm);
+    let data = b"AES-GCM-SIV header, Serpent payload";
+    let ct = do_encrypt_with(data, PASSWORD, params);
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn wrong_cipher_id_rejected() {
+    let mut ct = do_encrypt(b"cipher id tamper");
+    // Corrupt the payload cipher ID byte to an unknown value
+    ct[8] = 0xFF;
+    assert!(do_decrypt(&ct, PASSWORD).is_err());
+}
+
+#[test]
+fn rekey_preserves_cipher_ids() {
+    let params = fast_params_with(CipherId::Aes256GcmSiv, CipherId::SerpentGcm);
+    let data = b"rekey cipher id preservation";
+    let ct = do_encrypt_with(data, PASSWORD, params);
+    let mut tmp = NamedTempFile::new().expect("tempfile");
+    std::io::Write::write_all(&mut tmp, &ct).expect("write");
+    tmp.as_file_mut().sync_all().expect("sync");
+
+    arsenic_rekey(
+        tmp.path(),
+        &Secret::new(PASSWORD.into()),
+        &Secret::new("new_pw_cipher".into()),
+        &NoUi,
+    )
+    .expect("rekey");
+
+    let rekeyed = std::fs::read(tmp.path()).expect("read");
+    // Cipher IDs must survive rekey unchanged
+    assert_eq!(rekeyed[7], 0x04, "hdr_cipher_id preserved");
+    assert_eq!(rekeyed[8], 0x02, "pld_cipher_id preserved");
+    assert_eq!(do_decrypt(&rekeyed, "new_pw_cipher").unwrap(), data);
 }

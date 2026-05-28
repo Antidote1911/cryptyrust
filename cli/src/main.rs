@@ -190,7 +190,11 @@ fn run_crypt(app: &Cli) -> Result<(Option<String>, Direction, f64)> {
 
     let out_str = output_path.as_deref().unwrap();
     let ui = Box::new(ProgressUpdater::new(direction.clone()));
-    let params = ArsenicParams::from(app.strength());
+    let params = ArsenicParams {
+        hdr_cipher: app.hdr_cipher(),
+        pld_cipher: app.pld_cipher(),
+        ..ArsenicParams::from(app.strength())
+    };
 
     let duration = match arsenic_main_routine(
         &direction,

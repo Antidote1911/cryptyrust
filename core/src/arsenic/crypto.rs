@@ -1,8 +1,6 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 
-use aead::{Aead, KeyInit, Payload};
 use argon2::{Algorithm, Argon2, Params, Version};
-use chacha20poly1305::{XChaCha20Poly1305, XNonce};
 use rand::random;
 use rayon::prelude::*;
 use zeroize::Zeroize;
@@ -11,14 +9,15 @@ use crate::errors::CoreErr;
 use crate::secret::Secret;
 use crate::Ui;
 
+use super::cipher_dispatch;
 use super::header::{
     build_header_bytes, compute_header_mac, compute_prekey, deserialize_envelope,
     parse_header_bytes, serialize_envelope, serialize_pre_mac, verify_header_mac, EnvelopeContent,
-    PublicHeader, COMPRESS_NONE, DEFAULT_HEADER_SIZE, ENVELOPE_PT_LEN, GCM_TAG, TOTAL_HEADER_LEN,
+    PublicHeader, COMPRESS_NONE, DEFAULT_HEADER_SIZE, ENVELOPE_ENC_LEN, ENVELOPE_PT_LEN, GCM_TAG,
+    TOTAL_HEADER_LEN,
 };
-use super::serpent_gcm::SerpentGcm;
 use super::{
-    BLOCK_ID_32MB, BLOCK_ID_4MB, BLOCK_SIZE_32MB, BLOCK_SIZE_4MB, LARGE_FILE_THRESHOLD,
+    CipherId, BLOCK_ID_32MB, BLOCK_ID_4MB, BLOCK_SIZE_32MB, BLOCK_SIZE_4MB, LARGE_FILE_THRESHOLD,
     MAX_ARGON2_RAM_KB, MAX_HEADER_TOTAL_SIZE,
 };
 
@@ -143,6 +142,7 @@ where
     let mut dek: [u8; 32] = random();
 
     let (block_size, block_size_id) = select_block_params(filesize);
+    let pld_cipher = params.pld_cipher; // Copy — captured by value in par_iter closure
 
     // ── 2. Write placeholder header (256 bytes of zeros) ─────────────────
     output.write_all(&[0u8; TOTAL_HEADER_LEN])?;
@@ -165,7 +165,8 @@ where
     }
 
     // ── 4. Parallel encrypt — all blocks are independent ─────────────────
-    // Capture dek and file_base_nonce by copy (both are [u8; N], Copy + Send).
+    // dek and file_base_nonce are [u8; N] (Copy + Send) — captured by value.
+    // pld_cipher is CipherId (Copy + Send) — captured by value.
     // Progress is reported in step 5 from the main thread; Ui need not be Sync.
     let enc_results: BlockResults = raw_blocks
         .into_par_iter()
@@ -173,17 +174,9 @@ where
         .map(|(block_index, plaintext)| {
             let block_nonce = derive_block_nonce(&file_base_nonce, block_index as u64);
             let block_key_bytes = derive_block_key(&dek, block_index as u64);
-            let cipher = XChaCha20Poly1305::new_from_slice(&block_key_bytes)
-                .map_err(|_| CoreErr::CreateCipher)?;
-            let nonce = XNonce::from_slice(&block_nonce);
             let aad = (block_index as u64).to_le_bytes();
-            let payload = Payload {
-                msg: &plaintext,
-                aad: &aad,
-            };
-            let encrypted = cipher
-                .encrypt(nonce, payload)
-                .map_err(|_| CoreErr::EncryptFail("Block encryption failed".into()))?;
+            let encrypted =
+                cipher_dispatch::block_encrypt(pld_cipher, &block_key_bytes, &block_nonce, &aad, &plaintext)?;
             let leaf = compute_leaf(&encrypted);
             Ok((encrypted, leaf))
         })
@@ -193,8 +186,6 @@ where
     let num_blocks = enc_results.len();
 
     // ── 5. Write encrypted blocks sequentially and collect leaves ─────────
-    // Writing is inherently sequential; progress is reported here so Ui stays
-    // on the main thread without requiring Send/Sync.
     let mut leaves: Vec<[u8; 32]> = Vec::with_capacity(num_blocks);
     for (i, (encrypted, leaf)) in enc_results.into_iter().enumerate() {
         output.write_all(&encrypted)?;
@@ -223,10 +214,11 @@ where
         params.p_cost,
     )?;
 
-    let serpent = SerpentGcm::new(kek.expose())?;
-    let enc_env = serpent.encrypt(&kek_nonce, &[], &env_pt);
-    assert_eq!(enc_env.len(), ENVELOPE_PT_LEN + 16);
-    let enc_env_arr: [u8; ENVELOPE_PT_LEN + 16] = enc_env.try_into().expect("exactly 97 bytes");
+    let enc_env =
+        cipher_dispatch::envelope_encrypt(params.hdr_cipher, kek.expose(), &kek_nonce, &[], &env_pt)?;
+    assert_eq!(enc_env.len(), ENVELOPE_PT_LEN + GCM_TAG);
+    let enc_env_arr: [u8; ENVELOPE_PT_LEN + GCM_TAG] =
+        enc_env.try_into().expect("exactly 97 bytes");
 
     let pub_header = PublicHeader {
         compression_id: COMPRESS_NONE,
@@ -237,6 +229,8 @@ where
         p_cost: params.p_cost,
         file_base_nonce,
         kek_nonce,
+        hdr_cipher_id: params.hdr_cipher.to_byte(),
+        pld_cipher_id: params.pld_cipher.to_byte(),
     };
 
     let prekey = compute_prekey(password.expose().as_bytes(), &salt);
@@ -277,20 +271,24 @@ where
 
     let (pub_hdr, pre_mac_bytes, stored_mac, enc_env) = parse_header_bytes(&header_buf)?;
 
-    // ── 2. Pre-authentication (DoS-immune MAC check) ──────────────────────
+    // ── 2. Resolve cipher IDs ─────────────────────────────────────────────
+    let hdr_cipher = CipherId::from_byte(pub_hdr.hdr_cipher_id)?;
+    let pld_cipher = CipherId::from_byte(pub_hdr.pld_cipher_id)?;
+
+    // ── 3. Pre-authentication (DoS-immune MAC check) ──────────────────────
     let prekey = compute_prekey(password.expose().as_bytes(), &pub_hdr.salt);
     if !verify_header_mac(&prekey, &pre_mac_bytes, &stored_mac) {
         return Err(CoreErr::DecryptionError);
     }
 
-    // ── 3. Sanity limits ──────────────────────────────────────────────────
+    // ── 4. Sanity limits ──────────────────────────────────────────────────
     if pub_hdr.m_cost > MAX_ARGON2_RAM_KB || pub_hdr.header_total_size > MAX_HEADER_TOTAL_SIZE {
         return Err(CoreErr::DecryptFail(
             "Parameters exceed safety limits".into(),
         ));
     }
 
-    // ── 4. Derive KEK with Argon2id ───────────────────────────────────────
+    // ── 5. Derive KEK with Argon2id ───────────────────────────────────────
     let kek = derive_kek(
         password.expose().as_bytes(),
         &pub_hdr.salt,
@@ -299,19 +297,19 @@ where
         pub_hdr.p_cost,
     )?;
 
-    // ── 5. Decrypt envelope ───────────────────────────────────────────────
-    let serpent = SerpentGcm::new(kek.expose())?;
-    let env_enc: [u8; ENVELOPE_PT_LEN + 16] = enc_env
-        .try_into()
-        .map_err(|_| CoreErr::DecryptFail("Envelope size".into()))?;
-    let env_pt = serpent.decrypt(&pub_hdr.kek_nonce, &[], &env_enc)?;
+    // ── 6. Decrypt envelope ───────────────────────────────────────────────
+    if enc_env.len() != ENVELOPE_ENC_LEN {
+        return Err(CoreErr::DecryptFail("Envelope size mismatch".into()));
+    }
+    let env_pt =
+        cipher_dispatch::envelope_decrypt(hdr_cipher, kek.expose(), &pub_hdr.kek_nonce, &[], &enc_env)?;
     let env = deserialize_envelope(&env_pt)?;
 
     let block_size = block_size_from_id(env.block_size_id)?;
     let encrypted_block_size = block_size + 16;
     let num_blocks = env.compressed_size.div_ceil(block_size as u64);
 
-    // ── 6. Read all encrypted blocks ─────────────────────────────────────
+    // ── 7. Read all encrypted blocks ─────────────────────────────────────
     let mut encrypted_blocks: Vec<Vec<u8>> = Vec::with_capacity(num_blocks as usize);
     for block_index in 0..num_blocks {
         let is_last = block_index == num_blocks - 1;
@@ -330,8 +328,8 @@ where
         encrypted_blocks.push(enc_buf);
     }
 
-    // ── 7. Parallel decrypt + leaf computation ────────────────────────────
-    // dek and file_base_nonce are Copy ([u8; N]) — captured by value in the closure.
+    // ── 8. Parallel decrypt + leaf computation ────────────────────────────
+    // dek, file_base_nonce, and pld_cipher are all Copy + Send — captured by value.
     let dek = env.dek;
     let file_base_nonce = pub_hdr.file_base_nonce;
 
@@ -342,17 +340,9 @@ where
             let leaf = compute_leaf(&enc_buf);
             let block_key_bytes = derive_block_key(&dek, block_index as u64);
             let block_nonce = derive_block_nonce(&file_base_nonce, block_index as u64);
-            let cipher = XChaCha20Poly1305::new_from_slice(&block_key_bytes)
-                .map_err(|_| CoreErr::CreateCipher)?;
-            let nonce = XNonce::from_slice(&block_nonce);
             let aad = (block_index as u64).to_le_bytes();
-            let payload = Payload {
-                msg: &enc_buf,
-                aad: &aad,
-            };
-            let plaintext = cipher
-                .decrypt(nonce, payload)
-                .map_err(|_| CoreErr::DecryptionError)?;
+            let plaintext =
+                cipher_dispatch::block_decrypt(pld_cipher, &block_key_bytes, &block_nonce, &aad, &enc_buf)?;
             Ok((plaintext, leaf))
         })
         .collect();
@@ -360,14 +350,14 @@ where
     let dec_results = dec_results?;
     let num_results = dec_results.len();
 
-    // ── 8. Verify Merkle root BEFORE writing any plaintext ────────────────
+    // ── 9. Verify Merkle root BEFORE writing any plaintext ────────────────
     let leaves: Vec<[u8; 32]> = dec_results.iter().map(|(_, l)| *l).collect();
     let computed_root = merkle_root(&leaves);
     if computed_root != env.merkle_root {
         return Err(CoreErr::DecryptFail("Merkle root mismatch".into()));
     }
 
-    // ── 9. Write plaintext blocks sequentially ────────────────────────────
+    // ── 10. Write plaintext blocks sequentially ───────────────────────────
     for (i, (plaintext, _)) in dec_results.into_iter().enumerate() {
         output.write_all(&plaintext)?;
         let pct = (((i + 1) as f32 / num_results.max(1) as f32) * 95.0) as i32;
@@ -380,6 +370,9 @@ where
 }
 
 /// Rekey an Arsenic V2 file in-place: change the password without touching the payload.
+///
+/// Cipher algorithm choices are preserved — only the salt, kek_nonce, and
+/// encrypted envelope change.
 pub fn rekey_arsenic<F>(
     file: &mut F,
     old_password: &Secret<String>,
@@ -396,6 +389,8 @@ where
     file.read_exact(&mut header_buf)
         .map_err(|_| CoreErr::BadSignature)?;
     let (pub_hdr, pre_mac_bytes, stored_mac, enc_env) = parse_header_bytes(&header_buf)?;
+
+    let hdr_cipher = CipherId::from_byte(pub_hdr.hdr_cipher_id)?;
 
     if pub_hdr.m_cost > MAX_ARGON2_RAM_KB || pub_hdr.header_total_size > MAX_HEADER_TOTAL_SIZE {
         return Err(CoreErr::DecryptFail(
@@ -414,8 +409,8 @@ where
         pub_hdr.m_cost,
         pub_hdr.p_cost,
     )?;
-    let serpent_old = SerpentGcm::new(kek_old.expose())?;
-    let env_pt = serpent_old.decrypt(&pub_hdr.kek_nonce, &[], &enc_env)?;
+    let env_pt =
+        cipher_dispatch::envelope_decrypt(hdr_cipher, kek_old.expose(), &pub_hdr.kek_nonce, &[], &enc_env)?;
 
     ui.output(50);
 
@@ -428,8 +423,8 @@ where
         pub_hdr.m_cost,
         pub_hdr.p_cost,
     )?;
-    let serpent_new = SerpentGcm::new(kek_new.expose())?;
-    let enc_env_new = serpent_new.encrypt(&new_kek_nonce, &[], &env_pt);
+    let enc_env_new =
+        cipher_dispatch::envelope_encrypt(hdr_cipher, kek_new.expose(), &new_kek_nonce, &[], &env_pt)?;
     let enc_env_arr: [u8; ENVELOPE_PT_LEN + GCM_TAG] = enc_env_new
         .try_into()
         .expect("encrypt always produces exactly ENVELOPE_ENC_LEN bytes");
@@ -443,6 +438,8 @@ where
         p_cost: pub_hdr.p_cost,
         file_base_nonce: pub_hdr.file_base_nonce,
         kek_nonce: new_kek_nonce,
+        hdr_cipher_id: pub_hdr.hdr_cipher_id, // preserved
+        pld_cipher_id: pub_hdr.pld_cipher_id, // preserved
     };
     let prekey_new = compute_prekey(new_password.expose().as_bytes(), &new_salt);
     let new_pre_mac = serialize_pre_mac(&new_pub_hdr);

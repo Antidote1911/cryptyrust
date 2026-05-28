@@ -4,7 +4,7 @@ mod constants;
 mod errors;
 mod secret;
 
-pub use crate::arsenic::{ArsenicParams, ArsenicStrength};
+pub use crate::arsenic::{ArsenicParams, ArsenicStrength, CipherId};
 pub use crate::config::{Direction, Ui};
 pub use crate::constants::*;
 pub use crate::errors::CoreErr;
@@ -29,6 +29,8 @@ pub fn arsenic_read_params(path: &std::path::Path) -> Option<ArsenicParams> {
         t_cost: pub_hdr.t_cost,
         m_cost: pub_hdr.m_cost,
         p_cost: pub_hdr.p_cost,
+        hdr_cipher: arsenic::CipherId::from_byte(pub_hdr.hdr_cipher_id).ok()?,
+        pld_cipher: arsenic::CipherId::from_byte(pub_hdr.pld_cipher_id).ok()?,
     })
 }
 

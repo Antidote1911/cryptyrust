@@ -1,5 +1,5 @@
 use clap::{ArgGroup, Parser};
-use cryptyrust_core::ArsenicStrength;
+use cryptyrust_core::{ArsenicStrength, CipherId};
 
 const ABOUT: &str = "
 A simple but strong file encryption utility in Rust.
@@ -40,7 +40,7 @@ pub struct Cli {
     #[clap(short = 'f', long, value_name = "PASSWORD_FILE")]
     passwordfile: Option<String>,
 
-    /// Argon2id strength. Ignored during decryption and rekey.
+    /// Argon2id strength preset. Ignored during decryption and rekey.
     #[clap(
         long,
         value_enum,
@@ -48,12 +48,40 @@ pub struct Cli {
         default_value = "interactive"
     )]
     strength: StrengthArg,
+
+    /// Cipher for the key envelope in the header (encryption only).
+    #[clap(
+        long = "hdr-cipher",
+        value_enum,
+        value_name = "CIPHER",
+        default_value = "serpent-gcm"
+    )]
+    hdr_cipher: CipherArg,
+
+    /// Cipher for each payload block (encryption only).
+    #[clap(
+        long = "pld-cipher",
+        value_enum,
+        value_name = "CIPHER",
+        default_value = "xchacha20"
+    )]
+    pld_cipher: CipherArg,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum StrengthArg {
     Interactive,
     Sensitive,
+}
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
+pub enum CipherArg {
+    /// Serpent-256-GCM
+    SerpentGcm,
+    /// XChaCha20-Poly1305
+    Xchacha20,
+    /// AES-256-GCM-SIV
+    AesGcmSiv,
 }
 
 impl Cli {
@@ -80,6 +108,22 @@ impl Cli {
         match self.strength {
             StrengthArg::Interactive => ArsenicStrength::Interactive,
             StrengthArg::Sensitive => ArsenicStrength::Sensitive,
+        }
+    }
+
+    pub fn hdr_cipher(&self) -> CipherId {
+        match self.hdr_cipher {
+            CipherArg::SerpentGcm => CipherId::SerpentGcm,
+            CipherArg::Xchacha20 => CipherId::XChaCha20Poly1305,
+            CipherArg::AesGcmSiv => CipherId::Aes256GcmSiv,
+        }
+    }
+
+    pub fn pld_cipher(&self) -> CipherId {
+        match self.pld_cipher {
+            CipherArg::SerpentGcm => CipherId::SerpentGcm,
+            CipherArg::Xchacha20 => CipherId::XChaCha20Poly1305,
+            CipherArg::AesGcmSiv => CipherId::Aes256GcmSiv,
         }
     }
 }

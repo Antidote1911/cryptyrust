@@ -1,7 +1,7 @@
 use eframe::egui;
 
 use crate::app::CryptyApp;
-use crate::file_utils::{arsenic_strength_label, is_cryptyrust_file, Mode};
+use crate::file_utils::{arsenic_strength_label, cipher_short_label, is_cryptyrust_file, Mode};
 use crate::job::JobState;
 use crate::ui::components;
 
@@ -67,6 +67,16 @@ pub fn render_bottom_bar(app: &CryptyApp, ui: &mut egui::Ui) {
                     "Argon2id · {}",
                     arsenic_strength_label(app.arsenic_strength)
                 )));
+                ui.separator();
+                ui.label(
+                    egui::RichText::new(format!(
+                        "Hdr: {}  ·  Pld: {}",
+                        cipher_short_label(app.hdr_cipher),
+                        cipher_short_label(app.pld_cipher),
+                    ))
+                    .size(12.0)
+                    .weak(),
+                );
             });
         });
 }

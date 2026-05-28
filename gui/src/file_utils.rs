@@ -1,4 +1,4 @@
-use cryptyrust_core::ArsenicStrength;
+use cryptyrust_core::{ArsenicStrength, CipherId};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
 use std::path::{Path, PathBuf};
@@ -55,6 +55,39 @@ pub fn arsenic_strength_label(s: ArsenicStrength) -> &'static str {
     match s {
         ArsenicStrength::Interactive => "Interactive  (256 MB)",
         ArsenicStrength::Sensitive => "Sensitive  (1 GB)",
+    }
+}
+
+pub fn cipher_label(c: CipherId) -> &'static str {
+    match c {
+        CipherId::SerpentGcm => "Serpent-256-GCM",
+        CipherId::Aes256GcmSiv => "AES-256-GCM-SIV",
+        CipherId::XChaCha20Poly1305 => "XChaCha20-Poly1305",
+    }
+}
+
+pub fn cipher_short_label(c: CipherId) -> &'static str {
+    match c {
+        CipherId::SerpentGcm => "Serpent-GCM",
+        CipherId::Aes256GcmSiv => "AES-GCM-SIV",
+        CipherId::XChaCha20Poly1305 => "XChaCha20",
+    }
+}
+
+pub fn cipher_to_key(c: CipherId) -> &'static str {
+    match c {
+        CipherId::SerpentGcm => "serpent_gcm",
+        CipherId::Aes256GcmSiv => "aes_gcm_siv",
+        CipherId::XChaCha20Poly1305 => "xchacha20",
+    }
+}
+
+pub fn cipher_from_key(s: &str) -> Option<CipherId> {
+    match s {
+        "serpent_gcm" => Some(CipherId::SerpentGcm),
+        "aes_gcm_siv" => Some(CipherId::Aes256GcmSiv),
+        "xchacha20" => Some(CipherId::XChaCha20Poly1305),
+        _ => None,
     }
 }
 

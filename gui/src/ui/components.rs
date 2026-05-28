@@ -4,14 +4,18 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use crate::app::CryptyApp;
-use crate::file_utils::{arsenic_strength_label, get_file_size, is_cryptyrust_file, Mode};
+use crate::file_utils::{
+    arsenic_strength_label, cipher_label, cipher_short_label, get_file_size, is_cryptyrust_file,
+    Mode,
+};
 use crate::job::PasswordPopup;
-use cryptyrust_core::ArsenicStrength;
+use cryptyrust_core::{ArsenicStrength, CipherId};
 
 pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool) {
     ui.menu_button("Config", |ui| {
         ui.add_enabled_ui(!is_running, |ui| {
-            ui.label(egui::RichText::new("Argon2 strength").strong());
+            // ── KDF strength ──────────────────────────────────────────
+            ui.label(egui::RichText::new("Argon2id strength").strong());
             ui.separator();
             ui.selectable_value(
                 &mut app.arsenic_strength,
@@ -23,6 +27,42 @@ pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bo
                 ArsenicStrength::Sensitive,
                 arsenic_strength_label(ArsenicStrength::Sensitive),
             );
+
+            ui.add_space(6.0);
+
+            // ── Header cipher ─────────────────────────────────────────
+            ui.label(egui::RichText::new("Header cipher").strong());
+            ui.label(
+                egui::RichText::new("envelope — encryption only")
+                    .small()
+                    .weak(),
+            );
+            ui.separator();
+            for cipher in [
+                CipherId::SerpentGcm,
+                CipherId::Aes256GcmSiv,
+                CipherId::XChaCha20Poly1305,
+            ] {
+                ui.selectable_value(&mut app.hdr_cipher, cipher, cipher_label(cipher));
+            }
+
+            ui.add_space(6.0);
+
+            // ── Payload cipher ────────────────────────────────────────
+            ui.label(egui::RichText::new("Payload cipher").strong());
+            ui.label(
+                egui::RichText::new("blocks — encryption only")
+                    .small()
+                    .weak(),
+            );
+            ui.separator();
+            for cipher in [
+                CipherId::XChaCha20Poly1305,
+                CipherId::Aes256GcmSiv,
+                CipherId::SerpentGcm,
+            ] {
+                ui.selectable_value(&mut app.pld_cipher, cipher, cipher_label(cipher));
+            }
         });
     });
 }
@@ -223,8 +263,20 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
             ui.vertical(|ui| {
                 ui.label(egui::RichText::new("Arsenic V2 format").size(13.0).strong());
                 ui.add_space(3.0);
-                ui.label(egui::RichText::new("XChaCha20-Poly1305 (payload)").size(13.0));
-                ui.label(egui::RichText::new("Serpent-256-GCM (header)").size(13.0));
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} (header)",
+                        cipher_short_label(app.hdr_cipher)
+                    ))
+                    .size(13.0),
+                );
+                ui.label(
+                    egui::RichText::new(format!(
+                        "{} (payload)",
+                        cipher_short_label(app.pld_cipher)
+                    ))
+                    .size(13.0),
+                );
                 ui.label(egui::RichText::new("BLAKE3 Merkle tree integrity").size(13.0));
             });
 
@@ -294,7 +346,7 @@ fn render_type_cell(ui: &mut egui::Ui, is_encrypted: bool) {
         })
         .response;
     if is_encrypted {
-        resp.on_hover_text("Arsenic V2 · XChaCha20-Poly1305");
+        resp.on_hover_text("Arsenic V2 format");
     }
 }
 
