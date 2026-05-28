@@ -4,6 +4,8 @@ use crate::app::CryptyApp;
 use crate::file_utils::{arsenic_strength_label, cipher_short_label, is_cryptyrust_file, Mode};
 use crate::job::JobState;
 use crate::ui::components;
+use crate::ui::components::compression_short_label;
+use cryptyrust_core::Compression;
 
 pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool, popup_open: bool) {
     egui::Panel::top("menubar").show_inside(ui, |ui| {
@@ -60,7 +62,7 @@ pub fn render_bottom_bar(app: &CryptyApp, ui: &mut egui::Ui) {
         .show_inside(ui, |ui| {
             ui.horizontal_centered(|ui| {
                 ui.label(egui::RichText::new("🔒").size(13.0).weak());
-                ui.label(egui::RichText::new("Arsenic V2"));
+                ui.label(egui::RichText::new("Arsenic V1"));
                 ui.separator();
                 ui.label(egui::RichText::new("🔑").size(13.0).weak());
                 ui.label(egui::RichText::new(format!(
@@ -76,6 +78,17 @@ pub fn render_bottom_bar(app: &CryptyApp, ui: &mut egui::Ui) {
                     ))
                     .size(12.0)
                     .weak(),
+                );
+                ui.separator();
+                let compress_label = compression_short_label(if app.compress {
+                    Compression::Zstd(0)
+                } else {
+                    Compression::None
+                });
+                ui.label(
+                    egui::RichText::new(format!("📦 {compress_label}"))
+                        .size(12.0)
+                        .weak(),
                 );
             });
         });
@@ -191,7 +204,7 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
             }
             JobState::Idle => {
                 if app.files.is_empty() {
-                    render_drop_zone(ui, avail, hovering, app);
+                    render_drop_zone(ui, avail, hovering);
                 } else {
                     render_file_list(ui, avail, hovering, app);
                 }
@@ -219,7 +232,7 @@ fn render_completed_view(
     components::render_completed_table(ui, files, statuses);
 }
 
-fn render_drop_zone(ui: &mut egui::Ui, avail: egui::Rect, hovering: bool, app: &mut CryptyApp) {
+fn render_drop_zone(ui: &mut egui::Ui, avail: egui::Rect, hovering: bool) {
     if hovering {
         ui.painter().rect_stroke(
             avail,
@@ -230,28 +243,12 @@ fn render_drop_zone(ui: &mut egui::Ui, avail: egui::Rect, hovering: bool, app: &
     }
 
     ui.painter().text(
-        avail.center() - egui::vec2(0.0, 14.0),
+        avail.center(),
         egui::Align2::CENTER_CENTER,
         "Drop files here to encrypt or decrypt",
         egui::FontId::proportional(18.0),
         ui.visuals().text_color(),
     );
-    ui.painter().text(
-        avail.center() + egui::vec2(0.0, 14.0),
-        egui::Align2::CENTER_CENTER,
-        "or click to browse",
-        egui::FontId::proportional(14.0),
-        ui.visuals().weak_text_color(),
-    );
-
-    if ui
-        .interact(avail, ui.id().with("idle_click"), egui::Sense::click())
-        .clicked()
-    {
-        if let Some(paths) = rfd::FileDialog::new().pick_files() {
-            app.add_files(paths);
-        }
-    }
 }
 
 fn render_file_list(ui: &mut egui::Ui, avail: egui::Rect, hovering: bool, app: &mut CryptyApp) {

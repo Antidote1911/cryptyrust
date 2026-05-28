@@ -10,7 +10,7 @@ Github : https://github.com/Antidote1911/
 #[derive(Parser)]
 #[clap(about=ABOUT, author, version)]
 #[clap(group(ArgGroup::new("mode").required(true)
-.args(&["encrypt", "decrypt", "rekey"]),
+.args(&["encrypt", "decrypt", "rekey", "bench"]),
 ))]
 #[clap(group(ArgGroup::new("passwordflags")
 .args(&["password", "passwordfile"]),
@@ -49,12 +49,16 @@ pub struct Cli {
     )]
     strength: StrengthArg,
 
+    /// Benchmark AEAD cipher throughput on this machine.
+    #[clap(long, action = clap::ArgAction::SetTrue)]
+    bench: bool,
+
     /// Cipher for the key envelope in the header (encryption only).
     #[clap(
         long = "hdr-cipher",
         value_enum,
         value_name = "CIPHER",
-        default_value = "serpent-gcm"
+        default_value = "deoxys-ii"
     )]
     hdr_cipher: CipherArg,
 
@@ -76,8 +80,8 @@ pub enum StrengthArg {
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum CipherArg {
-    /// Serpent-256-GCM
-    SerpentGcm,
+    /// Deoxys-II-256
+    DeoxysIi,
     /// XChaCha20-Poly1305
     Xchacha20,
     /// AES-256-GCM-SIV
@@ -104,6 +108,10 @@ impl Cli {
         self.rekey.as_deref()
     }
 
+    pub fn bench(&self) -> bool {
+        self.bench
+    }
+
     pub fn strength(&self) -> ArsenicStrength {
         match self.strength {
             StrengthArg::Interactive => ArsenicStrength::Interactive,
@@ -113,7 +121,7 @@ impl Cli {
 
     pub fn hdr_cipher(&self) -> CipherId {
         match self.hdr_cipher {
-            CipherArg::SerpentGcm => CipherId::SerpentGcm,
+            CipherArg::DeoxysIi => CipherId::DeoxysII256,
             CipherArg::Xchacha20 => CipherId::XChaCha20Poly1305,
             CipherArg::AesGcmSiv => CipherId::Aes256GcmSiv,
         }
@@ -121,7 +129,7 @@ impl Cli {
 
     pub fn pld_cipher(&self) -> CipherId {
         match self.pld_cipher {
-            CipherArg::SerpentGcm => CipherId::SerpentGcm,
+            CipherArg::DeoxysIi => CipherId::DeoxysII256,
             CipherArg::Xchacha20 => CipherId::XChaCha20Poly1305,
             CipherArg::AesGcmSiv => CipherId::Aes256GcmSiv,
         }

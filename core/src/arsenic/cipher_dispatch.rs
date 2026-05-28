@@ -6,28 +6,36 @@
 //! Nonce conventions
 //! -----------------
 //! * **Envelope** functions: the header stores a 12-byte `kek_nonce`.  For
-//!   Serpent-GCM and AES-256-GCM-SIV that is used as-is (both use 12-byte
-//!   nonces).  For XChaCha20-Poly1305 it is BLAKE3-expanded to 24 bytes so
-//!   the stored field size never changes.
+//!   AES-256-GCM-SIV that is used as-is (12-byte nonce).  For Deoxys-II-256
+//!   it is BLAKE3-expanded to 15 bytes.  For XChaCha20-Poly1305 it is
+//!   BLAKE3-expanded to 24 bytes.  The stored field size never changes.
 //! * **Block** functions: the caller always supplies a 24-byte derived nonce.
-//!   12-byte-nonce ciphers (Serpent-GCM, AES-256-GCM-SIV) use the first 12
-//!   bytes; the full 24 bytes are used by XChaCha20-Poly1305.
+//!   AES-256-GCM-SIV uses the first 12 bytes; Deoxys-II-256 uses the first
+//!   15 bytes; XChaCha20-Poly1305 uses all 24.
 
-use aead::{Aead, KeyInit, Payload};
+use aead::{Aead, KeyInit, Nonce, Payload};
 use aes_gcm_siv::{Aes256GcmSiv, Nonce as AesGcmSivNonce};
 use chacha20poly1305::{XChaCha20Poly1305, XNonce};
+use deoxys::DeoxysII256;
 
 use crate::errors::CoreErr;
 
-use super::serpent_gcm::SerpentGcm;
 use super::CipherId;
 
 /// BLAKE3-expand a 12-byte nonce to 24 bytes for XChaCha20 header use.
 fn expand_12_to_24(n: &[u8; 12]) -> [u8; 24] {
     let mut input = [0u8; 32];
     input[..12].copy_from_slice(n);
-    let h = blake3::derive_key("Arsenic V2 KEK Nonce XChaCha20", &input);
+    let h = blake3::derive_key("Arsenic V1 KEK Nonce XChaCha20", &input);
     h[..24].try_into().expect("24 <= 32")
+}
+
+/// BLAKE3-expand a 12-byte nonce to 15 bytes for Deoxys-II-256 header use.
+fn expand_12_to_15(n: &[u8; 12]) -> [u8; 15] {
+    let mut input = [0u8; 32];
+    input[..12].copy_from_slice(n);
+    let h = blake3::derive_key("Arsenic V1 KEK Nonce DeoxysII256", &input);
+    h[..15].try_into().expect("15 <= 32")
 }
 
 /// Encrypt the key envelope using the chosen header cipher.
@@ -41,9 +49,17 @@ pub(crate) fn envelope_encrypt(
     plaintext: &[u8],
 ) -> Result<Vec<u8>, CoreErr> {
     match cipher_id {
-        CipherId::SerpentGcm => {
-            let s = SerpentGcm::new(key)?;
-            Ok(s.encrypt(kek_nonce, aad, plaintext))
+        CipherId::DeoxysII256 => {
+            let nonce15 = expand_12_to_15(kek_nonce);
+            let cipher = DeoxysII256::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
+            let nonce = Nonce::<DeoxysII256>::from_slice(&nonce15);
+            let payload = Payload {
+                msg: plaintext,
+                aad,
+            };
+            cipher
+                .encrypt(nonce, payload)
+                .map_err(|_| CoreErr::EncryptFail("Envelope encryption failed".into()))
         }
         CipherId::Aes256GcmSiv => {
             let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
@@ -81,9 +97,17 @@ pub(crate) fn envelope_decrypt(
     ciphertext: &[u8],
 ) -> Result<Vec<u8>, CoreErr> {
     match cipher_id {
-        CipherId::SerpentGcm => {
-            let s = SerpentGcm::new(key)?;
-            s.decrypt(kek_nonce, aad, ciphertext)
+        CipherId::DeoxysII256 => {
+            let nonce15 = expand_12_to_15(kek_nonce);
+            let cipher = DeoxysII256::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
+            let nonce = Nonce::<DeoxysII256>::from_slice(&nonce15);
+            let payload = Payload {
+                msg: ciphertext,
+                aad,
+            };
+            cipher
+                .decrypt(nonce, payload)
+                .map_err(|_| CoreErr::DecryptionError)
         }
         CipherId::Aes256GcmSiv => {
             let cipher = Aes256GcmSiv::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
@@ -114,8 +138,9 @@ pub(crate) fn envelope_decrypt(
 
 /// Encrypt a payload block.
 ///
-/// `nonce24` is always 24 bytes (derived per-block via BLAKE3); 12-byte-nonce
-/// ciphers consume only the first 12 bytes.
+/// `nonce24` is always 24 bytes (derived per-block via BLAKE3).
+/// AES-256-GCM-SIV uses the first 12; Deoxys-II-256 uses the first 15;
+/// XChaCha20-Poly1305 uses all 24.
 pub(crate) fn block_encrypt(
     cipher_id: CipherId,
     key: &[u8; 32],
@@ -147,10 +172,16 @@ pub(crate) fn block_encrypt(
                 .encrypt(nonce, payload)
                 .map_err(|_| CoreErr::EncryptFail("Block encryption failed".into()))
         }
-        CipherId::SerpentGcm => {
-            let s = SerpentGcm::new(key)?;
-            let nonce12: &[u8; 12] = nonce24[..12].try_into().expect("12 bytes");
-            Ok(s.encrypt(nonce12, aad, plaintext))
+        CipherId::DeoxysII256 => {
+            let cipher = DeoxysII256::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
+            let nonce = Nonce::<DeoxysII256>::from_slice(&nonce24[..15]);
+            let payload = Payload {
+                msg: plaintext,
+                aad,
+            };
+            cipher
+                .encrypt(nonce, payload)
+                .map_err(|_| CoreErr::EncryptFail("Block encryption failed".into()))
         }
     }
 }
@@ -187,10 +218,16 @@ pub(crate) fn block_decrypt(
                 .decrypt(nonce, payload)
                 .map_err(|_| CoreErr::DecryptionError)
         }
-        CipherId::SerpentGcm => {
-            let s = SerpentGcm::new(key)?;
-            let nonce12: &[u8; 12] = nonce24[..12].try_into().expect("12 bytes");
-            s.decrypt(nonce12, aad, ciphertext)
+        CipherId::DeoxysII256 => {
+            let cipher = DeoxysII256::new_from_slice(key).map_err(|_| CoreErr::CreateCipher)?;
+            let nonce = Nonce::<DeoxysII256>::from_slice(&nonce24[..15]);
+            let payload = Payload {
+                msg: ciphertext,
+                aad,
+            };
+            cipher
+                .decrypt(nonce, payload)
+                .map_err(|_| CoreErr::DecryptionError)
         }
     }
 }

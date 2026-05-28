@@ -11,19 +11,19 @@ use crate::Ui;
 
 use super::cipher_dispatch;
 use super::header::{
-    build_header_bytes, compute_header_mac, compute_prekey, deserialize_envelope,
-    parse_header_bytes, serialize_envelope, serialize_pre_mac, verify_header_mac, EnvelopeContent,
-    PublicHeader, COMPRESS_NONE, DEFAULT_HEADER_SIZE, ENVELOPE_ENC_LEN, ENVELOPE_PT_LEN, GCM_TAG,
-    TOTAL_HEADER_LEN,
+    build_header_bytes, compute_header_mac, compute_prekey, deserialize_meta_tlv,
+    parse_header_bytes, serialize_meta_tlv, serialize_pre_mac, verify_header_mac, EnvelopeContent,
+    EnvelopeMetadata, PublicHeader, GCM_TAG, MERKLE_V1, META_TLV_MANDATORY_PT_LEN,
+    MIN_HEADER_TOTAL_SIZE, PUB_HEADER_LEN, WRAPPED_DEK_LEN,
 };
 use super::{
-    CipherId, BLOCK_ID_32MB, BLOCK_ID_4MB, BLOCK_SIZE_32MB, BLOCK_SIZE_4MB, LARGE_FILE_THRESHOLD,
-    MAX_ARGON2_RAM_KB, MAX_HEADER_TOTAL_SIZE,
+    CipherId, Compression, BLOCK_ID_32MB, BLOCK_ID_4MB, BLOCK_SIZE_32MB, BLOCK_SIZE_4MB,
+    LARGE_FILE_THRESHOLD, MAX_ARGON2_RAM_KB, MAX_HEADER_TOTAL_SIZE,
 };
 
 type BlockResults = Result<Vec<(Vec<u8>, [u8; 32])>, CoreErr>;
 
-// ── Key / nonce derivation ────────────────────────────────────────────────
+// ── Key / nonce derivation ────────────────────────────────────────────────────
 
 fn derive_kek(
     password: &[u8],
@@ -50,44 +50,78 @@ fn derive_block_nonce(file_base_nonce: &[u8; 24], block_index: u64) -> [u8; 24] 
     let mut material = [0u8; 32];
     material[..24].copy_from_slice(file_base_nonce);
     material[24..].copy_from_slice(&block_index.to_le_bytes());
-    let hash = blake3::derive_key("Arsenic V2 Block Nonce", &material);
+    let hash = blake3::derive_key("Arsenic V1 Block Nonce", &material);
     hash[..24].try_into().expect("24 <= 32")
 }
 
-// ── Merkle tree ───────────────────────────────────────────────────────────
+// ── ProtectedMetadata key and nonce derivation ────────────────────────────────
 
-fn compute_leaf(encrypted_block: &[u8]) -> [u8; 32] {
-    *blake3::hash(encrypted_block).as_bytes()
+/// MetaKey: derived from DEK, used to encrypt/decrypt ProtectedMetadata.
+/// Independent of the password; never changes as long as DEK is unchanged.
+fn derive_meta_key(dek: &[u8; 32]) -> [u8; 32] {
+    blake3::derive_key("Arsenic V1 Metadata Key", dek)
 }
 
-fn merkle_root(leaves: &[[u8; 32]]) -> [u8; 32] {
-    if leaves.is_empty() {
-        return [0u8; 32];
-    }
-    if leaves.len() == 1 {
-        return leaves[0];
-    }
-    let mut current = leaves.to_vec();
-    while current.len() > 1 {
-        let mut next = Vec::with_capacity(current.len().div_ceil(2));
-        let mut i = 0;
-        while i < current.len() {
-            if i + 1 < current.len() {
-                let mut combined = [0u8; 64];
-                combined[..32].copy_from_slice(&current[i]);
-                combined[32..].copy_from_slice(&current[i + 1]);
-                next.push(*blake3::hash(&combined).as_bytes());
-            } else {
-                next.push(current[i]);
+/// MetaNonce: deterministic 12-byte nonce for ProtectedMetadata AEAD.
+/// Safe because DEK is unique per file and MetaKey is unique per DEK.
+fn derive_meta_nonce(dek: &[u8; 32]) -> [u8; 12] {
+    let h = blake3::derive_key("Arsenic V1 Meta Nonce", dek);
+    h[..12].try_into().expect("12 <= 32")
+}
+
+// ── Merkle v1 — domain-separated BLAKE3 ──────────────────────────────────────
+//
+// Algorithm spec (stored as MERKLE_V1 = 0x01 in ProtectedMetadata TLV):
+//
+//   Leaf   = BLAKE3_derive_key("Arsenic V1 Merkle Leaf v1", ciphertext)
+//   Node   = BLAKE3_derive_key("Arsenic V1 Merkle Node v1", left_32 || right_32)
+//   Odd    = last node promoted without hashing (v1 promotion rule)
+//   Empty  = [0u8; 32] sentinel for zero-block files
+//   Endian = big-endian child order (left child first in the 64-byte node input)
+//
+// Domain separation via derive_key ensures leaf hashes and internal node hashes
+// are in disjoint output domains, ruling out second-preimage attacks where a
+// crafted 64-byte block B = left || right satisfies BLAKE3(B) = internal node.
+
+fn merkle_leaf(data: &[u8]) -> [u8; 32] {
+    blake3::derive_key("Arsenic V1 Merkle Leaf v1", data)
+}
+
+fn merkle_node(left: &[u8; 32], right: &[u8; 32]) -> [u8; 32] {
+    let mut buf = [0u8; 64];
+    buf[..32].copy_from_slice(left);
+    buf[32..].copy_from_slice(right);
+    blake3::derive_key("Arsenic V1 Merkle Node v1", &buf)
+}
+
+fn merkle_root_v1(leaves: &[[u8; 32]]) -> [u8; 32] {
+    match leaves.len() {
+        0 => [0u8; 32], // empty file sentinel
+        1 => leaves[0], // single leaf is its own root
+        _ => {
+            let mut current = leaves.to_vec();
+            while current.len() > 1 {
+                let mut next = Vec::with_capacity(current.len().div_ceil(2));
+                let mut i = 0;
+                while i < current.len() {
+                    if i + 1 < current.len() {
+                        next.push(merkle_node(&current[i], &current[i + 1]));
+                    } else {
+                        // Odd-count promotion: the last node is carried up unchanged.
+                        // With domain separation this is safe — a promoted leaf hash
+                        // cannot be confused with a node hash.
+                        next.push(current[i]);
+                    }
+                    i += 2;
+                }
+                current = next;
             }
-            i += 2;
+            current[0]
         }
-        current = next;
     }
-    current[0]
 }
 
-// ── Block size selection ──────────────────────────────────────────────────
+// ── Block size selection ──────────────────────────────────────────────────────
 
 fn select_block_params(filesize: u64) -> (usize, u8) {
     if filesize < LARGE_FILE_THRESHOLD {
@@ -107,7 +141,7 @@ fn block_size_from_id(id: u8) -> Result<usize, CoreErr> {
     }
 }
 
-// ── Read helpers ──────────────────────────────────────────────────────────
+// ── Read helpers ──────────────────────────────────────────────────────────────
 
 fn read_full<R: Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize> {
     let mut nread = 0;
@@ -120,9 +154,99 @@ fn read_full<R: Read>(reader: &mut R, buf: &mut [u8]) -> std::io::Result<usize> 
     Ok(nread)
 }
 
-// ── Public encrypt/decrypt ────────────────────────────────────────────────
+/// Read the full variable-length header from a reader.
+fn read_header<R: Read>(input: &mut R) -> Result<Vec<u8>, CoreErr> {
+    let mut prefix = [0u8; 12];
+    input
+        .read_exact(&mut prefix)
+        .map_err(|_| CoreErr::BadSignature)?;
 
-/// Encrypt a file using the Arsenic V2 format (parallel block encryption).
+    let header_total_size = u16::from_le_bytes([prefix[10], prefix[11]]) as usize;
+
+    if header_total_size < MIN_HEADER_TOTAL_SIZE
+        || header_total_size > MAX_HEADER_TOTAL_SIZE as usize
+    {
+        return Err(CoreErr::DecryptFail(format!(
+            "header_total_size {header_total_size} out of range [{MIN_HEADER_TOTAL_SIZE}, {}]",
+            MAX_HEADER_TOTAL_SIZE
+        )));
+    }
+
+    let mut header_buf = vec![0u8; header_total_size];
+    header_buf[..12].copy_from_slice(&prefix);
+    input
+        .read_exact(&mut header_buf[12..])
+        .map_err(|_| CoreErr::BadSignature)?;
+    Ok(header_buf)
+}
+
+// ── Envelope size helpers ─────────────────────────────────────────────────────
+
+/// Extra plaintext bytes from optional metadata fields (for header size pre-computation).
+fn metadata_extra_pt_len(meta: &EnvelopeMetadata) -> usize {
+    let mut extra = 0usize;
+    if let Some(ref s) = meta.filename {
+        let n = s.len().min(255);
+        if n > 0 {
+            extra += 2 + n;
+        }
+    }
+    if let Some(ref s) = meta.comment {
+        let n = s.len().min(255);
+        if n > 0 {
+            extra += 2 + n;
+        }
+    }
+    if meta.timestamp_secs.is_some() {
+        extra += 2 + 8;
+    }
+    extra
+}
+
+// ── Envelope decryption ───────────────────────────────────────────────────────
+
+/// Decrypt and parse the envelope region:
+///   enc_region = WrappedDEK(48 bytes) || ProtectedMetadata(variable)
+fn decrypt_envelope(
+    hdr_cipher: CipherId,
+    kek: &[u8; 32],
+    kek_nonce: &[u8; 12],
+    enc_region: &[u8],
+) -> Result<EnvelopeContent, CoreErr> {
+    if enc_region.len() < WRAPPED_DEK_LEN {
+        return Err(CoreErr::DecryptFail(
+            "Envelope region too short for keyslot".into(),
+        ));
+    }
+    let (wrapped_dek_bytes, protected_meta_bytes) = enc_region.split_at(WRAPPED_DEK_LEN);
+
+    // 1. Unwrap DEK from keyslot using KEK (password-derived).
+    let dek_vec =
+        cipher_dispatch::envelope_decrypt(hdr_cipher, kek, kek_nonce, &[], wrapped_dek_bytes)?;
+    if dek_vec.len() != 32 {
+        return Err(CoreErr::DecryptFail(
+            "WrappedDEK plaintext must be 32 bytes".into(),
+        ));
+    }
+    let dek: [u8; 32] = dek_vec.try_into().unwrap();
+
+    // 2. Decrypt ProtectedMetadata with keys derived from DEK (not from password).
+    let meta_key = derive_meta_key(&dek);
+    let meta_nonce = derive_meta_nonce(&dek);
+    let meta_pt = cipher_dispatch::envelope_decrypt(
+        hdr_cipher,
+        &meta_key,
+        &meta_nonce,
+        &[],
+        protected_meta_bytes,
+    )?;
+
+    deserialize_meta_tlv(&meta_pt, dek)
+}
+
+// ── Public encrypt/decrypt/rekey ──────────────────────────────────────────────
+
+/// Encrypt a file using the Arsenic V1 format (parallel block encryption).
 pub fn encrypt_arsenic<R, W>(
     input: &mut R,
     output: &mut W,
@@ -135,39 +259,51 @@ where
     R: Read,
     W: Write + Seek,
 {
-    // ── 1. Generate random material ───────────────────────────────────────
     let salt: [u8; 16] = random();
     let file_base_nonce: [u8; 24] = random();
     let kek_nonce: [u8; 12] = random();
     let mut dek: [u8; 32] = random();
 
     let (block_size, block_size_id) = select_block_params(filesize);
-    let pld_cipher = params.pld_cipher; // Copy — captured by value in par_iter closure
+    let pld_cipher = params.pld_cipher;
 
-    // ── 2. Write placeholder header (256 bytes of zeros) ─────────────────
-    output.write_all(&[0u8; TOTAL_HEADER_LEN])?;
+    // Pre-compute header size before writing the placeholder.
+    let meta = &params.metadata;
+    let meta_pt_len = META_TLV_MANDATORY_PT_LEN + metadata_extra_pt_len(meta);
+    let protected_meta_enc_len = meta_pt_len + GCM_TAG;
+    let header_total_size = PUB_HEADER_LEN + WRAPPED_DEK_LEN + protected_meta_enc_len;
+    if header_total_size > MAX_HEADER_TOTAL_SIZE as usize {
+        return Err(CoreErr::EncryptFail("Metadata too large for header".into()));
+    }
+    output.write_all(&vec![0u8; header_total_size])?;
 
-    // ── 3. Read all input blocks ──────────────────────────────────────────
+    // ── Read input into fixed-size blocks ─────────────────────────────────
+    // Blocks are based on the original plaintext size.
+    // Each block is independently compressed (if enabled) and encrypted —
+    // workers are fully independent and can run in parallel.
     let mut raw_blocks: Vec<Vec<u8>> = Vec::new();
     let mut total_read: u64 = 0;
-    loop {
+    {
         let mut buf = vec![0u8; block_size];
-        let n = read_full(input, &mut buf)?;
-        if n == 0 {
-            break;
-        }
-        total_read += n as u64;
-        buf.truncate(n);
-        raw_blocks.push(buf);
-        if n < block_size {
-            break;
+        loop {
+            let n = read_full(input, &mut buf)?;
+            if n == 0 {
+                break;
+            }
+            total_read += n as u64;
+            raw_blocks.push(buf[..n].to_vec());
+            if n < block_size {
+                break;
+            }
         }
     }
 
-    // ── 4. Parallel encrypt — all blocks are independent ─────────────────
-    // dek and file_base_nonce are [u8; N] (Copy + Send) — captured by value.
-    // pld_cipher is CipherId (Copy + Send) — captured by value.
-    // Progress is reported in step 5 from the main thread; Ui need not be Sync.
+    let compression = params.compression; // Copy — captured by value in par_iter closure
+    let compression_id = compression.to_byte();
+
+    // ── Parallel compress (optional) + encrypt ────────────────────────────
+    // For Compression::Zstd each block is compressed independently before
+    // being passed to the AEAD. Memory usage is O(block_size), not O(file).
     let enc_results: BlockResults = raw_blocks
         .into_par_iter()
         .enumerate()
@@ -175,14 +311,21 @@ where
             let block_nonce = derive_block_nonce(&file_base_nonce, block_index as u64);
             let block_key_bytes = derive_block_key(&dek, block_index as u64);
             let aad = (block_index as u64).to_le_bytes();
+
+            let data_to_encrypt = match compression {
+                Compression::None => plaintext,
+                Compression::Zstd(level) => zstd::bulk::compress(&plaintext, level)
+                    .map_err(|e| CoreErr::EncryptFail(format!("zstd: {e}")))?,
+            };
+
             let encrypted = cipher_dispatch::block_encrypt(
                 pld_cipher,
                 &block_key_bytes,
                 &block_nonce,
                 &aad,
-                &plaintext,
+                &data_to_encrypt,
             )?;
-            let leaf = compute_leaf(&encrypted);
+            let leaf = merkle_leaf(&encrypted);
             Ok((encrypted, leaf))
         })
         .collect();
@@ -190,26 +333,40 @@ where
     let enc_results = enc_results?;
     let num_blocks = enc_results.len();
 
-    // ── 5. Write encrypted blocks sequentially and collect leaves ─────────
+    // ── Write encrypted blocks ────────────────────────────────────────────
+    // For compressed blocks each ciphertext has a variable size, so a 4-byte
+    // little-endian length prefix is prepended. Uncompressed blocks retain the
+    // current fixed-size layout (no prefix).
     let mut leaves: Vec<[u8; 32]> = Vec::with_capacity(num_blocks);
     for (i, (encrypted, leaf)) in enc_results.into_iter().enumerate() {
+        if matches!(compression, Compression::Zstd(_)) {
+            let size = u32::try_from(encrypted.len())
+                .map_err(|_| CoreErr::EncryptFail("Encrypted block exceeds u32 size".into()))?;
+            output.write_all(&size.to_le_bytes())?;
+        }
         output.write_all(&encrypted)?;
         leaves.push(leaf);
         let pct = (((i + 1) as f32 / num_blocks.max(1) as f32) * 95.0) as i32;
         ui.output(pct.min(95));
     }
 
-    // ── 6. Compute Merkle root, build and seal header ─────────────────────
-    let root = merkle_root(&leaves);
+    let root = merkle_root_v1(&leaves);
 
+    // Build the ProtectedMetadata TLV (no DEK inside — DEK is in the keyslot).
+    // compressed_size == original_size for per-block compression: we split the
+    // original plaintext into fixed blocks, not the compressed output.
     let env = EnvelopeContent {
         dek,
         merkle_root: root,
         original_size: filesize,
         compressed_size: total_read,
         block_size_id,
+        merkle_algo_id: MERKLE_V1,
+        filename: meta.filename.clone(),
+        comment: meta.comment.clone(),
+        timestamp_secs: meta.timestamp_secs,
     };
-    let env_pt = serialize_envelope(&env);
+    let meta_tlv = serialize_meta_tlv(&env);
 
     let kek = derive_kek(
         password.expose().as_bytes(),
@@ -219,20 +376,31 @@ where
         params.p_cost,
     )?;
 
-    let enc_env = cipher_dispatch::envelope_encrypt(
+    // Keyslot: wrap DEK under KEK.
+    let wrapped_dek =
+        cipher_dispatch::envelope_encrypt(params.hdr_cipher, kek.expose(), &kek_nonce, &[], &dek)?;
+
+    // ProtectedMetadata: encrypt TLV under MetaKey derived from DEK.
+    let meta_key = derive_meta_key(&dek);
+    let meta_nonce = derive_meta_nonce(&dek);
+    let protected_meta = cipher_dispatch::envelope_encrypt(
         params.hdr_cipher,
-        kek.expose(),
-        &kek_nonce,
+        &meta_key,
+        &meta_nonce,
         &[],
-        &env_pt,
+        &meta_tlv,
     )?;
-    assert_eq!(enc_env.len(), ENVELOPE_PT_LEN + GCM_TAG);
-    let enc_env_arr: [u8; ENVELOPE_PT_LEN + GCM_TAG] =
-        enc_env.try_into().expect("exactly 97 bytes");
+
+    // Assemble the full envelope region: WrappedDEK || ProtectedMetadata.
+    let enc_envelope: Vec<u8> = wrapped_dek
+        .iter()
+        .chain(protected_meta.iter())
+        .copied()
+        .collect();
 
     let pub_header = PublicHeader {
-        compression_id: COMPRESS_NONE,
-        header_total_size: DEFAULT_HEADER_SIZE,
+        compression_id,
+        header_total_size: header_total_size as u16,
         salt,
         t_cost: params.t_cost,
         m_cost: params.m_cost,
@@ -243,11 +411,10 @@ where
         pld_cipher_id: params.pld_cipher.to_byte(),
     };
 
-    let prekey = compute_prekey(password.expose().as_bytes(), &salt);
+    let prekey = compute_prekey(password.expose().as_bytes(), &salt)?;
     let pre_mac_bytes = serialize_pre_mac(&pub_header);
     let mac = compute_header_mac(&prekey, &pre_mac_bytes);
-
-    let header_bytes = build_header_bytes(&pub_header, &mac, &enc_env_arr);
+    let header_bytes = build_header_bytes(&pub_header, &mac, &enc_envelope);
 
     output.seek(SeekFrom::Start(0))?;
     output.write_all(&header_bytes)?;
@@ -258,47 +425,41 @@ where
     Ok(())
 }
 
-/// Decrypt a file in Arsenic V2 format (parallel block decryption).
+/// Decrypt an Arsenic V1 file (parallel block decryption).
 ///
-/// All blocks are decrypted in parallel. The Merkle root is verified before
-/// any plaintext is written to `output`.
+/// Returns the optional metadata stored in the ProtectedMetadata section.
 pub fn decrypt_arsenic<R, W>(
     input: &mut R,
     output: &mut W,
     password: &Secret<String>,
     ui: &dyn Ui,
     _filesize: u64,
-) -> Result<(), CoreErr>
+) -> Result<EnvelopeMetadata, CoreErr>
 where
     R: Read,
     W: Write,
 {
-    // ── 1. Read and parse header ──────────────────────────────────────────
-    let mut header_buf = [0u8; TOTAL_HEADER_LEN];
-    input
-        .read_exact(&mut header_buf)
-        .map_err(|_| CoreErr::BadSignature)?;
+    let header_buf = read_header(input)?;
+    let (pub_hdr, pre_mac_bytes, stored_mac, enc_env_region) = parse_header_bytes(&header_buf)?;
 
-    let (pub_hdr, pre_mac_bytes, stored_mac, enc_env) = parse_header_bytes(&header_buf)?;
-
-    // ── 2. Resolve cipher IDs ─────────────────────────────────────────────
     let hdr_cipher = CipherId::from_byte(pub_hdr.hdr_cipher_id)?;
     let pld_cipher = CipherId::from_byte(pub_hdr.pld_cipher_id)?;
 
-    // ── 3. Pre-authentication (DoS-immune MAC check) ──────────────────────
-    let prekey = compute_prekey(password.expose().as_bytes(), &pub_hdr.salt);
-    if !verify_header_mac(&prekey, &pre_mac_bytes, &stored_mac) {
-        return Err(CoreErr::DecryptionError);
-    }
-
-    // ── 4. Sanity limits ──────────────────────────────────────────────────
+    // Sanity limits checked BEFORE the tiny Argon2id pre-auth to avoid
+    // allocating e.g. 8 GB for PREKEY_M_COST_KB on a malicious header.
     if pub_hdr.m_cost > MAX_ARGON2_RAM_KB || pub_hdr.header_total_size > MAX_HEADER_TOTAL_SIZE {
         return Err(CoreErr::DecryptFail(
             "Parameters exceed safety limits".into(),
         ));
     }
 
-    // ── 5. Derive KEK with Argon2id ───────────────────────────────────────
+    // Tiny Argon2id pre-authentication: requires real KDF work so the HeaderMAC
+    // cannot serve as a fast offline brute-force oracle.
+    let prekey = compute_prekey(password.expose().as_bytes(), &pub_hdr.salt)?;
+    if !verify_header_mac(&prekey, &pre_mac_bytes, &stored_mac) {
+        return Err(CoreErr::DecryptionError);
+    }
+
     let kek = derive_kek(
         password.expose().as_bytes(),
         &pub_hdr.salt,
@@ -307,62 +468,96 @@ where
         pub_hdr.p_cost,
     )?;
 
-    // ── 6. Decrypt envelope ───────────────────────────────────────────────
-    if enc_env.len() != ENVELOPE_ENC_LEN {
-        return Err(CoreErr::DecryptFail("Envelope size mismatch".into()));
-    }
-    let env_pt = cipher_dispatch::envelope_decrypt(
+    let env = decrypt_envelope(
         hdr_cipher,
         kek.expose(),
         &pub_hdr.kek_nonce,
-        &[],
-        &enc_env,
+        &enc_env_region,
     )?;
-    let env = deserialize_envelope(&env_pt)?;
 
     let block_size = block_size_from_id(env.block_size_id)?;
-    let encrypted_block_size = block_size + 16;
-    let num_blocks = env.compressed_size.div_ceil(block_size as u64);
-
-    // ── 7. Read all encrypted blocks ─────────────────────────────────────
-    let mut encrypted_blocks: Vec<Vec<u8>> = Vec::with_capacity(num_blocks as usize);
-    for block_index in 0..num_blocks {
-        let is_last = block_index == num_blocks - 1;
-        let expected_enc_size = if is_last {
-            let last_pt = if env.compressed_size % block_size as u64 == 0 {
-                block_size
-            } else {
-                (env.compressed_size % block_size as u64) as usize
-            };
-            last_pt + 16
-        } else {
-            encrypted_block_size
-        };
-        let mut enc_buf = vec![0u8; expected_enc_size];
-        read_full(input, &mut enc_buf)?;
-        encrypted_blocks.push(enc_buf);
-    }
-
-    // ── 8. Parallel decrypt + leaf computation ────────────────────────────
-    // dek, file_base_nonce, and pld_cipher are all Copy + Send — captured by value.
     let dek = env.dek;
     let file_base_nonce = pub_hdr.file_base_nonce;
 
+    let compression = Compression::from_byte(pub_hdr.compression_id)?;
+
+    // ── Read encrypted blocks ─────────────────────────────────────────────
+    // Uncompressed: fixed-size blocks (current format, no size prefix).
+    // Per-block zstd: variable-size blocks, each preceded by a 4-byte LE size.
+    // In both cases all blocks are collected before parallel decrypt so that
+    // Rayon can process them in any order.
+    let encrypted_blocks: Vec<Vec<u8>> = match compression {
+        Compression::None => {
+            // num_blocks derived from compressed_size (= original_size for plain files).
+            let num_blocks = env.compressed_size.div_ceil(block_size as u64);
+            let encrypted_block_size = block_size + 16;
+            let mut blocks = Vec::with_capacity(num_blocks as usize);
+            for block_index in 0..num_blocks {
+                let is_last = block_index == num_blocks - 1;
+                let expected_enc_size = if is_last {
+                    let last_pt = if env.compressed_size % block_size as u64 == 0 {
+                        block_size
+                    } else {
+                        (env.compressed_size % block_size as u64) as usize
+                    };
+                    last_pt + 16
+                } else {
+                    encrypted_block_size
+                };
+                let mut enc_buf = vec![0u8; expected_enc_size];
+                read_full(input, &mut enc_buf)?;
+                blocks.push(enc_buf);
+            }
+            blocks
+        }
+        Compression::Zstd(_) => {
+            // num_blocks derived from original_size: we split the original plaintext
+            // into fixed blocks before compression, so the block count is determined
+            // by the uncompressed size, not the compressed sizes.
+            let num_blocks = env.original_size.div_ceil(block_size as u64);
+            let mut blocks = Vec::with_capacity(num_blocks as usize);
+            for _ in 0..num_blocks {
+                // Read the 4-byte little-endian size prefix.
+                let mut size_buf = [0u8; 4];
+                read_full(input, &mut size_buf)?;
+                let enc_size = u32::from_le_bytes(size_buf) as usize;
+                let mut enc_buf = vec![0u8; enc_size];
+                read_full(input, &mut enc_buf)?;
+                blocks.push(enc_buf);
+            }
+            blocks
+        }
+    };
+
+    // ── Parallel decrypt (+ decompress for zstd) ──────────────────────────
+    // The Merkle leaf is computed over the raw AEAD ciphertext — identical
+    // to the no-compression path since AEAD wraps the (possibly compressed) data.
     let dec_results: BlockResults = encrypted_blocks
         .into_par_iter()
         .enumerate()
         .map(|(block_index, enc_buf)| {
-            let leaf = compute_leaf(&enc_buf);
+            let leaf = merkle_leaf(&enc_buf);
             let block_key_bytes = derive_block_key(&dek, block_index as u64);
             let block_nonce = derive_block_nonce(&file_base_nonce, block_index as u64);
             let aad = (block_index as u64).to_le_bytes();
-            let plaintext = cipher_dispatch::block_decrypt(
+
+            let decrypted = cipher_dispatch::block_decrypt(
                 pld_cipher,
                 &block_key_bytes,
                 &block_nonce,
                 &aad,
                 &enc_buf,
             )?;
+
+            let plaintext = match compression {
+                Compression::None => decrypted,
+                Compression::Zstd(_) => {
+                    // Each block decompresses to at most block_size bytes.
+                    zstd::bulk::decompress(&decrypted, block_size)
+                        .map_err(|e| CoreErr::DecryptFail(format!("zstd: {e}")))?
+                }
+            };
+
             Ok((plaintext, leaf))
         })
         .collect();
@@ -370,14 +565,14 @@ where
     let dec_results = dec_results?;
     let num_results = dec_results.len();
 
-    // ── 9. Verify Merkle root BEFORE writing any plaintext ────────────────
+    // ── Verify Merkle root BEFORE writing any plaintext ───────────────────
     let leaves: Vec<[u8; 32]> = dec_results.iter().map(|(_, l)| *l).collect();
-    let computed_root = merkle_root(&leaves);
+    let computed_root = merkle_root_v1(&leaves);
     if computed_root != env.merkle_root {
         return Err(CoreErr::DecryptFail("Merkle root mismatch".into()));
     }
 
-    // ── 10. Write plaintext blocks sequentially ───────────────────────────
+    // ── Write plaintext blocks ────────────────────────────────────────────
     for (i, (plaintext, _)) in dec_results.into_iter().enumerate() {
         output.write_all(&plaintext)?;
         let pct = (((i + 1) as f32 / num_results.max(1) as f32) * 95.0) as i32;
@@ -386,13 +581,15 @@ where
 
     output.flush()?;
     ui.output(100);
-    Ok(())
+    Ok(env.metadata())
 }
 
-/// Rekey an Arsenic V2 file in-place: change the password without touching the payload.
+/// Rekey an Arsenic V1 file in-place: change the password without touching the payload
+/// or the ProtectedMetadata.
 ///
-/// Cipher algorithm choices are preserved — only the salt, kek_nonce, and
-/// encrypted envelope change.
+/// LUKS-style keyslot replacement: only the 48-byte WrappedDEK is re-encrypted
+/// under the new KEK. ProtectedMetadata bytes are copied unchanged — they are
+/// bound to the DEK, not to the password.
 pub fn rekey_arsenic<F>(
     file: &mut F,
     old_password: &Secret<String>,
@@ -405,11 +602,10 @@ where
     ui.output(0);
 
     file.seek(SeekFrom::Start(0))?;
-    let mut header_buf = [0u8; TOTAL_HEADER_LEN];
-    file.read_exact(&mut header_buf)
-        .map_err(|_| CoreErr::BadSignature)?;
-    let (pub_hdr, pre_mac_bytes, stored_mac, enc_env) = parse_header_bytes(&header_buf)?;
+    let header_buf = read_header(file)?;
+    let _header_total_size = header_buf.len();
 
+    let (pub_hdr, pre_mac_bytes, stored_mac, enc_env_region) = parse_header_bytes(&header_buf)?;
     let hdr_cipher = CipherId::from_byte(pub_hdr.hdr_cipher_id)?;
 
     if pub_hdr.m_cost > MAX_ARGON2_RAM_KB || pub_hdr.header_total_size > MAX_HEADER_TOTAL_SIZE {
@@ -417,7 +613,8 @@ where
             "Parameters exceed safety limits".into(),
         ));
     }
-    let prekey_old = compute_prekey(old_password.expose().as_bytes(), &pub_hdr.salt);
+
+    let prekey_old = compute_prekey(old_password.expose().as_bytes(), &pub_hdr.salt)?;
     if !verify_header_mac(&prekey_old, &pre_mac_bytes, &stored_mac) {
         return Err(CoreErr::DecryptionError);
     }
@@ -429,15 +626,6 @@ where
         pub_hdr.m_cost,
         pub_hdr.p_cost,
     )?;
-    let env_pt = cipher_dispatch::envelope_decrypt(
-        hdr_cipher,
-        kek_old.expose(),
-        &pub_hdr.kek_nonce,
-        &[],
-        &enc_env,
-    )?;
-
-    ui.output(50);
 
     let new_salt: [u8; 16] = random();
     let new_kek_nonce: [u8; 12] = random();
@@ -448,16 +636,37 @@ where
         pub_hdr.m_cost,
         pub_hdr.p_cost,
     )?;
-    let enc_env_new = cipher_dispatch::envelope_encrypt(
+
+    // 1. Unwrap DEK from the keyslot using the old KEK.
+    // 2. Re-wrap DEK under the new KEK.
+    // 3. Copy ProtectedMetadata bytes as-is — no decryption, no re-encryption.
+    //    MetaKey = f(DEK), not f(password), so it is unaffected by the password change.
+    let (wrapped_dek_bytes, protected_meta_bytes) = enc_env_region.split_at(WRAPPED_DEK_LEN);
+
+    let mut dek_vec = cipher_dispatch::envelope_decrypt(
+        hdr_cipher,
+        kek_old.expose(),
+        &pub_hdr.kek_nonce,
+        &[],
+        wrapped_dek_bytes,
+    )?;
+
+    let new_wrapped_dek = cipher_dispatch::envelope_encrypt(
         hdr_cipher,
         kek_new.expose(),
         &new_kek_nonce,
         &[],
-        &env_pt,
+        &dek_vec,
     )?;
-    let enc_env_arr: [u8; ENVELOPE_PT_LEN + GCM_TAG] = enc_env_new
-        .try_into()
-        .expect("encrypt always produces exactly ENVELOPE_ENC_LEN bytes");
+
+    dek_vec.zeroize();
+
+    // Assemble: new keyslot || unchanged ProtectedMetadata.
+    let new_enc_envelope: Vec<u8> = new_wrapped_dek
+        .iter()
+        .chain(protected_meta_bytes.iter())
+        .copied()
+        .collect();
 
     let new_pub_hdr = PublicHeader {
         compression_id: pub_hdr.compression_id,
@@ -468,13 +677,13 @@ where
         p_cost: pub_hdr.p_cost,
         file_base_nonce: pub_hdr.file_base_nonce,
         kek_nonce: new_kek_nonce,
-        hdr_cipher_id: pub_hdr.hdr_cipher_id, // preserved
-        pld_cipher_id: pub_hdr.pld_cipher_id, // preserved
+        hdr_cipher_id: pub_hdr.hdr_cipher_id,
+        pld_cipher_id: pub_hdr.pld_cipher_id,
     };
-    let prekey_new = compute_prekey(new_password.expose().as_bytes(), &new_salt);
+    let prekey_new = compute_prekey(new_password.expose().as_bytes(), &new_salt)?;
     let new_pre_mac = serialize_pre_mac(&new_pub_hdr);
     let new_mac = compute_header_mac(&prekey_new, &new_pre_mac);
-    let new_header = build_header_bytes(&new_pub_hdr, &new_mac, &enc_env_arr);
+    let new_header = build_header_bytes(&new_pub_hdr, &new_mac, &new_enc_envelope);
 
     file.seek(SeekFrom::Start(0))?;
     file.write_all(&new_header)?;

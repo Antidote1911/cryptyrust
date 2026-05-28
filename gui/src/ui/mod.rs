@@ -40,5 +40,10 @@ impl UI {
         if app.show_about {
             components::render_about_window(app, &ctx);
         }
+
+        // Benchmark window
+        if app.show_bench {
+            components::render_bench_window(app, &ctx);
+        }
     }
 }

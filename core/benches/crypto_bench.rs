@@ -1,10 +1,10 @@
-// Throughput benchmarks for Arsenic V2 encryption.
+// Throughput benchmarks for Arsenic V1 encryption.
 //
 // Benchmark groups
 // ─────────────────────────────────────────────────────────────────────────────
 //   encrypt_payload  — minimal KDF (t=1, m=64 KB, p=1) isolates pure cipher
 //                      throughput for each of the three payload algorithms:
-//                      XChaCha20-Poly1305, AES-256-GCM-SIV, Serpent-256-GCM.
+//                      XChaCha20-Poly1305, AES-256-GCM-SIV, Deoxys-II-256.
 //
 //   decrypt_payload  — same ciphers, same sizes, decryption direction.
 //
@@ -42,8 +42,9 @@ fn minimal(pld_cipher: CipherId) -> ArsenicParams {
         t_cost: 1,
         m_cost: 64, // 64 KB — negligible KDF cost
         p_cost: 1,
-        hdr_cipher: CipherId::SerpentGcm,
+        hdr_cipher: CipherId::DeoxysII256,
         pld_cipher,
+        ..ArsenicParams::default()
     }
 }
 
@@ -77,7 +78,7 @@ fn bench_encrypt_payload(c: &mut Criterion) {
     let ciphers: &[(CipherId, &str)] = &[
         (CipherId::XChaCha20Poly1305, "XChaCha20"),
         (CipherId::Aes256GcmSiv, "AES-GCM-SIV"),
-        (CipherId::SerpentGcm, "Serpent-GCM"),
+        (CipherId::DeoxysII256, "Deoxys-II-256"),
     ];
 
     let mut group = c.benchmark_group("encrypt_payload");
@@ -107,7 +108,7 @@ fn bench_decrypt_payload(c: &mut Criterion) {
     let ciphers: &[(CipherId, &str)] = &[
         (CipherId::XChaCha20Poly1305, "XChaCha20"),
         (CipherId::Aes256GcmSiv, "AES-GCM-SIV"),
-        (CipherId::SerpentGcm, "Serpent-GCM"),
+        (CipherId::DeoxysII256, "Deoxys-II-256"),
     ];
 
     let mut group = c.benchmark_group("decrypt_payload");

@@ -1,6 +1,8 @@
 use cryptyrust_core::{
-    arsenic::TOTAL_HEADER_LEN,
-    arsenic::{decrypt_arsenic, encrypt_arsenic, ArsenicParams, CipherId, BLOCK_SIZE_4MB},
+    arsenic::{
+        decrypt_arsenic, encrypt_arsenic, ArsenicParams, CipherId, Compression, EnvelopeMetadata,
+        BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE, ZSTD_DEFAULT_LEVEL,
+    },
     arsenic_rekey, is_arsenic_file, Secret, Ui,
 };
 use std::io::Cursor;
@@ -16,7 +18,7 @@ const WRONG_PASSWORD: &str = "wrong_arsenic_password";
 
 /// Minimal Argon2id params — keeps tests fast (< 1 ms KDF).
 fn fast_params() -> ArsenicParams {
-    fast_params_with(CipherId::SerpentGcm, CipherId::XChaCha20Poly1305)
+    fast_params_with(CipherId::DeoxysII256, CipherId::XChaCha20Poly1305)
 }
 
 fn fast_params_with(hdr: CipherId, pld: CipherId) -> ArsenicParams {
@@ -26,6 +28,32 @@ fn fast_params_with(hdr: CipherId, pld: CipherId) -> ArsenicParams {
         p_cost: 1,
         hdr_cipher: hdr,
         pld_cipher: pld,
+        metadata: EnvelopeMetadata::default(),
+        compression: Compression::None,
+    }
+}
+
+fn fast_params_with_metadata(meta: EnvelopeMetadata) -> ArsenicParams {
+    ArsenicParams {
+        t_cost: 1,
+        m_cost: 64,
+        p_cost: 1,
+        hdr_cipher: CipherId::DeoxysII256,
+        pld_cipher: CipherId::XChaCha20Poly1305,
+        metadata: meta,
+        compression: Compression::None,
+    }
+}
+
+fn fast_params_with_compression(compression: Compression) -> ArsenicParams {
+    ArsenicParams {
+        t_cost: 1,
+        m_cost: 64,
+        p_cost: 1,
+        hdr_cipher: CipherId::DeoxysII256,
+        pld_cipher: CipherId::XChaCha20Poly1305,
+        metadata: EnvelopeMetadata::default(),
+        compression,
     }
 }
 
@@ -61,6 +89,23 @@ fn do_decrypt(ct: &[u8], pwd: &str) -> Result<Vec<u8>, cryptyrust_core::CoreErr>
         ct.len() as u64,
     )?;
     Ok(output.into_inner())
+}
+
+/// Decrypt and return both the plaintext and the recovered EnvelopeMetadata.
+fn do_decrypt_with_meta(
+    ct: &[u8],
+    pwd: &str,
+) -> Result<(Vec<u8>, EnvelopeMetadata), cryptyrust_core::CoreErr> {
+    let mut input = Cursor::new(ct);
+    let mut output = Cursor::new(Vec::new());
+    let meta = decrypt_arsenic(
+        &mut input,
+        &mut output,
+        &Secret::new(pwd.into()),
+        &NoUi,
+        ct.len() as u64,
+    )?;
+    Ok((output.into_inner(), meta))
 }
 
 fn make_payload(size: usize) -> Vec<u8> {
@@ -120,7 +165,7 @@ fn round_trip_two_full_blocks() {
 
 #[test]
 fn round_trip_utf8_text() {
-    let text = "Données chiffrées avec Arsenic V2 — format évolutif.\n";
+    let text = "Données chiffrées avec Arsenic V1 — format évolutif.\n";
     let ct = do_encrypt(text.as_bytes());
     let pt = do_decrypt(&ct, PASSWORD).unwrap();
     assert_eq!(std::str::from_utf8(&pt).unwrap(), text);
@@ -174,8 +219,9 @@ fn tampered_encrypted_envelope_rejected() {
 fn tampered_block_body_rejected() {
     let data = make_payload(1024);
     let mut ct = do_encrypt(&data);
-    // Block data starts at byte 256 (after the 256-byte header)
-    let mid = 256 + ct[256..].len() / 2;
+    // Block data starts after the header (MIN_HEADER_TOTAL_SIZE for no-metadata files)
+    let hdr = MIN_HEADER_TOTAL_SIZE;
+    let mid = hdr + ct[hdr..].len() / 2;
     ct[mid] ^= 0xFF;
     // Either Poly1305 tag or Merkle root check will fail
     assert!(do_decrypt(&ct, PASSWORD).is_err());
@@ -196,8 +242,8 @@ fn tampered_merkle_root_accepted_wrong_block_still_fails() {
     // Tampering a block byte changes the leaf hash → Merkle check fails
     let data = make_payload(BLOCK_SIZE_4MB + 100);
     let mut ct = do_encrypt(&data);
-    // Flip a byte in the first block
-    ct[256 + 42] ^= 0x01;
+    // Flip a byte in the first block (starts at MIN_HEADER_TOTAL_SIZE)
+    ct[MIN_HEADER_TOTAL_SIZE + 42] ^= 0x01;
     assert!(do_decrypt(&ct, PASSWORD).is_err());
 }
 
@@ -221,7 +267,8 @@ fn truncated_header_rejected() {
 fn truncated_body_rejected() {
     let data = make_payload(8192);
     let ct = do_encrypt(&data);
-    let truncated = &ct[..256 + ct[256..].len() / 2]; // half the body
+    let hdr = MIN_HEADER_TOTAL_SIZE;
+    let truncated = &ct[..hdr + ct[hdr..].len() / 2]; // half the body
     assert!(do_decrypt(truncated, PASSWORD).is_err());
 }
 
@@ -278,7 +325,7 @@ fn header_magic_present() {
 #[test]
 fn header_version_correct() {
     let ct = do_encrypt(b"check version");
-    assert_eq!(&ct[4..6], &[0x00, 0x02]);
+    assert_eq!(&ct[4..6], &[0x00, 0x01]);
 }
 
 // ── rekey (header-only password change) ──────────────────────────────────────
@@ -343,9 +390,10 @@ fn rekey_wrong_old_password_rejected() {
 
 #[test]
 fn rekey_payload_unchanged() {
-    // After rekey only the first 256 bytes (header) should differ
+    // After rekey only the header should differ; payload bytes are identical.
     let data = b"payload integrity check";
     let ct_before = do_encrypt(data);
+    let hdr = MIN_HEADER_TOTAL_SIZE; // no metadata → minimum header size
     let mut tmp = NamedTempFile::new().expect("tempfile");
     std::io::Write::write_all(&mut tmp, &ct_before).expect("write");
     tmp.as_file_mut().sync_all().expect("sync");
@@ -360,10 +408,10 @@ fn rekey_payload_unchanged() {
 
     let ct_after = std::fs::read(tmp.path()).expect("read");
     assert_eq!(ct_before.len(), ct_after.len(), "file size must not change");
-    assert_ne!(&ct_before[..256], &ct_after[..256], "header must change");
+    assert_ne!(&ct_before[..hdr], &ct_after[..hdr], "header must change");
     assert_eq!(
-        &ct_before[256..],
-        &ct_after[256..],
+        &ct_before[hdr..],
+        &ct_after[hdr..],
         "payload must be identical"
     );
 }
@@ -386,8 +434,8 @@ fn rekey_large_file_payload_unchanged() {
 
     let ct_after = std::fs::read(tmp.path()).expect("read");
     assert_eq!(
-        &ct_before[256..],
-        &ct_after[256..],
+        &ct_before[MIN_HEADER_TOTAL_SIZE..],
+        &ct_after[MIN_HEADER_TOTAL_SIZE..],
         "payload of 8 MB file must be identical"
     );
     let pt = do_decrypt(&ct_after, "new_pw").expect("decrypt 8 MB after rekey");
@@ -448,11 +496,11 @@ fn rekey_keeps_backup_on_failure() {
         ".bak must be kept after a failed rekey"
     );
 
-    // Backup must contain exactly 256 bytes (the original header)
+    // Backup must contain exactly the original header (MIN_HEADER_TOTAL_SIZE for no-metadata files)
     let bak = std::fs::read(bak_path(&tmp)).expect("read bak");
     assert_eq!(
         bak.len(),
-        TOTAL_HEADER_LEN,
+        MIN_HEADER_TOTAL_SIZE,
         "backup must be exactly one header"
     );
 
@@ -470,8 +518,8 @@ fn rekey_stale_backup_is_silently_replaced() {
     std::io::Write::write_all(&mut tmp, &ct).expect("write ct");
     tmp.as_file_mut().sync_all().expect("sync");
 
-    // Write a stale backup with arbitrary 256-byte content.
-    let stale_content = vec![0xAB_u8; TOTAL_HEADER_LEN];
+    // Write a stale backup with arbitrary content (same size as a TLV header).
+    let stale_content = vec![0xAB_u8; MIN_HEADER_TOTAL_SIZE];
     std::fs::write(bak_path(&tmp), &stale_content).expect("write stale bak");
 
     // Rekey must succeed despite the stale backup being present.
@@ -501,7 +549,7 @@ fn rekey_corrupted_header_restored_from_backup() {
     tmp.as_file_mut().sync_all().expect("sync");
 
     // Save the genuine header as the backup (as arsenic_rekey would have done).
-    let genuine_header = ct[..TOTAL_HEADER_LEN].to_vec();
+    let genuine_header = ct[..MIN_HEADER_TOTAL_SIZE].to_vec();
     std::fs::write(bak_path(&tmp), &genuine_header).expect("write genuine bak");
 
     // Corrupt the first 8 bytes of the main file (wipes the "ARSN" magic).
@@ -556,9 +604,9 @@ fn round_trip_xchacha20_header_xchacha20_payload() {
 }
 
 #[test]
-fn round_trip_serpent_header_aes_gcm_siv_payload() {
-    let params = fast_params_with(CipherId::SerpentGcm, CipherId::Aes256GcmSiv);
-    let data = b"Serpent header, AES-GCM-SIV payload";
+fn round_trip_deoxys_header_aes_gcm_siv_payload() {
+    let params = fast_params_with(CipherId::DeoxysII256, CipherId::Aes256GcmSiv);
+    let data = b"Deoxys-II header, AES-GCM-SIV payload";
     let ct = do_encrypt_with(data, PASSWORD, params);
     assert_eq!(ct[7], 0x02);
     assert_eq!(ct[8], 0x04, "pld_cipher_id = AES-GCM-SIV");
@@ -576,17 +624,17 @@ fn round_trip_all_aes_gcm_siv() {
 }
 
 #[test]
-fn round_trip_all_serpent() {
-    let params = fast_params_with(CipherId::SerpentGcm, CipherId::SerpentGcm);
-    let data = b"Serpent header and payload";
+fn round_trip_all_deoxys() {
+    let params = fast_params_with(CipherId::DeoxysII256, CipherId::DeoxysII256);
+    let data = b"Deoxys-II header and payload";
     let ct = do_encrypt_with(data, PASSWORD, params);
     assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
 }
 
 #[test]
-fn round_trip_aes_gcm_siv_header_serpent_payload() {
-    let params = fast_params_with(CipherId::Aes256GcmSiv, CipherId::SerpentGcm);
-    let data = b"AES-GCM-SIV header, Serpent payload";
+fn round_trip_aes_gcm_siv_header_deoxys_payload() {
+    let params = fast_params_with(CipherId::Aes256GcmSiv, CipherId::DeoxysII256);
+    let data = b"AES-GCM-SIV header, Deoxys-II payload";
     let ct = do_encrypt_with(data, PASSWORD, params);
     assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
 }
@@ -601,7 +649,7 @@ fn wrong_cipher_id_rejected() {
 
 #[test]
 fn rekey_preserves_cipher_ids() {
-    let params = fast_params_with(CipherId::Aes256GcmSiv, CipherId::SerpentGcm);
+    let params = fast_params_with(CipherId::Aes256GcmSiv, CipherId::DeoxysII256);
     let data = b"rekey cipher id preservation";
     let ct = do_encrypt_with(data, PASSWORD, params);
     let mut tmp = NamedTempFile::new().expect("tempfile");
@@ -619,6 +667,265 @@ fn rekey_preserves_cipher_ids() {
     let rekeyed = std::fs::read(tmp.path()).expect("read");
     // Cipher IDs must survive rekey unchanged
     assert_eq!(rekeyed[7], 0x04, "hdr_cipher_id preserved");
-    assert_eq!(rekeyed[8], 0x02, "pld_cipher_id preserved");
+    assert_eq!(rekeyed[8], 0x02, "pld_cipher_id = DeoxysII256 preserved");
     assert_eq!(do_decrypt(&rekeyed, "new_pw_cipher").unwrap(), data);
+}
+
+// ── TLV envelope metadata tests ───────────────────────────────────────────────
+
+#[test]
+fn tlv_header_size_no_metadata() {
+    // Without optional fields the header must be exactly MIN_HEADER_TOTAL_SIZE.
+    let ct = do_encrypt(b"size check");
+    assert_eq!(
+        ct.len() - ct[MIN_HEADER_TOTAL_SIZE..].len(),
+        MIN_HEADER_TOTAL_SIZE,
+        "no-metadata header must equal MIN_HEADER_TOTAL_SIZE"
+    );
+    // header_total_size field at bytes 10–11
+    let stored = u16::from_le_bytes([ct[10], ct[11]]) as usize;
+    assert_eq!(stored, MIN_HEADER_TOTAL_SIZE);
+}
+
+#[test]
+fn tlv_filename_round_trip() {
+    let meta = EnvelopeMetadata {
+        filename: Some("secret.txt".into()),
+        ..Default::default()
+    };
+    let params = fast_params_with_metadata(meta);
+    let data = b"file with a name";
+    let ct = do_encrypt_with(data, PASSWORD, params);
+
+    let (pt, recovered_meta) = do_decrypt_with_meta(&ct, PASSWORD).unwrap();
+    assert_eq!(pt, data);
+    assert_eq!(recovered_meta.filename.as_deref(), Some("secret.txt"));
+    assert!(recovered_meta.comment.is_none());
+    assert!(recovered_meta.timestamp_secs.is_none());
+}
+
+#[test]
+fn tlv_comment_round_trip() {
+    let meta = EnvelopeMetadata {
+        comment: Some("chiffré avec Arsenic".into()),
+        ..Default::default()
+    };
+    let ct = do_encrypt_with(b"data", PASSWORD, fast_params_with_metadata(meta));
+    let (_, recovered_meta) = do_decrypt_with_meta(&ct, PASSWORD).unwrap();
+    assert_eq!(
+        recovered_meta.comment.as_deref(),
+        Some("chiffré avec Arsenic")
+    );
+}
+
+#[test]
+fn tlv_timestamp_round_trip() {
+    let ts: u64 = 1_700_000_000;
+    let meta = EnvelopeMetadata {
+        timestamp_secs: Some(ts),
+        ..Default::default()
+    };
+    let ct = do_encrypt_with(b"timed data", PASSWORD, fast_params_with_metadata(meta));
+    let (_, recovered_meta) = do_decrypt_with_meta(&ct, PASSWORD).unwrap();
+    assert_eq!(recovered_meta.timestamp_secs, Some(ts));
+}
+
+#[test]
+fn tlv_all_optional_fields_round_trip() {
+    let meta = EnvelopeMetadata {
+        filename: Some("rapport.pdf".into()),
+        comment: Some("version finale".into()),
+        timestamp_secs: Some(1_750_000_000),
+    };
+    let ct = do_encrypt_with(b"full meta", PASSWORD, fast_params_with_metadata(meta));
+    let (pt, recovered) = do_decrypt_with_meta(&ct, PASSWORD).unwrap();
+    assert_eq!(pt, b"full meta");
+    assert_eq!(recovered.filename.as_deref(), Some("rapport.pdf"));
+    assert_eq!(recovered.comment.as_deref(), Some("version finale"));
+    assert_eq!(recovered.timestamp_secs, Some(1_750_000_000));
+}
+
+#[test]
+fn tlv_metadata_header_larger_than_min() {
+    // A filename adds 2 (tag+len) + filename.len() bytes to the header.
+    let fname = "document.pdf"; // 12 bytes
+    let meta = EnvelopeMetadata {
+        filename: Some(fname.into()),
+        ..Default::default()
+    };
+    let ct = do_encrypt_with(b"sized", PASSWORD, fast_params_with_metadata(meta));
+    let stored = u16::from_le_bytes([ct[10], ct[11]]) as usize;
+    let expected = MIN_HEADER_TOTAL_SIZE + 2 + fname.len();
+    assert_eq!(
+        stored, expected,
+        "header_total_size must reflect filename length"
+    );
+}
+
+#[test]
+fn tlv_metadata_tamper_rejected() {
+    // Tampering the encrypted envelope (which contains the TLV) must be caught.
+    let meta = EnvelopeMetadata {
+        filename: Some("important.txt".into()),
+        ..Default::default()
+    };
+    let mut ct = do_encrypt_with(b"tamper test", PASSWORD, fast_params_with_metadata(meta));
+    // Flip a byte in the encrypted envelope region (starts at PUB_HEADER_LEN = 108)
+    ct[110] ^= 0xFF;
+    assert!(do_decrypt(&ct, PASSWORD).is_err());
+}
+
+#[test]
+fn tlv_metadata_preserved_after_rekey() {
+    let meta = EnvelopeMetadata {
+        filename: Some("kept.txt".into()),
+        timestamp_secs: Some(42),
+        ..Default::default()
+    };
+    let data = b"rekey preserves metadata";
+    let ct = do_encrypt_with(data, PASSWORD, fast_params_with_metadata(meta));
+    let mut tmp = NamedTempFile::new().expect("tempfile");
+    std::io::Write::write_all(&mut tmp, &ct).expect("write");
+    tmp.as_file_mut().sync_all().expect("sync");
+
+    arsenic_rekey(
+        tmp.path(),
+        &Secret::new(PASSWORD.into()),
+        &Secret::new("new_pw_meta".into()),
+        &NoUi,
+    )
+    .expect("rekey");
+
+    let rekeyed = std::fs::read(tmp.path()).expect("read");
+    let (pt, recovered) = do_decrypt_with_meta(&rekeyed, "new_pw_meta").unwrap();
+    assert_eq!(pt, data);
+    assert_eq!(recovered.filename.as_deref(), Some("kept.txt"));
+    assert_eq!(recovered.timestamp_secs, Some(42));
+}
+
+#[test]
+fn tlv_empty_metadata_no_extra_bytes() {
+    // Explicitly empty optional fields must not add bytes to the header.
+    let meta = EnvelopeMetadata {
+        filename: Some(String::new()), // empty string → not written to TLV
+        ..Default::default()
+    };
+    let ct_with_empty = do_encrypt_with(b"x", PASSWORD, fast_params_with_metadata(meta));
+    let ct_no_meta = do_encrypt(b"x");
+    let sz_with = u16::from_le_bytes([ct_with_empty[10], ct_with_empty[11]]) as usize;
+    let sz_none = u16::from_le_bytes([ct_no_meta[10], ct_no_meta[11]]) as usize;
+    assert_eq!(
+        sz_with, sz_none,
+        "empty filename must not enlarge the header"
+    );
+}
+
+// ── Compression tests ─────────────────────────────────────────────────────────
+
+#[test]
+fn compression_id_zero_when_disabled() {
+    let ct = do_encrypt(b"no compression");
+    assert_eq!(ct[9], 0x00, "compression ID must be 0x00 when disabled");
+}
+
+#[test]
+fn compression_id_one_when_zstd() {
+    let params = fast_params_with_compression(Compression::Zstd(ZSTD_DEFAULT_LEVEL));
+    let ct = do_encrypt_with(b"compress me", PASSWORD, params);
+    assert_eq!(ct[9], 0x01, "compression ID must be 0x01 for zstd");
+}
+
+#[test]
+fn zstd_round_trip_small() {
+    let params = fast_params_with_compression(Compression::Zstd(ZSTD_DEFAULT_LEVEL));
+    let data = b"hello compressed world";
+    let ct = do_encrypt_with(data, PASSWORD, params);
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn zstd_round_trip_empty() {
+    let params = fast_params_with_compression(Compression::Zstd(ZSTD_DEFAULT_LEVEL));
+    let ct = do_encrypt_with(b"", PASSWORD, params);
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), b"");
+}
+
+#[test]
+fn zstd_round_trip_binary() {
+    let params = fast_params_with_compression(Compression::Zstd(ZSTD_DEFAULT_LEVEL));
+    let data: Vec<u8> = (0u8..=255).cycle().take(65536).collect();
+    let ct = do_encrypt_with(&data, PASSWORD, params);
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn zstd_round_trip_incompressible() {
+    // Random-like data should round-trip even if compressed size > original.
+    let params = fast_params_with_compression(Compression::Zstd(ZSTD_DEFAULT_LEVEL));
+    let data: Vec<u8> = (0u8..=255).cycle().take(1024).collect();
+    let ct = do_encrypt_with(&data, PASSWORD, params);
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn zstd_compresses_repetitive_data() {
+    // Highly repetitive data → ciphertext must be smaller than without compression.
+    let data = vec![0x41u8; 65536]; // 64 KiB of 'A'
+    let ct_plain = do_encrypt(&data);
+    let ct_zstd = do_encrypt_with(
+        &data,
+        PASSWORD,
+        fast_params_with_compression(Compression::Zstd(ZSTD_DEFAULT_LEVEL)),
+    );
+    assert!(
+        ct_zstd.len() < ct_plain.len(),
+        "compressed ciphertext ({} bytes) must be smaller than uncompressed ({} bytes)",
+        ct_zstd.len(),
+        ct_plain.len()
+    );
+}
+
+#[test]
+fn zstd_wrong_password_rejected() {
+    let params = fast_params_with_compression(Compression::Zstd(ZSTD_DEFAULT_LEVEL));
+    let ct = do_encrypt_with(b"secret", PASSWORD, params);
+    assert!(do_decrypt(&ct, WRONG_PASSWORD).is_err());
+}
+
+#[test]
+fn zstd_tampered_block_rejected() {
+    let params = fast_params_with_compression(Compression::Zstd(ZSTD_DEFAULT_LEVEL));
+    let data = b"tamper resistance test";
+    let mut ct = do_encrypt_with(data, PASSWORD, params);
+    let last = ct.len() - 1;
+    ct[last] ^= 0xFF;
+    assert!(do_decrypt(&ct, PASSWORD).is_err());
+}
+
+#[test]
+fn zstd_level_range() {
+    // Levels 1, 3, 9, 19 must all produce correct round-trips.
+    for level in [1, 3, 9, 19] {
+        let params = fast_params_with_compression(Compression::Zstd(level));
+        let data = b"level range test";
+        let ct = do_encrypt_with(data, PASSWORD, params);
+        assert_eq!(
+            do_decrypt(&ct, PASSWORD).unwrap(),
+            data,
+            "level {level} failed"
+        );
+    }
+}
+
+#[test]
+fn no_compression_and_zstd_produce_different_ciphertexts() {
+    let data = b"same plaintext, different params";
+    let ct_plain = do_encrypt(data);
+    let ct_zstd = do_encrypt_with(
+        data,
+        PASSWORD,
+        fast_params_with_compression(Compression::Zstd(ZSTD_DEFAULT_LEVEL)),
+    );
+    // Different compression ID → different ciphertext (header differs at minimum)
+    assert_ne!(ct_plain[9], ct_zstd[9], "compression ID must differ");
 }

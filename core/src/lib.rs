@@ -4,7 +4,11 @@ mod constants;
 mod errors;
 mod secret;
 
-pub use crate::arsenic::{ArsenicParams, ArsenicStrength, CipherId};
+pub use crate::arsenic::bench::{bench_cipher_combinations, best_combination, CipherBenchResult};
+pub use crate::arsenic::header::{PREKEY_M_COST_KB, PREKEY_P_COST, PREKEY_T_COST};
+pub use crate::arsenic::{
+    ArsenicParams, ArsenicStrength, CipherId, Compression, EnvelopeMetadata, ZSTD_DEFAULT_LEVEL,
+};
 pub use crate::config::{Direction, Ui};
 pub use crate::constants::*;
 pub use crate::errors::CoreErr;
@@ -17,24 +21,32 @@ pub const fn get_version() -> &'static str {
     APP_VERSION
 }
 
-/// Read the Argon2id parameters stored in an Arsenic V2 file header.
-/// Returns `None` if the file cannot be read or is not a valid Arsenic V2 file.
+/// Read the Argon2id parameters stored in an Arsenic V1 file header.
+/// Returns `None` if the file cannot be read or is not a valid Arsenic V1 file.
 pub fn arsenic_read_params(path: &std::path::Path) -> Option<ArsenicParams> {
     use std::io::Read;
+    // Only the public section (108 bytes) is needed for the KDF params.
     let mut f = File::open(path).ok()?;
-    let mut buf = [0u8; arsenic::header::TOTAL_HEADER_LEN];
+    let mut buf = [0u8; arsenic::header::PUB_HEADER_LEN];
     f.read_exact(&mut buf).ok()?;
-    let (pub_hdr, _, _, _) = arsenic::header::parse_header_bytes(&buf).ok()?;
+    if buf[0..4] != arsenic::header::MAGIC {
+        return None;
+    }
+    if buf[4..6] != arsenic::header::VERSION {
+        return None;
+    }
     Some(ArsenicParams {
-        t_cost: pub_hdr.t_cost,
-        m_cost: pub_hdr.m_cost,
-        p_cost: pub_hdr.p_cost,
-        hdr_cipher: arsenic::CipherId::from_byte(pub_hdr.hdr_cipher_id).ok()?,
-        pld_cipher: arsenic::CipherId::from_byte(pub_hdr.pld_cipher_id).ok()?,
+        t_cost: u32::from_le_bytes(buf[28..32].try_into().ok()?),
+        m_cost: u32::from_le_bytes(buf[32..36].try_into().ok()?),
+        p_cost: u32::from_le_bytes(buf[36..40].try_into().ok()?),
+        hdr_cipher: arsenic::CipherId::from_byte(buf[7]).ok()?,
+        pld_cipher: arsenic::CipherId::from_byte(buf[8]).ok()?,
+        metadata: EnvelopeMetadata::default(),
+        compression: Compression::default(),
     })
 }
 
-/// Change the password of an Arsenic V2 file without decrypting the payload.
+/// Change the password of an Arsenic V1 file without decrypting the payload.
 ///
 /// A 256-byte backup of the current header is written to `<path>.bak` and
 /// flushed to disk before the in-place write begins.  On success the backup
@@ -67,7 +79,7 @@ pub fn arsenic_rekey(
         if !magic_intact {
             // The in-place write was interrupted mid-header.  Restore from backup.
             let backup = std::fs::read(&bak_path)?;
-            if backup.len() == arsenic::header::TOTAL_HEADER_LEN {
+            if backup.len() >= arsenic::header::MIN_HEADER_TOTAL_SIZE {
                 let mut f = OpenOptions::new().write(true).open(path)?;
                 f.write_all(&backup)?;
                 f.sync_all()?;
@@ -83,9 +95,22 @@ pub fn arsenic_rekey(
         // The stale backup will be overwritten in the next step.
     }
 
-    // ── Save current 256-byte header to backup, flush to disk ────────────
+    // ── Read the current header (variable size) and back it up ───────────
     {
-        let mut current_hdr = [0u8; arsenic::header::TOTAL_HEADER_LEN];
+        // Peek at header_total_size (bytes 10–11) before allocating.
+        let header_total_size = {
+            let mut size_buf = [0u8; 12];
+            File::open(path)?.read_exact(&mut size_buf)?;
+            u16::from_le_bytes([size_buf[10], size_buf[11]]) as usize
+        };
+        if header_total_size < arsenic::header::MIN_HEADER_TOTAL_SIZE
+            || header_total_size > arsenic::MAX_HEADER_TOTAL_SIZE as usize
+        {
+            return Err(CoreErr::DecryptFail(
+                "Invalid header_total_size in file".into(),
+            ));
+        }
+        let mut current_hdr = vec![0u8; header_total_size];
         File::open(path)?.read_exact(&mut current_hdr)?;
         let mut bak = File::create(&bak_path)?;
         bak.write_all(&current_hdr)?;
@@ -108,7 +133,7 @@ pub fn arsenic_rekey(
     result
 }
 
-/// Detect whether a file starts with the Arsenic V2 magic ("ARSN").
+/// Detect whether a file starts with the Arsenic V1 magic ("ARSN").
 pub fn is_arsenic_file(path: &std::path::Path) -> bool {
     use std::io::Read;
     let Ok(mut f) = File::open(path) else {
@@ -119,7 +144,7 @@ pub fn is_arsenic_file(path: &std::path::Path) -> bool {
         .is_ok_and(|_| magic == arsenic::header::MAGIC)
 }
 
-/// Encrypt or decrypt a file in Arsenic V2 format.
+/// Encrypt or decrypt a file in Arsenic V1 format.
 pub fn arsenic_main_routine(
     direction: &Direction,
     filename: Option<&str>,
@@ -165,6 +190,8 @@ pub fn arsenic_main_routine(
                 let _ = remove_file(out_path);
                 return Err(e);
             }
+            // EnvelopeMetadata returned on success — ignored here, available to callers
+            // who call decrypt_arsenic directly.
         }
     }
 

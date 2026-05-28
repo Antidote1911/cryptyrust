@@ -60,7 +60,7 @@ pub fn arsenic_strength_label(s: ArsenicStrength) -> &'static str {
 
 pub fn cipher_label(c: CipherId) -> &'static str {
     match c {
-        CipherId::SerpentGcm => "Serpent-256-GCM",
+        CipherId::DeoxysII256 => "Deoxys-II-256",
         CipherId::Aes256GcmSiv => "AES-256-GCM-SIV",
         CipherId::XChaCha20Poly1305 => "XChaCha20-Poly1305",
     }
@@ -68,7 +68,7 @@ pub fn cipher_label(c: CipherId) -> &'static str {
 
 pub fn cipher_short_label(c: CipherId) -> &'static str {
     match c {
-        CipherId::SerpentGcm => "Serpent-GCM",
+        CipherId::DeoxysII256 => "Deoxys-II",
         CipherId::Aes256GcmSiv => "AES-GCM-SIV",
         CipherId::XChaCha20Poly1305 => "XChaCha20",
     }
@@ -76,7 +76,7 @@ pub fn cipher_short_label(c: CipherId) -> &'static str {
 
 pub fn cipher_to_key(c: CipherId) -> &'static str {
     match c {
-        CipherId::SerpentGcm => "serpent_gcm",
+        CipherId::DeoxysII256 => "deoxys_ii",
         CipherId::Aes256GcmSiv => "aes_gcm_siv",
         CipherId::XChaCha20Poly1305 => "xchacha20",
     }
@@ -84,7 +84,7 @@ pub fn cipher_to_key(c: CipherId) -> &'static str {
 
 pub fn cipher_from_key(s: &str) -> Option<CipherId> {
     match s {
-        "serpent_gcm" => Some(CipherId::SerpentGcm),
+        "deoxys_ii" => Some(CipherId::DeoxysII256),
         "aes_gcm_siv" => Some(CipherId::Aes256GcmSiv),
         "xchacha20" => Some(CipherId::XChaCha20Poly1305),
         _ => None,

@@ -29,7 +29,7 @@ pub enum CoreErr {
     #[error("Encryption failed: {0}")]
     EncryptFail(String),
 
-    #[error("Decryption failed: Incorrect signature. Not a valid Arsenic V2 file.")]
+    #[error("Decryption failed: Incorrect signature. Not a valid Arsenic V1 file.")]
     BadSignature,
 
     #[error("Decryption failed: Incorrect header version.")]

@@ -8,6 +8,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use cryptyrust_core::{bench_cipher_combinations, best_combination, CipherId};
+
 use anyhow::{anyhow, Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use std::result::Result::Ok;
@@ -76,6 +78,11 @@ impl Ui for RekeyProgress {
 fn main() {
     let app = Cli::parse();
 
+    if app.bench() {
+        run_bench();
+        return;
+    }
+
     if app.rekey().is_some() {
         match run_rekey(&app) {
             Ok(path) => println!("\nSuccess! Password changed for {}", path),
@@ -113,7 +120,7 @@ fn run_rekey(app: &Cli) -> Result<String> {
         return Err(anyhow!("Invalid filename: {}", f));
     }
     if !is_arsenic_file(path) {
-        return Err(anyhow!("{} is not a valid Arsenic V2 (.arsn) file", f));
+        return Err(anyhow!("{} is not a valid Arsenic V1 (.arsn) file", f));
     }
 
     let old_password = Secret::new(
@@ -320,4 +327,73 @@ fn prepend(prefix: String, p: &str) -> Option<String> {
     .iter()
     .collect();
     Some(path.to_string_lossy().to_string())
+}
+
+// ── Cipher benchmark ──────────────────────────────────────────────────────────
+
+fn run_bench() {
+    const PAYLOAD_MIB: usize = 32;
+
+    println!(
+        "Benchmarking 3 AEAD ciphers on {} MiB (Interactive Argon2id key, single run)...\n",
+        PAYLOAD_MIB
+    );
+
+    let pb = ProgressBar::new(100);
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.green} [{wide_bar:.cyan/blue}] {pos}%")
+            .unwrap()
+            .progress_chars("#>-"),
+    );
+    pb.set_message("Argon2id key derivation...");
+
+    struct BenchUi(ProgressBar);
+    impl Ui for BenchUi {
+        fn output(&self, pct: i32) {
+            self.0.set_position(pct as u64);
+            if pct >= 10 {
+                self.0.set_message("Testing ciphers...");
+            }
+        }
+    }
+
+    let results = bench_cipher_combinations(PAYLOAD_MIB, &BenchUi(pb.clone()));
+    pb.finish_and_clear();
+
+    println!("  {:<22} {:>13} {:>13}", "Cipher", "Encrypt", "Decrypt");
+    println!("  {}", "─".repeat(52));
+    for (i, r) in results.iter().enumerate() {
+        let tag = if i == 0 { "  ★ fastest" } else { "" };
+        println!(
+            "  {:<22} {:>9.0} MiB/s {:>9.0} MiB/s{}",
+            cipher_display_name(r.cipher),
+            r.encrypt_mibps,
+            r.decrypt_mibps,
+            tag,
+        );
+    }
+
+    let (hdr, pld) = best_combination(&results);
+    println!("\n  Fastest combination for this machine:");
+    println!(
+        "    --hdr-cipher {}  --pld-cipher {}\n",
+        cipher_cli_arg(hdr),
+        cipher_cli_arg(pld),
+    );
+}
+
+fn cipher_display_name(c: CipherId) -> &'static str {
+    match c {
+        CipherId::DeoxysII256 => "Deoxys-II-256",
+        CipherId::XChaCha20Poly1305 => "XChaCha20-Poly1305",
+        CipherId::Aes256GcmSiv => "AES-256-GCM-SIV",
+    }
+}
+
+fn cipher_cli_arg(c: CipherId) -> &'static str {
+    match c {
+        CipherId::DeoxysII256 => "deoxys-ii",
+        CipherId::XChaCha20Poly1305 => "xchacha20",
+        CipherId::Aes256GcmSiv => "aes-gcm-siv",
+    }
 }

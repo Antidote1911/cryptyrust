@@ -25,21 +25,24 @@ Pre-built binaries for Linux, macOS (universal), and Windows are available on th
 
 ## Features
 
-- **Arsenic V2** format (`.arsn`) — the sole supported format
-- **Selectable header cipher** — independently choose the algorithm used to encrypt the DEK envelope in the header:
-  - Serpent-256-GCM *(default)*
+- **Arsenic V1** format (`.arsn`) — the sole supported format
+- **Selectable header cipher** — independently choose the algorithm used to encrypt the DEK keyslot and metadata:
+  - Deoxys-II-256 *(default)*
   - AES-256-GCM-SIV
   - XChaCha20-Poly1305
 - **Selectable payload cipher** — independently choose the algorithm used to encrypt payload blocks:
   - XChaCha20-Poly1305 *(default)*
   - AES-256-GCM-SIV
-  - Serpent-256-GCM
+  - Deoxys-II-256
+- **Optional zstd compression** — per-block zstd before encryption; disabled by default
+- **Optional metadata** — filename, comment, and timestamp stored encrypted inside the header
 - **Argon2id** key derivation with two strength presets (Interactive / Sensitive)
-- **HMAC-SHA256 pre-authentication** — the header MAC is verified *before* running Argon2id, preventing denial-of-service via forged cost parameters
-- **BLAKE3 Merkle tree** over all encrypted blocks — full-file integrity verified before any plaintext is written
+- **Tiny Argon2id pre-authentication** — a cheap pre-auth key (t=1, m=8 MB) is used to verify the header MAC before running the full KDF, preventing fast offline oracle attacks while keeping wrong-password rejection fast
+- **LUKS-style keyslot** — the DEK is wrapped in a 48-byte keyslot; password changes re-encrypt only the keyslot, never the payload
+- **BLAKE3 Merkle tree v1** — domain-separated leaf and node hashes over all encrypted blocks; full-file integrity verified before any plaintext is written
 - **Parallel block encryption and decryption** via Rayon — scales with CPU core count
-- **In-place password change** (`--rekey`) — rewrites only the 256-byte header, with crash-safe `.bak` backup and automatic restore on corruption
-- **DEK separation** — the Data Encryption Key is random and wrapped by the Key Encrypting Key; changing a password never re-encrypts the payload
+- **In-place password change** (`--rekey`) — rewrites only the header in-place, with crash-safe `.bak` backup and automatic restore on corruption
+- **Cipher benchmark** (`--bench` / GUI Config menu) — measures AEAD throughput on the local machine and recommends the fastest combination
 - Cross-platform: Linux, Windows, macOS
 
 ---
@@ -65,8 +68,8 @@ cryptyrust_cli -e secret.pdf -p "correct horse battery staple"
 # Sensitive strength (1 GB Argon2id — slower, stronger)
 cryptyrust_cli -e secret.pdf --strength sensitive -p "my passphrase"
 
-# Custom ciphers: AES-256-GCM-SIV header, Serpent-256-GCM payload
-cryptyrust_cli -e secret.pdf --hdr-cipher aes-gcm-siv --pld-cipher serpent-gcm -p "my passphrase"
+# Custom ciphers: AES-256-GCM-SIV header, Deoxys-II-256 payload
+cryptyrust_cli -e secret.pdf --hdr-cipher aes-gcm-siv --pld-cipher deoxys-ii -p "my passphrase"
 
 # Specify output file
 cryptyrust_cli -e secret.pdf -o /tmp/secret.arsn -p "my passphrase"
@@ -102,25 +105,36 @@ cryptyrust_cli --rekey secret.pdf.arsn
 #   Confirm new password:
 ```
 
-Rekey rewrites only the 256-byte header in-place. The encrypted payload is **never touched** — the operation completes in constant time regardless of file size. The selected cipher algorithms are preserved unchanged.
+Rekey replaces only the 48-byte DEK keyslot in-place. The encrypted payload and all metadata are **never touched** — the operation completes in constant time regardless of file size. The selected cipher algorithms and Argon2id parameters are preserved unchanged.
 
 A `.bak` copy of the original header is written and flushed to disk *before* any modification. On success it is removed. If the process is interrupted (power cut, crash), the next `--rekey` call automatically detects the corrupted magic bytes, restores the original header from the backup, and returns an error asking the user to retry.
+
+### Benchmark cipher throughput
+
+```bash
+cryptyrust_cli --bench
+```
+
+Runs a single Interactive Argon2id key derivation, then encrypts and decrypts 32 MiB of data with each of the three AEAD ciphers. Prints a throughput table and the recommended `--hdr-cipher` / `--pld-cipher` flags for the current machine.
+
+**Note:** only the **payload cipher** is benchmarked on large data, because the header cipher processes only 32 bytes (the DEK) — a difference of nanoseconds regardless of algorithm. The benchmark result therefore reflects the payload cipher ranking only; the recommended combination sets both `hdr` and `pld` to the fastest cipher found.
 
 ### Full flag reference
 
 ```
-Usage: cryptyrust_cli [OPTIONS] <--encrypt <FILE>|--decrypt <FILE>|--rekey <FILE>>
+Usage: cryptyrust_cli [OPTIONS] <--encrypt <FILE>|--decrypt <FILE>|--rekey <FILE>|--bench>
 
 Options:
   -e, --encrypt <FILE>          File to encrypt
   -d, --decrypt <FILE>          File to decrypt
   -k, --rekey <FILE>            Change password of an encrypted file in-place
+      --bench                   Benchmark AEAD cipher throughput on this machine
   -o, --output <PATH>           Output file (ignored for rekey)
   -p, --password <PASSWORD>     Password (shell history risk — prefer interactive prompt)
   -f, --passwordfile <FILE>     Read password from a file (UTF-8, no trailing newline)
       --strength <STRENGTH>     Argon2id cost preset: interactive (default) | sensitive
-      --hdr-cipher <CIPHER>     Header envelope cipher (encryption only): serpent-gcm (default) | xchacha20 | aes-gcm-siv
-      --pld-cipher <CIPHER>     Payload block cipher (encryption only): xchacha20 (default) | serpent-gcm | aes-gcm-siv
+      --hdr-cipher <CIPHER>     Header envelope cipher (encryption only): deoxys-ii (default) | xchacha20 | aes-gcm-siv
+      --pld-cipher <CIPHER>     Payload block cipher (encryption only): xchacha20 (default) | deoxys-ii | aes-gcm-siv
   -h, --help                    Print help
   -V, --version                 Print version
 ```
@@ -129,14 +143,13 @@ Options:
 
 ## GUI Usage
 
-1. **Drag and drop** files onto the window, or use *File → Add files…*.
+1. **Drag and drop** files onto the window.
 2. Cryptyrust auto-detects the mode:
    - All files are `.arsn` → **Decrypt** mode
    - All files are plaintext → **Encrypt** mode
    - Mixed selection → a warning is shown; resolve it before proceeding
 3. Click **Encrypt** or **Decrypt**, enter your password (confirm on encryption).
-4. Multiple files are processed in parallel with per-file progress bars.
-5. To **change the password** of a single `.arsn` file, select it alone and click *Change password*.
+4. To **change the password** of a single `.arsn` file, select it alone and click *Change password*.
 
 ### Algorithm configuration
 
@@ -145,10 +158,13 @@ Open the **Config** menu to independently configure (for encryption only):
 | Setting | Options | Default |
 |---|---|---|
 | **Argon2id strength** | Interactive (256 MB) · Sensitive (1 GB) | Interactive |
-| **Header cipher** | Serpent-256-GCM · AES-256-GCM-SIV · XChaCha20-Poly1305 | Serpent-256-GCM |
-| **Payload cipher** | XChaCha20-Poly1305 · AES-256-GCM-SIV · Serpent-256-GCM | XChaCha20-Poly1305 |
+| **Header cipher** | Deoxys-II-256 · AES-256-GCM-SIV · XChaCha20-Poly1305 | Deoxys-II-256 |
+| **Payload cipher** | Deoxys-II-256 · AES-256-GCM-SIV · XChaCha20-Poly1305 | XChaCha20-Poly1305 |
+| **Compression** | zstd level 3 | Disabled |
 
 The status bar at the bottom of the window always shows the active configuration. All settings are persisted between sessions.
+
+Click **⏱ Benchmark ciphers…** at the bottom of the Config menu to measure AEAD throughput on the current machine. The window shows encrypt and decrypt speeds for each cipher and offers an **Apply fastest combination** button. See the note below on what the benchmark actually measures.
 
 ---
 
@@ -157,82 +173,97 @@ The status bar at the bottom of the window always shows the active configuration
 ### Key hierarchy
 
 ```
-Password ──── Argon2id(salt, t_cost, m_cost, p_cost) ────► KEK (32 bytes)
-                                                              │
-                                              hdr_cipher ────┤
-                                     (Serpent-GCM /         │
-                                      AES-GCM-SIV /         ▼
-                                      XChaCha20) ──► Encrypted envelope
-                                                     contains:
-                                                       DEK  (32 random bytes)
-                                                       MerkleRoot (32 bytes)
-                                                       OriginalSize, CompressedSize
-                                                       BlockSizeID
-                                                              │
-                                              ┌───────────────┘
-                                              │  DEK
-                                              ▼
-              per-block key   = BLAKE3_keyed_hash(DEK, u64_LE(block_index))
-              per-block nonce = BLAKE3_derive_key("Arsenic V2 Block Nonce",
-                                                   file_base_nonce ‖ u64_LE(N))
+Password ──Argon2id(tiny: t=1, m=8MB)──► PreKey → HeaderMAC (HMAC-SHA256)
+         │                                         verifies header integrity
+         │                                         before spending memory
+         │
+         └──Argon2id(full: t=4, m=256MB)──► KEK (32 bytes)
                                               │
-                                pld_cipher ───┤
-                       (XChaCha20 /          │
-                        AES-GCM-SIV /        ▼
-                        Serpent-GCM) ──► EncBlock_N
+                       ┌──────────────────────┘
+                       │  AEAD_hdr_cipher(KEK, kek_nonce)
+                       ▼
+                   WrappedDEK (48 bytes) ── keyslot, only part changed on rekey
+                       │
+                       │  decrypt → DEK (32 random bytes)
+                       │
+           ┌───────────┼──────────────────────────────────┐
+           │           │                                   │
+           ▼           ▼                                   ▼
+    MetaKey =    BlockKey_N =                       BlockNonce_N =
+  BLAKE3_derive  BLAKE3_keyed_hash                 BLAKE3_derive_key
+  ("Metadata Key", DEK)  (DEK, u64_LE(N))         ("Block Nonce",
+           │                  │                   file_base_nonce‖u64_LE(N))
+           │                  └─────────────┬─────────────┘
+           ▼                                ▼
+    ProtectedMetadata           EncBlock_N = PayloadCipher(
+    (Merkle root,                   key=BlockKey_N,
+     sizes, metadata)               nonce=BlockNonce_N,
+                                    aad=u64_LE(N),
+                                    msg=plaintext_N)
 ```
 
-- The **DEK** (Data Encryption Key) is generated fresh for every encryption and stored encrypted inside the 256-byte header envelope. Changing a password only re-wraps the DEK under a new KEK — the entire payload is untouched.
-- Block keys and nonces are deterministically derived from the DEK and the block index via BLAKE3, so all blocks can be **encrypted and decrypted in parallel** (Rayon).
+### LUKS-style rekey
 
-### Header pre-authentication
+The DEK is random and lives in a dedicated 48-byte keyslot (WrappedDEK). All metadata (Merkle root, file sizes, optional fields) lives in ProtectedMetadata, encrypted under MetaKey = f(DEK). Because MetaKey depends on the DEK — not on the password — rekey only touches the 48-byte keyslot. ProtectedMetadata bytes are copied unchanged.
 
-Before running the expensive Argon2id derivation, Cryptyrust verifies a cheap **HMAC-SHA256 header MAC**:
+### Pre-authentication
+
+Before running the expensive Argon2id derivation, Cryptyrust verifies a HeaderMAC to reject wrong passwords and forged headers quickly:
 
 ```
-PreKey    = HMAC-SHA256(key = password,  data = salt)
-HeaderMAC = HMAC-SHA256(key = PreKey,    data = header[0x00..0x4C])
+PreKey    = Argon2id(password, salt, t=1, m=8 192 KB, p=1)   ← ~2 ms
+HeaderMAC = HMAC-SHA256(PreKey, header[0x00..0x4C])
 ```
 
-`PreKey` requires only one HMAC call — effectively free. A wrong password or forged/corrupted header is rejected immediately without spending Argon2id memory, preventing denial-of-service attacks based on inflated `m_cost` values.
+Using a tiny Argon2id (rather than a raw HMAC over the password) ensures the MAC cannot serve as a fast offline brute-force oracle. A raw HMAC could be verified at ~20 billion attempts/second on a GPU; the tiny Argon2id limits this to ~15 000/s — a ×1 300 000 improvement.
 
-### Integrity — BLAKE3 Merkle tree
+### Integrity — BLAKE3 Merkle tree v1
 
-Each encrypted block (including its AEAD tag) is hashed with **BLAKE3** to form a Merkle leaf. After all blocks are decrypted in parallel, the Merkle root is recomputed from the leaves and compared to the root stored inside the encrypted envelope. **No plaintext is written until the entire file passes Merkle verification.** Any substitution, deletion, reordering, or truncation of blocks is detected.
+Each encrypted block (including its AEAD tag) is hashed with domain-separated BLAKE3:
+
+```
+Leaf_N     = BLAKE3_derive_key("Arsenic V1 Merkle Leaf v1",  EncBlock_N)
+Node(L, R) = BLAKE3_derive_key("Arsenic V1 Merkle Node v1",  L ‖ R)
+```
+
+Domain separation prevents second-preimage attacks where a crafted block could be confused with an internal node hash. After parallel decryption, the Merkle root is recomputed and compared to the root stored in ProtectedMetadata. **No plaintext is written until the entire file passes verification.**
 
 ### Supported ciphers
 
-All three supported ciphers provide authenticated encryption with a 16-byte tag. The cipher IDs are stored in the header at bytes `0x07` (header) and `0x08` (payload) and are covered by the `HeaderMAC`.
+All three supported ciphers provide authenticated encryption with a 16-byte tag. The cipher IDs are stored in the header and are covered by the `HeaderMAC`.
 
-| ID | Algorithm | Nonce | Notes |
-|----|-----------|-------|-------|
-| `0x02` | **Serpent-256-GCM** | 12 bytes | Serpent-256 with NIST GCM mode; manual GHASH implementation |
-| `0x03` | **XChaCha20-Poly1305** | 24 bytes | RustCrypto; default payload cipher |
-| `0x04` | **AES-256-GCM-SIV** | 12 bytes | RustCrypto; nonce misuse-resistant |
+| ID     | Algorithm              | Nonce   | Notes                                |
+|--------|------------------------|---------|--------------------------------------|
+| `0x02` | **Deoxys-II-256**      | 120-bit | Tweakable-block-cipher AEAD; default header cipher |
+| `0x03` | **XChaCha20-Poly1305** | 192-bit | Default payload; software-friendly   |
+| `0x04` | **AES-256-GCM-SIV**    | 96-bit  | Nonce-misuse resistant               |
 
-> **Note on nonce handling** — the `kek_nonce` field in the header is always 12 bytes. When XChaCha20-Poly1305 is used as the header cipher, the 12-byte stored nonce is BLAKE3-expanded to 24 bytes. Block nonces are always derived as 24 bytes; 12-byte-nonce ciphers use the first 12 bytes.
+**Performance note — header vs payload cipher:** the header cipher encrypts only **32 bytes** (the DEK in the WrappedDEK keyslot), regardless of file size. This operation takes nanoseconds and its choice has no measurable impact on throughput. The **payload cipher** processes the entire file content in 4–32 MiB blocks and is the sole determinant of encryption speed. The cipher benchmark therefore measures payload cipher throughput only and recommends the same cipher for both roles.
 
 ### Argon2id strength presets
 
-| Preset | t (iterations) | m (memory) | p (parallelism) | Typical time |
-|--------|---------------|------------|-----------------|--------------|
-| Interactive *(default)* | 4 | 256 MiB | 4 | ~1–3 s |
-| Sensitive | 12 | 1 GiB | 4 | ~10–30 s |
-
-The KDF parameters are stored in the header and covered by the `HeaderMAC`, so they cannot be silently downgraded.
+| Preset             | t   | m          | p | Typical time |
+|--------------------|-----|------------|---|--------------|
+| Interactive *(default)* | 4 | 256 MiB | 4 | ~1–3 s  |
+| Sensitive          | 12  | 1 GiB      | 4 | ~10–30 s     |
 
 ### Algorithms summary
 
-| Role | Algorithm | Source |
-|------|-----------|--------|
-| Key derivation | Argon2id | RustCrypto |
-| Header MAC (pre-auth) | HMAC-SHA256 | RustCrypto |
-| Header envelope encryption | Serpent-256-GCM / AES-256-GCM-SIV / XChaCha20-Poly1305 | custom / RustCrypto |
-| Payload block encryption | XChaCha20-Poly1305 / AES-256-GCM-SIV / Serpent-256-GCM | RustCrypto / custom |
-| Block key derivation | BLAKE3 keyed hash | BLAKE3 team |
-| Block nonce derivation | BLAKE3 derive\_key | BLAKE3 team |
-| File integrity (Merkle leaves) | BLAKE3 hash | BLAKE3 team |
-| Key material erasure | `Secret<T>` (zeroize on drop) | custom |
+| Role                         | Algorithm                                        |
+|------------------------------|--------------------------------------------------|
+| Pre-auth key derivation      | Argon2id (t=1, m=8 MB, p=1)                     |
+| Header MAC                   | HMAC-SHA256                                      |
+| Full key derivation (KEK)    | Argon2id (configurable strength)                 |
+| DEK keyslot encryption       | Header cipher (Deoxys-II-256 / AES-GCM-SIV / XChaCha20) |
+| Metadata encryption          | Header cipher, key = BLAKE3_derive_key(DEK)      |
+| Payload block encryption     | Payload cipher (XChaCha20 / AES-GCM-SIV / Deoxys-II-256) |
+| Per-block key derivation     | BLAKE3 keyed hash                                |
+| Per-block nonce derivation   | BLAKE3 derive\_key                               |
+| Optional compression         | zstd level 3, per-block                          |
+| File integrity (Merkle)      | BLAKE3 derive\_key (domain-separated)            |
+| Key material erasure         | `Secret<T>` (zeroize on drop)                   |
+
+For the complete byte-level format specification, see [FORMAT.md](FORMAT.md) and [arsenic_V1.html](arsenic_V1.html).
 
 ---
 

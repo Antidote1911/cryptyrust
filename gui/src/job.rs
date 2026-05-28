@@ -4,8 +4,6 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
-use rayon::prelude::*;
-
 use cryptyrust_core::{arsenic_main_routine, arsenic_rekey, ArsenicParams, Direction, Secret, Ui};
 
 use crate::file_utils::{create_unique_output_file, Mode};
@@ -76,9 +74,12 @@ impl JobState {
             let total_files = files.len();
             let file_statuses = Arc::new(Mutex::new(vec![FileStatus::Pending; total_files]));
 
+            // Sequential over files: encrypt_arsenic already uses Rayon for block-level
+            // parallelism internally. Nesting par_iter here would saturate the Rayon pool
+            // and degrade throughput.
             let _results: Vec<bool> = files
                 .clone()
-                .into_par_iter()
+                .into_iter()
                 .enumerate()
                 .map(|(i, path)| {
                     file_statuses.lock().unwrap()[i] = FileStatus::Processing;

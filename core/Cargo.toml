@@ -14,10 +14,10 @@ blake3 = "1.8.5"
 rand = "0.10.1"
 thiserror = "2.0.18"
 zeroize = "1.8.2"
-serpent = "0.6.0"
+deoxys = "0.1"
 hmac = "0.13.0"
 sha2 = "0.11.0"
-cipher = "0.5.2"
+zstd = "0.13"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
