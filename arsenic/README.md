@@ -2,7 +2,7 @@
 
 Pure-Rust cryptographic library implementing the **Arsenic V1** file encryption format (`.arsn`).
 
-This crate is the core used by [`cryptyrust_cli`](../cli), the [`cryptyrust`](../gui) GUI, and the [`cryptyrust_ffi`](../ffi) C FFI layer.
+This crate is the core used by [`cryptyrust_cli`](../cli), the [`cryptyrust`](../gui) GUI, and the [`arsenic_ffi`](../ffi) C FFI layer.
 
 ---
 

@@ -43,7 +43,7 @@ Pre-built binaries for Linux, macOS (universal), and Windows are available on th
 | [`arsenic/`](arsenic/) | — | Core cryptographic library — [README](arsenic/README.md) · [Format spec](arsenic/FORMAT.md) |
 | [`cli/`](cli/) | `cryptyrust_cli` | Command-line interface |
 | [`gui/`](gui/) | `cryptyrust` | Native GUI built with [egui](https://github.com/emilk/egui) |
-| [`ffi/`](ffi/) | `libcryptyrust_ffi.so/.a` | C-compatible FFI layer |
+| [`ffi/`](ffi/) | `libarsenic_ffi.so/.a` | C-compatible FFI layer |
 | [`ffi_test/`](ffi_test/) | `arsenic_test` | Minimal C++ demo (encrypt / decrypt / bench) |
 
 ---

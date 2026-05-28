@@ -1,5 +1,5 @@
 [package]
-name = "cryptyrust_ffi"
+name = "arsenic_ffi"
 version.workspace = true
 authors.workspace = true
 edition = "2021"

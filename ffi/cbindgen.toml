@@ -1,5 +1,5 @@
-# cbindgen configuration for cryptyrust_ffi
-# Usage: cbindgen --config ffi/cbindgen.toml --crate cryptyrust_ffi --output cryptyrust.h
+# cbindgen configuration for arsenic_ffi
+# Usage: cbindgen --config ffi/cbindgen.toml --crate arsenic_ffi --output cryptyrust.h
 
 language = "C"
 include_guard = "CRYPTYRUST_H"

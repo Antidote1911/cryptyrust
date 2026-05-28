@@ -89,7 +89,7 @@ jobs:
           restore-keys: ${{ runner.os }}-ffi-cargo-
 
       - name: Build Rust FFI static library
-        run: cargo build --release -p cryptyrust_ffi
+        run: cargo build --release -p arsenic_ffi
 
       - name: Configure CMake
         run: cmake -B ffi_test/build -S ffi_test -DBUILD_RUST=OFF

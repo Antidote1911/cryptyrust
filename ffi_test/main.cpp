@@ -1,4 +1,4 @@
-// arsenic_test — minimal C++ CLI demo for cryptyrust_ffi
+// arsenic_test — minimal C++ CLI demo for arsenic_ffi
 //
 // Usage:
 //   arsenic_test encrypt <file>       <password>   →  <file>.arsn

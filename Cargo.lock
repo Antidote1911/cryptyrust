@@ -356,6 +356,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "arsenic_ffi"
+version = "1.3.1"
+dependencies = [
+ "arsenic",
+]
+
+[[package]]
 name = "as-raw-xcb-connection"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1213,13 +1220,6 @@ dependencies = [
  "clap",
  "indicatif",
  "rpassword",
-]
-
-[[package]]
-name = "cryptyrust_ffi"
-version = "1.3.1"
-dependencies = [
- "arsenic",
 ]
 
 [[package]]

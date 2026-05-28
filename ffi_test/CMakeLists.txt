@@ -6,13 +6,13 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # ── Paths ─────────────────────────────────────────────────────────────────────
 get_filename_component(CRYPTYRUST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
-set(FFI_LIB "${CRYPTYRUST_ROOT}/target/release/libcryptyrust_ffi.a")
+set(FFI_LIB "${CRYPTYRUST_ROOT}/target/release/libarsenic_ffi.a")
 set(FFI_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/cryptyrust.h")
 
 # ── Optional: build the Rust FFI crate automatically ─────────────────────────
 #
 # Set -DBUILD_RUST=OFF if you have already run
-#   cargo build --release -p cryptyrust_ffi
+#   cargo build --release -p arsenic_ffi
 # in the workspace and do not want CMake to redo it.
 option(BUILD_RUST "Build the Rust FFI crate with 'cargo build --release'" ON)
 
@@ -23,9 +23,9 @@ if(BUILD_RUST)
 
     add_custom_command(
         OUTPUT  "${FFI_LIB}"
-        COMMAND "${CARGO}" build --release -p cryptyrust_ffi
+        COMMAND "${CARGO}" build --release -p arsenic_ffi
         WORKING_DIRECTORY "${CRYPTYRUST_ROOT}"
-        COMMENT "cargo build --release -p cryptyrust_ffi"
+        COMMENT "cargo build --release -p arsenic_ffi"
         VERBATIM
     )
     add_custom_target(rust_ffi DEPENDS "${FFI_LIB}")
@@ -47,7 +47,7 @@ if(REGEN_HEADER)
             OUTPUT  "${FFI_HEADER}"
             COMMAND "${CBINDGEN}"
                     --config  "${CRYPTYRUST_ROOT}/ffi/cbindgen.toml"
-                    --crate   cryptyrust_ffi
+                    --crate   arsenic_ffi
                     --output  "${FFI_HEADER}"
             WORKING_DIRECTORY "${CRYPTYRUST_ROOT}"
             DEPENDS "${CRYPTYRUST_ROOT}/ffi/src/lib.rs"
