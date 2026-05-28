@@ -8,7 +8,7 @@ use std::sync::mpsc;
 use std::thread;
 
 use crate::file_utils::{cipher_from_key, cipher_to_key, detect_mode, Mode};
-use crate::job::{FileStatus, JobState, PasswordPopup};
+use crate::job::{JobState, PasswordPopup};
 use crate::ui::UI;
 
 pub enum BenchMsg {
@@ -306,7 +306,8 @@ impl eframe::App for CryptyApp {
             receiver,
             current_file,
             processing_files,
-            ..
+            file_statuses,
+            success_label,
         } = &self.job
         {
             while let Ok((file_index, pct)) = receiver.try_recv() {
@@ -319,23 +320,18 @@ impl eframe::App for CryptyApp {
 
             let current = *current_file.lock().unwrap();
             if current == usize::MAX {
-                let progress_map = progress.lock().unwrap();
-                let mut statuses = Vec::new();
-
-                for (i, _file) in processing_files.iter().enumerate() {
-                    if progress_map.get(&i).is_some_and(|&p| p == 100) {
-                        statuses.push(FileStatus::Success);
-                    } else {
-                        statuses.push(FileStatus::Failed("Unknown error".to_string()));
-                    }
-                }
-
-                job_completed = Some((processing_files.clone(), statuses));
+                let statuses = file_statuses.lock().unwrap().clone();
+                job_completed =
+                    Some((processing_files.clone(), statuses, success_label.clone()));
             }
         }
 
-        if let Some((files, statuses)) = job_completed {
-            self.job = JobState::Completed { files, statuses };
+        if let Some((files, statuses, success_label)) = job_completed {
+            self.job = JobState::Completed {
+                files,
+                statuses,
+                success_label,
+            };
         }
 
         // Poll benchmark background thread

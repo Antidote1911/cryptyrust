@@ -57,3 +57,45 @@ jobs:
       - name: Format check
         continue-on-error: true
         run: cargo fmt --all -- --check
+
+  ffi-test:
+    name: FFI C++ round-trip – ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libssl-dev pkg-config
+
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo registry
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-ffi-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-ffi-cargo-
+
+      - name: Build Rust FFI static library
+        run: cargo build --release -p cryptyrust_ffi
+
+      - name: Configure CMake
+        run: cmake -B ffi_test/build -S ffi_test -DBUILD_RUST=OFF
+
+      - name: Build C++ test binary
+        run: cmake --build ffi_test/build
+
+      - name: Run encrypt / decrypt round-trip
+        run: cmake --build ffi_test/build --target run_test

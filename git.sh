@@ -621,6 +621,14 @@ do_release() {
       sed -i "s/VERSION ${current_version}/VERSION ${new_version}/g" "$version_file"
       success "${version_file} mis à jour."
     fi
+
+    # Mise à jour des PKGBUILDs Arch Linux (PKGBUILD stable + AppImage)
+    for _pkgbuild in "packaging/archlinux/PKGBUILD" "packaging/archlinux/PKGBUILD-AppImage"; do
+      if [[ -f "$_pkgbuild" ]]; then
+        sed -i "s/^pkgver=.*/pkgver=${new_version}/" "$_pkgbuild"
+        success "${_pkgbuild} mis à jour (pkgver=${new_version})."
+      fi
+    done
   fi
 
   # Lancer la vérification de compilation APRÈS la mise à jour pour que le build propage la version

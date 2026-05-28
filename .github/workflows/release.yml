@@ -17,6 +17,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Get version
+        id: version
+        run: |
+          v="${{ github.ref_name }}"
+          echo "VERSION=${v#v}" >> "$GITHUB_OUTPUT"
+
       - name: Install system dependencies
         run: |
           sudo apt-get update
@@ -50,7 +56,7 @@ jobs:
         env:
           ARCH: x86_64
           APPIMAGE_EXTRACT_AND_RUN: "1"
-          OUTPUT: cryptyrust-linux-x86_64.AppImage
+          OUTPUT: cryptyrust-${{ steps.version.outputs.VERSION }}-linux.AppImage
         run: |
           ./linuxdeploy \
             --appdir AppDir \
@@ -63,7 +69,7 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           name: cryptyrust-linux-appimage
-          path: cryptyrust-linux-x86_64.AppImage
+          path: cryptyrust-${{ steps.version.outputs.VERSION }}-linux.AppImage
 
   # ── macOS Universal DMG ────────────────────────────────────────────────────
   build-macos:
@@ -72,6 +78,12 @@ jobs:
 
     steps:
       - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        run: |
+          v="${{ github.ref_name }}"
+          echo "VERSION=${v#v}" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -146,13 +158,13 @@ jobs:
             --icon "Cryptyrust.app" 180 170 \
             --hide-extension "Cryptyrust.app" \
             --app-drop-link 480 170 \
-            "cryptyrust-macos.dmg" \
+            "cryptyrust-${{ steps.version.outputs.VERSION }}-macos-universal.dmg" \
             "dmg-staging/"
 
       - uses: actions/upload-artifact@v4
         with:
           name: cryptyrust-macos-dmg
-          path: cryptyrust-macos.dmg
+          path: cryptyrust-${{ steps.version.outputs.VERSION }}-macos-universal.dmg
 
   # ── Windows portable + installer ──────────────────────────────────────────
   build-windows:
@@ -193,7 +205,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target\release\cryptyrust.exe     dist\
           Copy-Item target\release\cryptyrust_cli.exe dist\
-          Compress-Archive -Path dist\* -DestinationPath cryptyrust-windows-portable.zip
+          Compress-Archive -Path dist\* -DestinationPath "cryptyrust-${{ steps.version.outputs.VERSION }}-win-portable.zip"
 
       - name: Build Inno Setup installer
         shell: pwsh
@@ -202,17 +214,17 @@ jobs:
           Copy-Item target\release\cryptyrust_cli.exe packaging\windows\
           Copy-Item gui\assets\icon.ico               packaging\windows\
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DVERSION=${{ steps.version.outputs.VERSION }} packaging\windows\installer.iss
-          Move-Item packaging\windows\cryptyrust-windows-setup.exe .
+          Move-Item packaging\windows\cryptyrust-windows-setup.exe "cryptyrust-${{ steps.version.outputs.VERSION }}-win-setup.exe"
 
       - uses: actions/upload-artifact@v4
         with:
           name: cryptyrust-windows-portable
-          path: cryptyrust-windows-portable.zip
+          path: cryptyrust-${{ steps.version.outputs.VERSION }}-win-portable.zip
 
       - uses: actions/upload-artifact@v4
         with:
           name: cryptyrust-windows-setup
-          path: cryptyrust-windows-setup.exe
+          path: cryptyrust-${{ steps.version.outputs.VERSION }}-win-setup.exe
 
   # ── GitHub Release ─────────────────────────────────────────────────────────
   release:
@@ -225,6 +237,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Get version
+        id: version
+        run: |
+          v="${{ github.ref_name }}"
+          echo "VERSION=${v#v}" >> "$GITHUB_OUTPUT"
+
       - name: Download artifacts
         uses: actions/download-artifact@v4
         with:
@@ -235,10 +253,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: |
-            cryptyrust-linux-x86_64.AppImage
-            cryptyrust-macos.dmg
-            cryptyrust-windows-portable.zip
-            cryptyrust-windows-setup.exe
+            cryptyrust-${{ steps.version.outputs.VERSION }}-linux.AppImage
+            cryptyrust-${{ steps.version.outputs.VERSION }}-macos-universal.dmg
+            cryptyrust-${{ steps.version.outputs.VERSION }}-win-portable.zip
+            cryptyrust-${{ steps.version.outputs.VERSION }}-win-setup.exe
             FORMAT.md
             README.md
             arsenic_V1.html

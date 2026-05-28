@@ -61,35 +61,24 @@ pub fn render_bottom_bar(app: &CryptyApp, ui: &mut egui::Ui) {
         .exact_size(30.0)
         .show_inside(ui, |ui| {
             ui.horizontal_centered(|ui| {
-                ui.label(egui::RichText::new("🔒").size(13.0).weak());
-                ui.label(egui::RichText::new("Arsenic V1"));
-                ui.separator();
                 ui.label(egui::RichText::new("🔑").size(13.0).weak());
                 ui.label(egui::RichText::new(format!(
-                    "Argon2id · {}",
+                    "Argon2  ·  {}",
                     arsenic_strength_label(app.arsenic_strength)
                 )));
                 ui.separator();
-                ui.label(
-                    egui::RichText::new(format!(
-                        "Hdr: {}  ·  Pld: {}",
-                        cipher_short_label(app.hdr_cipher),
-                        cipher_short_label(app.pld_cipher),
-                    ))
-                    .size(12.0)
-                    .weak(),
-                );
+                ui.label(egui::RichText::new(format!(
+                    "Hdr: {}  ·  Pld: {}",
+                    cipher_short_label(app.hdr_cipher),
+                    cipher_short_label(app.pld_cipher),
+                )));
                 ui.separator();
                 let compress_label = compression_short_label(if app.compress {
                     Compression::Zstd(0)
                 } else {
                     Compression::None
                 });
-                ui.label(
-                    egui::RichText::new(format!("📦 {compress_label}"))
-                        .size(12.0)
-                        .weak(),
-                );
+                ui.label(egui::RichText::new(format!("📦  {compress_label}")));
             });
         });
 }
@@ -100,6 +89,8 @@ pub fn render_action_bar(
     is_running: bool,
     popup_open: bool,
 ) {
+    let completed = matches!(app.job, JobState::Completed { .. });
+
     let can_act = !app.files.is_empty() && !app.mixed && !is_running && !popup_open;
 
     let can_change_pw =
@@ -109,63 +100,92 @@ pub fn render_action_bar(
     let mut do_change_pw = false;
     let mut do_clear = false;
     let mut do_add = false;
+    let mut do_quit = false;
 
     egui::Panel::bottom("actionbar")
         .exact_size(52.0)
         .show_inside(ui, |ui| {
             ui.add_space(8.0);
             ui.horizontal_centered(|ui| {
-                let btn_label = if app.mixed {
-                    "⚠  Mixed files"
-                } else {
-                    match app.mode {
-                        Mode::Encrypt => "🔒  Encrypt",
-                        Mode::Decrypt => "🔓  Decrypt",
+                if completed {
+                    // ── Post-opération : Clear uniquement ──────────────
+                    if ui
+                        .add(egui::Button::new("🗑  Clear").min_size(egui::vec2(80.0, 32.0)))
+                        .clicked()
+                    {
+                        do_clear = true;
                     }
-                };
+                } else {
+                    // ── Add files ──────────────────────────────────────
+                    if ui
+                        .add_enabled(
+                            !is_running && !popup_open,
+                            egui::Button::new("➕  Add files").min_size(egui::vec2(100.0, 32.0)),
+                        )
+                        .clicked()
+                    {
+                        do_add = true;
+                    }
 
-                let btn = egui::Button::new(egui::RichText::new(btn_label).size(15.0).strong())
-                    .min_size(egui::vec2(150.0, 32.0));
+                    if !app.files.is_empty() {
+                        ui.add_space(8.0);
 
-                if ui.add_enabled(can_act, btn).clicked() {
-                    do_open_popup = true;
+                        // ── Clear ──────────────────────────────────────
+                        if ui
+                            .add_enabled(
+                                !is_running && !popup_open,
+                                egui::Button::new("🗑  Clear").min_size(egui::vec2(80.0, 32.0)),
+                            )
+                            .clicked()
+                        {
+                            do_clear = true;
+                        }
+
+                        ui.add_space(8.0);
+
+                        // ── Change password ────────────────────────────
+                        if ui
+                            .add_enabled(
+                                can_change_pw,
+                                egui::Button::new("🔑  Change password")
+                                    .min_size(egui::vec2(140.0, 32.0)),
+                            )
+                            .clicked()
+                        {
+                            do_change_pw = true;
+                        }
+
+                        ui.add_space(8.0);
+
+                        // ── Encrypt / Decrypt ──────────────────────────
+                        let btn_label = if app.mixed {
+                            "⚠  Mixed files"
+                        } else {
+                            match app.mode {
+                                Mode::Encrypt => "🔒  Encrypt",
+                                Mode::Decrypt => "🔓  Decrypt",
+                            }
+                        };
+
+                        let btn =
+                            egui::Button::new(egui::RichText::new(btn_label).size(15.0).strong())
+                                .min_size(egui::vec2(150.0, 32.0));
+
+                        if ui.add_enabled(can_act, btn).clicked() {
+                            do_open_popup = true;
+                        }
+                    }
                 }
 
-                ui.add_space(12.0);
-
-                if ui
-                    .add_enabled(
-                        can_change_pw,
-                        egui::Button::new("🔑  Change password").min_size(egui::vec2(140.0, 32.0)),
-                    )
-                    .clicked()
-                {
-                    do_change_pw = true;
-                }
-
-                ui.add_space(12.0);
-
-                if ui
-                    .add_enabled(
-                        !is_running && !popup_open,
-                        egui::Button::new("➕  Add files").min_size(egui::vec2(100.0, 32.0)),
-                    )
-                    .clicked()
-                {
-                    do_add = true;
-                }
-
-                ui.add_space(12.0);
-
-                if ui
-                    .add_enabled(
-                        !is_running && !popup_open,
-                        egui::Button::new("🗑  Clear").min_size(egui::vec2(80.0, 32.0)),
-                    )
-                    .clicked()
-                {
-                    do_clear = true;
-                }
+                // ── Quit (far right) ───────────────────────────────────
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui
+                        .add(egui::Button::new("✕  Quit").min_size(egui::vec2(80.0, 32.0)))
+                        .clicked()
+                    {
+                        do_quit = true;
+                    }
+                });
             });
         });
 
@@ -183,9 +203,14 @@ pub fn render_action_bar(
             app.add_files(paths);
         }
     }
+    if do_quit {
+        ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
+    }
 }
 
 pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
+    let mut completed_remove: Option<usize> = None;
+
     egui::CentralPanel::default().show_inside(ui, |ui| {
         let avail = ui.available_rect_before_wrap();
         let hovering = ui.input(|i| !i.raw.hovered_files.is_empty());
@@ -199,8 +224,12 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
             } => {
                 render_processing_view(ui, progress, current_file, processing_files);
             }
-            JobState::Completed { files, statuses } => {
-                render_completed_view(ui, files, statuses);
+            JobState::Completed {
+                files,
+                statuses,
+                success_label,
+            } => {
+                completed_remove = render_completed_view(ui, files, statuses, success_label);
             }
             JobState::Idle => {
                 if app.files.is_empty() {
@@ -211,6 +240,16 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
             }
         }
     });
+
+    if let Some(idx) = completed_remove {
+        if let JobState::Completed { files, statuses, .. } = &mut app.job {
+            files.remove(idx);
+            statuses.remove(idx);
+            if files.is_empty() {
+                app.clear_all();
+            }
+        }
+    }
 }
 
 fn render_processing_view(
@@ -228,8 +267,9 @@ fn render_completed_view(
     ui: &mut egui::Ui,
     files: &[std::path::PathBuf],
     statuses: &[crate::job::FileStatus],
-) {
-    components::render_completed_table(ui, files, statuses);
+    success_label: &str,
+) -> Option<usize> {
+    components::render_completed_table(ui, files, statuses, success_label)
 }
 
 fn render_drop_zone(ui: &mut egui::Ui, avail: egui::Rect, hovering: bool) {

@@ -23,10 +23,13 @@ pub enum JobState {
         receiver: Receiver<(usize, i32)>,
         current_file: Arc<Mutex<usize>>,
         processing_files: Vec<PathBuf>,
+        file_statuses: Arc<Mutex<Vec<FileStatus>>>,
+        success_label: String,
     },
     Completed {
         files: Vec<PathBuf>,
         statuses: Vec<FileStatus>,
+        success_label: String,
     },
 }
 
@@ -62,17 +65,26 @@ impl JobState {
         let current_file = Arc::new(Mutex::new(0));
         let current_file_clone = current_file.clone();
 
+        let total_files = files.len();
+        let file_statuses = Arc::new(Mutex::new(vec![FileStatus::Pending; total_files]));
+        let file_statuses_clone = file_statuses.clone();
+
+        let success_label = match mode {
+            Mode::Encrypt => "Encryption OK".to_string(),
+            Mode::Decrypt => "Decryption OK".to_string(),
+        };
+
         *self = JobState::Running {
             progress,
             receiver: rx,
             current_file,
             processing_files: files.clone(),
+            file_statuses,
+            success_label,
         };
 
         thread::spawn(move || {
             let completed_count = Arc::new(Mutex::new(0));
-            let total_files = files.len();
-            let file_statuses = Arc::new(Mutex::new(vec![FileStatus::Pending; total_files]));
 
             // Sequential over files: encrypt_arsenic already uses Rayon for block-level
             // parallelism internally. Nesting par_iter here would saturate the Rayon pool
@@ -82,14 +94,14 @@ impl JobState {
                 .into_iter()
                 .enumerate()
                 .map(|(i, path)| {
-                    file_statuses.lock().unwrap()[i] = FileStatus::Processing;
+                    file_statuses_clone.lock().unwrap()[i] = FileStatus::Processing;
 
                     let in_path = path.to_string_lossy().to_string();
 
                     let success = match mode {
                         Mode::Encrypt => match create_unique_output_file(&in_path, ".arsn") {
                             Err(e) => {
-                                report_error(&file_statuses, i, e.to_string());
+                                report_error(&file_statuses_clone, i, e.to_string());
                                 false
                             }
                             Ok((out_path, _claim)) => {
@@ -106,13 +118,10 @@ impl JobState {
                                     ui,
                                     Some(params),
                                 ) {
-                                    Ok(_) => {
-                                        let _ = tx.send((i, 100));
-                                        true
-                                    }
+                                    Ok(_) => true,
                                     Err(e) => {
                                         let _ = std::fs::remove_file(&out_path);
-                                        report_error(&file_statuses, i, e.to_string());
+                                        report_error(&file_statuses_clone, i, e.to_string());
                                         false
                                     }
                                 }
@@ -126,7 +135,7 @@ impl JobState {
                             };
                             match create_unique_output_file(&base, "") {
                                 Err(e) => {
-                                    report_error(&file_statuses, i, e.to_string());
+                                    report_error(&file_statuses_clone, i, e.to_string());
                                     false
                                 }
                                 Ok((out_path, _claim)) => {
@@ -142,13 +151,10 @@ impl JobState {
                                         ui,
                                         None,
                                     ) {
-                                        Ok(_) => {
-                                            let _ = tx.send((i, 100));
-                                            true
-                                        }
+                                        Ok(_) => true,
                                         Err(e) => {
                                             let _ = std::fs::remove_file(&out_path);
-                                            report_error(&file_statuses, i, e.to_string());
+                                            report_error(&file_statuses_clone, i, e.to_string());
                                             false
                                         }
                                     }
@@ -159,7 +165,7 @@ impl JobState {
 
                     if success {
                         let _ = tx.send((i, 100));
-                        file_statuses.lock().unwrap()[i] = FileStatus::Success;
+                        file_statuses_clone.lock().unwrap()[i] = FileStatus::Success;
                     }
 
                     {
@@ -197,20 +203,27 @@ impl JobState {
         let current_file = Arc::new(Mutex::new(0usize));
         let current_file_clone = current_file.clone();
 
+        let file_statuses = Arc::new(Mutex::new(vec![FileStatus::Pending; 1]));
+        let file_statuses_clone = file_statuses.clone();
+
         *self = JobState::Running {
             progress,
             receiver: rx,
             current_file,
             processing_files: vec![file.clone()],
+            file_statuses,
+            success_label: "Password changed".to_string(),
         };
 
         thread::spawn(move || {
+            file_statuses_clone.lock().unwrap()[0] = FileStatus::Processing;
             let result = do_change_pw_arsenic(&file, &old_pw, &new_pw, &tx);
 
             if result.is_ok() {
                 let _ = tx.send((0, 100));
+                file_statuses_clone.lock().unwrap()[0] = FileStatus::Success;
             } else if let Err(e) = result {
-                eprintln!("change_password error: {}", e);
+                file_statuses_clone.lock().unwrap()[0] = FileStatus::Failed(e.to_string());
             }
 
             thread::sleep(std::time::Duration::from_millis(500));

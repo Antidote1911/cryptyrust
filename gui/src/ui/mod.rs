@@ -20,8 +20,8 @@ impl UI {
         // Bottom bar
         layouts::render_bottom_bar(app, ui);
 
-        // Action bar
-        if matches!(app.job, JobState::Idle) && !app.files.is_empty() {
+        // Action bar (masquée uniquement pendant le traitement)
+        if !is_running {
             layouts::render_action_bar(app, ui, is_running, popup_open);
         }
 

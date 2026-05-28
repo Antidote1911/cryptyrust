@@ -68,11 +68,6 @@ pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bo
 
             // ── Compression ───────────────────────────────────────────
             ui.label(egui::RichText::new("Compression").strong());
-            ui.label(
-                egui::RichText::new("before encryption — disabled by default")
-                    .small()
-                    .weak(),
-            );
             ui.separator();
             ui.checkbox(&mut app.compress, "zstd  (level 3)");
 
@@ -371,7 +366,7 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
                         .weak(),
                     );
                     ui.label(
-                        egui::RichText::new("Fast, authenticated file encryption")
+                        egui::RichText::new("Ultra secure authenticated file encryption")
                             .size(13.0)
                             .weak(),
                     );
@@ -486,11 +481,10 @@ pub fn render_file_table(ui: &mut egui::Ui, files: &[PathBuf]) -> Option<usize> 
     TableBuilder::new(ui)
         .striped(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::exact(38.0))
-        .column(Column::exact(95.0))
+        .column(Column::auto())
+        .column(Column::auto().at_least(140.0))
         .column(Column::remainder().clip(true))
-        .column(Column::initial(200.0).at_least(80.0).clip(true))
-        .column(Column::exact(80.0))
+        .column(Column::auto())
         .header(30.0, |mut header| {
             header.col(|ui| {
                 header_label(ui, "Remove");
@@ -500,9 +494,6 @@ pub fn render_file_table(ui: &mut egui::Ui, files: &[PathBuf]) -> Option<usize> 
             });
             header.col(|ui| {
                 header_label(ui, "Name");
-            });
-            header.col(|ui| {
-                header_label(ui, "Path");
             });
             header.col(|ui| {
                 header_label(ui, "Size");
@@ -528,12 +519,7 @@ pub fn render_file_table(ui: &mut egui::Ui, files: &[PathBuf]) -> Option<usize> 
                         render_type_cell(ui, is_enc);
                     });
                     row.col(|ui| {
-                        let name = path.file_name().unwrap_or_default().to_string_lossy();
-                        ui.label(egui::RichText::new(name.as_ref()));
-                    });
-                    row.col(|ui| {
-                        let dir = path.parent().and_then(|p| p.to_str()).unwrap_or("");
-                        ui.label(egui::RichText::new(dir).weak());
+                        ui.label(egui::RichText::new(path.to_string_lossy().as_ref()));
                     });
                     row.col(|ui| {
                         ui.label(egui::RichText::new(get_file_size(path)).weak());
@@ -554,12 +540,11 @@ pub fn render_processing_table(
     TableBuilder::new(ui)
         .striped(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::exact(30.0))
-        .column(Column::exact(95.0))
+        .column(Column::auto())
+        .column(Column::auto().at_least(140.0))
         .column(Column::remainder().clip(true))
-        .column(Column::initial(200.0).at_least(80.0).clip(true))
-        .column(Column::exact(80.0))
-        .column(Column::exact(120.0))
+        .column(Column::auto())
+        .column(Column::auto())
         .header(30.0, |mut header| {
             header.col(|_ui| {});
             header.col(|ui| {
@@ -567,9 +552,6 @@ pub fn render_processing_table(
             });
             header.col(|ui| {
                 header_label(ui, "Name");
-            });
-            header.col(|ui| {
-                header_label(ui, "Path");
             });
             header.col(|ui| {
                 header_label(ui, "Size");
@@ -594,12 +576,7 @@ pub fn render_processing_table(
                         render_type_cell(ui, is_enc);
                     });
                     row.col(|ui| {
-                        let name = path.file_name().unwrap_or_default().to_string_lossy();
-                        ui.label(egui::RichText::new(name.as_ref()));
-                    });
-                    row.col(|ui| {
-                        let dir = path.parent().and_then(|p| p.to_str()).unwrap_or("");
-                        ui.label(egui::RichText::new(dir).weak());
+                        ui.label(egui::RichText::new(path.to_string_lossy().as_ref()));
                     });
                     row.col(|ui| {
                         ui.label(egui::RichText::new(get_file_size(path)).weak());
@@ -616,19 +593,21 @@ pub fn render_completed_table(
     ui: &mut egui::Ui,
     files: &[PathBuf],
     statuses: &[crate::job::FileStatus],
-) {
+    success_label: &str,
+) -> Option<usize> {
+    let mut to_remove: Option<usize> = None;
+
     TableBuilder::new(ui)
         .striped(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::exact(38.0))
-        .column(Column::exact(95.0))
+        .column(Column::auto())
+        .column(Column::auto().at_least(140.0))
         .column(Column::remainder().clip(true))
-        .column(Column::initial(200.0).at_least(80.0).clip(true))
-        .column(Column::exact(80.0))
-        .column(Column::initial(200.0).at_least(80.0).clip(true))
+        .column(Column::auto())
+        .column(Column::initial(200.0).at_least(130.0).clip(true))
         .header(30.0, |mut header| {
             header.col(|ui| {
-                header_label(ui, "Status");
+                header_label(ui, "Remove");
             });
             header.col(|ui| {
                 header_label(ui, "Type");
@@ -637,48 +616,55 @@ pub fn render_completed_table(
                 header_label(ui, "Name");
             });
             header.col(|ui| {
-                header_label(ui, "Path");
-            });
-            header.col(|ui| {
                 header_label(ui, "Size");
             });
             header.col(|ui| {
-                header_label(ui, "Error");
+                header_label(ui, "Result");
             });
         })
         .body(|mut body| {
-            for (path, status) in files.iter().zip(statuses.iter()) {
+            for (i, (path, status)) in files.iter().zip(statuses.iter()).enumerate() {
                 let is_enc = is_cryptyrust_file(path);
                 body.row(32.0, |mut row| {
                     row.col(|ui| {
-                        let icon = match status {
-                            crate::job::FileStatus::Success => "✅",
-                            crate::job::FileStatus::Failed(_) => "❌",
-                            crate::job::FileStatus::Processing => "⏳",
-                            crate::job::FileStatus::Pending => "⏸",
-                        };
-                        ui.label(egui::RichText::new(icon).size(14.0));
+                        if ui
+                            .add(
+                                egui::Button::new(egui::RichText::new("✕").size(12.0))
+                                    .min_size(egui::vec2(20.0, 20.0))
+                                    .fill(egui::Color32::TRANSPARENT),
+                            )
+                            .clicked()
+                        {
+                            to_remove = Some(i);
+                        }
                     });
                     row.col(|ui| {
                         render_type_cell(ui, is_enc);
                     });
                     row.col(|ui| {
-                        let name = path.file_name().unwrap_or_default().to_string_lossy();
-                        ui.label(egui::RichText::new(name.as_ref()));
-                    });
-                    row.col(|ui| {
-                        let dir = path.parent().and_then(|p| p.to_str()).unwrap_or("");
-                        ui.label(egui::RichText::new(dir).weak());
+                        ui.label(egui::RichText::new(path.to_string_lossy().as_ref()));
                     });
                     row.col(|ui| {
                         ui.label(egui::RichText::new(get_file_size(path)).weak());
                     });
-                    row.col(|ui| {
-                        if let crate::job::FileStatus::Failed(error) = status {
-                            ui.label(egui::RichText::new(error).color(ui.visuals().error_fg_color));
+                    row.col(|ui| match status {
+                        crate::job::FileStatus::Success => {
+                            ui.label(
+                                egui::RichText::new(format!("✅  {success_label}"))
+                                    .color(egui::Color32::from_rgb(80, 200, 80)),
+                            );
                         }
+                        crate::job::FileStatus::Failed(error) => {
+                            ui.label(
+                                egui::RichText::new(format!("❌  {error}"))
+                                    .color(ui.visuals().error_fg_color),
+                            );
+                        }
+                        _ => {}
                     });
                 });
             }
         });
+
+    to_remove
 }
