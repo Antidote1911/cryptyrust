@@ -1169,7 +1169,7 @@ dependencies = [
 
 [[package]]
 name = "cryptyrust"
-version = "1.3.0"
+version = "1.3.1"
 dependencies = [
  "cryptyrust_core",
  "eframe",
@@ -1183,7 +1183,7 @@ dependencies = [
 
 [[package]]
 name = "cryptyrust_cli"
-version = "1.3.0"
+version = "1.3.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1196,7 +1196,7 @@ dependencies = [
 
 [[package]]
 name = "cryptyrust_core"
-version = "1.3.0"
+version = "1.3.1"
 dependencies = [
  "aead",
  "aes-gcm-siv",
@@ -1217,7 +1217,7 @@ dependencies = [
 
 [[package]]
 name = "cryptyrust_ffi"
-version = "1.3.0"
+version = "1.3.1"
 dependencies = [
  "cryptyrust_core",
 ]
