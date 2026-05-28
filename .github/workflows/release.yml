@@ -214,7 +214,7 @@ jobs:
           Copy-Item target\release\cryptyrust_cli.exe packaging\windows\
           Copy-Item gui\assets\icon.ico               packaging\windows\
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DVERSION=${{ steps.version.outputs.VERSION }} packaging\windows\installer.iss
-          Move-Item packaging\windows\cryptyrust-windows-setup.exe "cryptyrust-${{ steps.version.outputs.VERSION }}-win-setup.exe"
+          Move-Item packaging\windows\Output\cryptyrust-windows-setup.exe "cryptyrust-${{ steps.version.outputs.VERSION }}-win-setup.exe"
 
       - uses: actions/upload-artifact@v4
         with:
