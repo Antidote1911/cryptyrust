@@ -4,32 +4,53 @@ project(arsenic_test CXX)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# ── Paths ─────────────────────────────────────────────────────────────────────
-get_filename_component(CRYPTYRUST_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/.." ABSOLUTE)
-set(FFI_LIB "${CRYPTYRUST_ROOT}/target/release/libarsenic_ffi.a")
-set(FFI_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/cryptyrust.h")
+include(ExternalProject)
 
-# ── Optional: build the Rust FFI crate automatically ─────────────────────────
+# ── Locate cargo ──────────────────────────────────────────────────────────────
+find_program(CARGO cargo REQUIRED
+    HINTS "$ENV{HOME}/.cargo/bin"
+    DOC   "Rust package manager")
+
+# ── Fetch & build the Rust FFI crate from GitHub ─────────────────────────────
 #
-# Set -DBUILD_RUST=OFF if you have already run
-#   cargo build --release -p arsenic_ffi
-# in the workspace and do not want CMake to redo it.
-option(BUILD_RUST "Build the Rust FFI crate with 'cargo build --release'" ON)
+# If you already have the cryptyrust workspace on your machine, point
+# -DCRYPTYRUST_ROOT=/path/to/cryptyrust at configure time and the clone step
+# will be skipped.
+#
+# Otherwise CMake clones the repo into the build tree and runs cargo automatically.
 
-if(BUILD_RUST)
-    find_program(CARGO cargo REQUIRED
-        HINTS "$ENV{HOME}/.cargo/bin"
-        DOC   "Rust package manager")
+if(DEFINED CRYPTYRUST_ROOT)
+    # Developer shortcut: use local checkout, no network needed.
+    set(FFI_LIB "${CRYPTYRUST_ROOT}/target/release/libarsenic_ffi.a")
 
     add_custom_command(
         OUTPUT  "${FFI_LIB}"
         COMMAND "${CARGO}" build --release -p arsenic_ffi
         WORKING_DIRECTORY "${CRYPTYRUST_ROOT}"
-        COMMENT "cargo build --release -p arsenic_ffi"
+        COMMENT "cargo build --release -p arsenic_ffi (local)"
         VERBATIM
     )
     add_custom_target(rust_ffi DEPENDS "${FFI_LIB}")
+else()
+    # Stranger mode: fetch cryptyrust from GitHub then build the ffi crate.
+    set(_CRYPTYRUST_EP_DIR "${CMAKE_BINARY_DIR}/_cryptyrust_src")
+    set(FFI_LIB "${_CRYPTYRUST_EP_DIR}/target/release/libarsenic_ffi.a")
+
+    ExternalProject_Add(cryptyrust_ep
+        GIT_REPOSITORY  "https://github.com/Antidote1911/cryptyrust"
+        GIT_TAG         "master"
+        GIT_SHALLOW     TRUE
+        SOURCE_DIR      "${_CRYPTYRUST_EP_DIR}"
+        CONFIGURE_COMMAND ""
+        BUILD_COMMAND   "${CARGO}" build --release -p arsenic_ffi
+        BUILD_IN_SOURCE TRUE
+        INSTALL_COMMAND ""
+        BUILD_BYPRODUCTS "${FFI_LIB}"
+    )
+    add_custom_target(rust_ffi DEPENDS cryptyrust_ep)
 endif()
+
+set(FFI_HEADER "${CMAKE_CURRENT_SOURCE_DIR}/cryptyrust.h")
 
 # ── Optional: regenerate the C header with cbindgen ───────────────────────────
 #
@@ -80,9 +101,7 @@ elseif(APPLE)
 endif()
 # Windows/MSVC: Rust links bcrypt.lib / ntdll.lib automatically
 
-if(BUILD_RUST)
-    add_dependencies(arsenic_test rust_ffi)
-endif()
+add_dependencies(arsenic_test rust_ffi)
 if(REGEN_HEADER AND CBINDGEN)
     add_dependencies(arsenic_test ffi_header)
 endif()
