@@ -166,13 +166,15 @@ pub fn arsenic_rekey(
         let mut bak = File::create(&bak_path)?;
         bak.write_all(&current_hdr)?;
         bak.sync_all()?;
-        // Flush the parent directory so the .bak filename→inode mapping is
-        // durably committed to the filesystem journal before the in-place
-        // rewrite begins.  sync_all() on the file alone only guarantees the
-        // inode and data pages; on POSIX filesystems (ext4, btrfs, ZFS) the
-        // directory entry is separate metadata and requires its own fsync.
-        // Without this, a power failure during the rewrite could leave the
-        // original header corrupted and the .bak unreachable by name.
+        // On POSIX filesystems (ext4, btrfs, ZFS) the directory entry is
+        // separate metadata from the inode; fsync on the file alone does NOT
+        // guarantee the filename→inode mapping is on disk.  Fsyncing the
+        // parent directory ensures the .bak is reachable by name even after
+        // a power failure mid-rewrite.
+        // On Windows, NTFS journals directory entries automatically and
+        // File::open() on a directory returns "Access is denied", so we
+        // skip this step on non-Unix platforms.
+        #[cfg(unix)]
         if let Some(parent) = bak_path.parent() {
             File::open(parent)?.sync_all()?;
         }
