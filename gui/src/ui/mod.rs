@@ -45,5 +45,50 @@ impl UI {
         if app.show_bench {
             components::render_bench_window(app, &ctx);
         }
+
+        // Key manager — fenêtre OS indépendante, déplaçable hors de la fenêtre principale.
+        if app.show_key_manager {
+            let mut close_km = false;
+            let dark_mode = app.dark_mode;
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("key_manager"),
+                egui::ViewportBuilder::default()
+                    .with_title("Key Manager")
+                    .with_inner_size([660.0, 560.0])
+                    .with_min_inner_size([520.0, 380.0])
+                    .with_resizable(true),
+                |vp_ctx, _class| {
+                    // Synchroniser le thème clair/sombre avec la fenêtre principale.
+                    vp_ctx.set_visuals(if dark_mode {
+                        egui::Visuals::dark()
+                    } else {
+                        egui::Visuals::light()
+                    });
+
+                    // Fermeture via le bouton × de la barre de titre OS.
+                    if vp_ctx.input(|i| i.viewport().close_requested()) {
+                        close_km = true;
+                    }
+
+                    #[allow(deprecated)]
+                    egui::CentralPanel::default().show(vp_ctx, |ui| {
+                        components::render_key_manager_content(app, ui, &mut close_km);
+                    });
+
+                    // La popup de clé privée s'affiche dans le même viewport.
+                    if app.km_show_privkey.is_some() {
+                        components::render_privkey_popup(app, vp_ctx);
+                    }
+                },
+            );
+            if close_km {
+                app.show_key_manager = false;
+                app.km_error = None;
+                app.km_confirm_delete = None;
+                app.km_show_privkey = None;
+                app.km_contact_error = None;
+                app.km_confirm_delete_contact = None;
+            }
+        }
     }
 }

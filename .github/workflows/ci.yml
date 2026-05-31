@@ -91,6 +91,13 @@ jobs:
       - name: Build Rust FFI static library
         run: cargo build --release -p arsenic_ffi
 
+      - name: Regenerate C header (cbindgen)
+        run: |
+          cargo install cbindgen --locked --quiet || true
+          cbindgen --config ffi/cbindgen.toml --crate arsenic_ffi \
+            --output ffi_test/cryptyrust.h 2>/dev/null \
+          || echo "cbindgen unavailable — using committed header"
+
       - name: Configure CMake
         run: cmake -B ffi_test/build -S ffi_test -DBUILD_RUST=OFF
 

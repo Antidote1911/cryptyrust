@@ -6,4 +6,7 @@ pub enum Direction {
 
 pub trait Ui {
     fn output(&self, percentage: i32);
+    fn is_cancelled(&self) -> bool {
+        false
+    }
 }

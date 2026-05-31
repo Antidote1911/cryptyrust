@@ -29,9 +29,15 @@ pub enum CoreErr {
     #[error("Encryption failed: {0}")]
     EncryptFail(String),
 
-    #[error("Decryption failed: Incorrect signature. Not a valid Arsenic V1 file.")]
+    #[error("Decryption failed: Incorrect signature. Not a valid Arsenic file.")]
     BadSignature,
 
     #[error("Decryption failed: Incorrect header version.")]
     BadHeaderVersion,
+
+    #[error("Decryption failed: No asymmetric keyslot matched the provided private key.")]
+    NoAsymKeyFound,
+
+    #[error("Operation cancelled.")]
+    Cancelled,
 }

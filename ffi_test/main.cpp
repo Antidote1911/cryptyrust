@@ -89,6 +89,7 @@ static int do_encrypt(const std::string& path, const char* password) {
     int32_t rc = arsenic_encrypt(
         plaintext.data(), plaintext.size(),
         password, &params,
+        nullptr, 0,          // no asymmetric recipients — symmetric only
         on_progress, &ctx,
         &ct
     );

@@ -1,0 +1,14 @@
+[package]
+name = "crypty-keygen"
+version.workspace = true
+authors.workspace = true
+description = "Generate Arsenic X25519 keypairs (similar to age-keygen / rage-keygen)."
+edition = "2021"
+
+[[bin]]
+name = "crypty-keygen"
+
+[dependencies]
+arsenic = { path = "../arsenic" }
+clap    = { version = "4.6.1", features = ["derive", "cargo"] }
+anyhow  = "1.0.102"

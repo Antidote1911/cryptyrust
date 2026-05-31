@@ -1,9 +1,11 @@
 [Desktop Entry]
 Name=Cryptyrust
-Comment=Simple cross-platform file encryption
-Exec=cryptyrust
+Comment=Post-quantum file encryption (X25519 + ML-KEM-768)
+Exec=cryptyrust %F
 Icon=cryptyrust
 Type=Application
 Categories=Utility;Security;
 Terminal=false
 StartupNotify=true
+MimeType=application/x-arsenic;
+Keywords=encrypt;decrypt;security;cryptography;post-quantum;

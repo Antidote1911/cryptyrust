@@ -9,18 +9,41 @@
     <key>CFBundleIdentifier</key>
     <string>com.antidote1911.cryptyrust</string>
     <key>CFBundleVersion</key>
-    <string>1.0</string>
+    <string>$(MARKETING_VERSION)</string>
     <key>CFBundleShortVersionString</key>
-    <string>1.0</string>
+    <string>$(MARKETING_VERSION)</string>
     <key>CFBundleExecutable</key>
     <string>cryptyrust</string>
     <key>CFBundleIconFile</key>
     <string>cryptyrust</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
+    <key>CFBundleSignature</key>
+    <string>????</string>
+    <key>NSHumanReadableCopyright</key>
+    <string>Copyright © 2025 Antidote1911. GPL-3.0-only.</string>
     <key>NSHighResolutionCapable</key>
     <true/>
     <key>LSMinimumSystemVersion</key>
     <string>10.15</string>
+    <key>LSApplicationCategoryType</key>
+    <string>public.app-category.utilities</string>
+    <key>NSSupportsAutomaticGraphicsSwitching</key>
+    <true/>
+    <key>CFBundleDocumentTypes</key>
+    <array>
+        <dict>
+            <key>CFBundleTypeName</key>
+            <string>Arsenic Encrypted File</string>
+            <key>CFBundleTypeExtensions</key>
+            <array>
+                <string>arsn</string>
+            </array>
+            <key>CFBundleTypeRole</key>
+            <string>Editor</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+        </dict>
+    </array>
 </dict>
 </plist>

@@ -62,6 +62,7 @@ jobs:
             --appdir AppDir \
             --executable target/release/cryptyrust \
             --executable target/release/cryptyrust_cli \
+            --executable target/release/crypty-keygen \
             --desktop-file packaging/linux/cryptyrust.desktop \
             --icon-file packaging/cryptyrust.png \
             --output appimage
@@ -117,6 +118,10 @@ jobs:
             target/x86_64-apple-darwin/release/cryptyrust \
             target/aarch64-apple-darwin/release/cryptyrust \
             -output dist/cryptyrust
+          lipo -create \
+            target/x86_64-apple-darwin/release/crypty-keygen \
+            target/aarch64-apple-darwin/release/crypty-keygen \
+            -output dist/crypty-keygen
 
       - name: PNG → .icns (outils natifs macOS)
         run: |
@@ -139,8 +144,11 @@ jobs:
           mkdir -p "Cryptyrust.app/Contents/Resources"
           cp dist/cryptyrust              "Cryptyrust.app/Contents/MacOS/cryptyrust"
           cp dist/cryptyrust_cli          "Cryptyrust.app/Contents/MacOS/cryptyrust_cli"
+          cp dist/crypty-keygen           "Cryptyrust.app/Contents/MacOS/crypty-keygen"
           cp cryptyrust.icns              "Cryptyrust.app/Contents/Resources/cryptyrust.icns"
-          cp packaging/macos/Info.plist   "Cryptyrust.app/Contents/Info.plist"
+          # Inject version into Info.plist
+          sed "s/\$(MARKETING_VERSION)/${{ steps.version.outputs.VERSION }}/g" \
+            packaging/macos/Info.plist > "Cryptyrust.app/Contents/Info.plist"
 
       - name: Install create-dmg
         run: brew install create-dmg
@@ -205,6 +213,7 @@ jobs:
           New-Item -ItemType Directory -Force dist | Out-Null
           Copy-Item target\release\cryptyrust.exe     dist\
           Copy-Item target\release\cryptyrust_cli.exe dist\
+          Copy-Item target\release\crypty-keygen.exe  dist\
           Compress-Archive -Path dist\* -DestinationPath "cryptyrust-${{ steps.version.outputs.VERSION }}-win-portable.zip"
 
       - name: Build Inno Setup installer
@@ -212,6 +221,7 @@ jobs:
         run: |
           Copy-Item target\release\cryptyrust.exe     packaging\windows\
           Copy-Item target\release\cryptyrust_cli.exe packaging\windows\
+          Copy-Item target\release\crypty-keygen.exe  packaging\windows\
           Copy-Item gui\assets\icon.ico               packaging\windows\
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" /DVERSION=${{ steps.version.outputs.VERSION }} packaging\windows\installer.iss
           Move-Item packaging\windows\Output\cryptyrust-windows-setup.exe "cryptyrust-${{ steps.version.outputs.VERSION }}-win-setup.exe"
@@ -258,6 +268,7 @@ jobs:
             cryptyrust-${{ steps.version.outputs.VERSION }}-win-portable.zip
             cryptyrust-${{ steps.version.outputs.VERSION }}-win-setup.exe
             arsenic/FORMAT.md
+            arsenic/FORMAT.html
+            arsenic/algos_list.md
             README.md
-            arsenic_V1.html
           generate_release_notes: true

@@ -17,7 +17,8 @@ zeroize = "1.8.2"
 deoxys = "0.1"
 hmac = "0.13.0"
 sha2 = "0.11.0"
-zstd = "0.13"
+x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
+ml-kem = { version = "0.3", features = ["zeroize"] }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

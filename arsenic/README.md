@@ -2,24 +2,24 @@
 
 Pure-Rust cryptographic library implementing the **Arsenic V1** file encryption format (`.arsn`).
 
-This crate is the core used by [`cryptyrust_cli`](../cli), the [`cryptyrust`](../gui) GUI, and the [`arsenic_ffi`](../ffi) C FFI layer.
+Used by [`cryptyrust_cli`](../cli), the [`cryptyrust`](../gui) GUI, the [`arsenic_ffi`](../ffi) C FFI layer, and [`crypty-keygen`](../crypty-keygen).
 
 ---
 
 ## Features
 
-- **Three selectable AEAD ciphers** — header cipher and payload cipher chosen independently:
-  - `Deoxys-II-256` — tweakable-block-cipher AEAD *(default header cipher)*
+- **Hybrid post-quantum asymmetric encryption** — X25519 + ML-KEM-768 (NIST FIPS 203). Each recipient gets an independent keyslot; files stay decryptable by quantum computers *and* classical ones
+- **Three selectable AEAD ciphers**, independently configurable for header and payload:
+  - `Deoxys-II-256` — tweakable block cipher AEAD *(default header cipher)*
   - `XChaCha20-Poly1305` — 192-bit nonce, software-friendly *(default payload cipher)*
   - `AES-256-GCM-SIV` — nonce-misuse resistant
-- **Argon2id** key derivation with two presets (`Interactive` 256 MiB / `Sensitive` 1 GiB) plus a tiny pre-auth pass (~2 ms) to reject wrong passwords fast
+- **Argon2id** key derivation with two presets (`Interactive` 256 MiB / `Sensitive` 1 GiB) plus a fast pre-auth pass (~2 ms) to reject wrong passwords before the full KDF
 - **LUKS-style keyslot** — password changes rewrite only the 48-byte DEK wrapper; the payload is never re-encrypted
-- **BLAKE3 Merkle tree v1** — domain-separated integrity over all encrypted blocks; full-file verification before any plaintext is written
-- **Full parallelism** via Rayon — every block is encrypted / decrypted independently
-- **Optional per-block zstd compression** before encryption
-- **Optional encrypted metadata** — filename, comment, timestamp stored inside the header
-- **Key material erasure** — all sensitive values live in `Secret<T>` wrappers (zeroized on drop)
-- **Crash-safe rekey** — `.bak` backup written and flushed before any in-place header write
+- **BLAKE3 Merkle tree** — domain-separated integrity over all encrypted blocks; full-file verification before any plaintext is written
+- **Streaming block processing** — O(block_size + N_blocks × 32) memory regardless of file size; files of any size processed correctly
+- **Crash-safe rekey** — `.bak` backup written and fsynced (including parent-directory entry) before any in-place header write
+- **Shared keystore** — X25519 + ML-KEM keypairs stored in `{config}/cryptyrust/keys/` and shared by the GUI, CLI, and keygen tool
+- **Key material erasure** — all sensitive values in `Secret<T>` wrappers (zeroized on drop)
 
 For the complete binary format specification see [`FORMAT.md`](FORMAT.md).
 
@@ -27,64 +27,78 @@ For the complete binary format specification see [`FORMAT.md`](FORMAT.md).
 
 ## Quick start
 
-Add to `Cargo.toml`:
-
 ```toml
 [dependencies]
-arsenic = { path = "../arsenic" }   # or publish to crates.io and use a version
+arsenic = { path = "../arsenic" }
 ```
 
-### Encrypt
+### Symmetric encrypt / decrypt
 
 ```rust
 use std::io::Cursor;
-use arsenic::{encrypt_arsenic, ArsenicParams, ArsenicStrength, Secret, Ui};
+use arsenic::{encrypt_arsenic, decrypt_arsenic, ArsenicParams, ArsenicStrength, Secret, Ui};
 
 struct NoUi;
 impl Ui for NoUi { fn output(&self, _: i32) {} }
 
+// Encrypt
 let plaintext = b"hello world";
 let password  = Secret::new("my passphrase".to_string());
 let params    = ArsenicParams::from(ArsenicStrength::Interactive);
 
 let mut input  = Cursor::new(plaintext);
 let mut output = Cursor::new(Vec::new());
-
-encrypt_arsenic(
-    &mut input,
-    &mut output,
-    &password,
-    &NoUi,          // or implement the Ui trait for progress reporting
-    plaintext.len() as u64,
-    &params,
-)?;
-
+encrypt_arsenic(&mut input, &mut output, &password, &NoUi, plaintext.len() as u64, &params)?;
 let ciphertext = output.into_inner();
+
+// Decrypt
+let mut input  = Cursor::new(&ciphertext);
+let mut output = Cursor::new(Vec::new());
+decrypt_arsenic(&mut input, &mut output, &password, &NoUi, ciphertext.len() as u64)?;
+let plaintext_back = output.into_inner();
 ```
 
-### Decrypt
+### Asymmetric (hybrid post-quantum) encrypt / decrypt
 
 ```rust
+use arsenic::{
+    encrypt_arsenic, decrypt_arsenic_with_key,
+    ArsenicParams, ArsenicStrength, HybridRecipient,
+    hybrid_recipient_from_privkey, Secret, Ui,
+};
 use std::io::Cursor;
-use arsenic::{decrypt_arsenic, Secret, Ui};
 
 struct NoUi;
 impl Ui for NoUi { fn output(&self, _: i32) {} }
 
-let password = Secret::new("my passphrase".to_string());
+// Recipient generates their keypair (once, stored in .key file)
+let privkey: [u8; 32] = arsenic::random_bytes_32();
+let recipient: HybridRecipient = hybrid_recipient_from_privkey(&privkey);
 
+// Sender encrypts for the recipient (no password needed)
+let plaintext = b"secret message";
+let r = arsenic::random_bytes_32();
+let random_kek: String = r.iter().map(|b| format!("{b:02x}")).collect();
+let mut params = ArsenicParams::from(ArsenicStrength::Interactive);
+params.recipients = vec![recipient];
+
+let mut input  = Cursor::new(plaintext);
+let mut output = Cursor::new(Vec::new());
+encrypt_arsenic(
+    &mut input, &mut output,
+    &Secret::new(random_kek), &NoUi,
+    plaintext.len() as u64, &params,
+)?;
+let ciphertext = output.into_inner();
+
+// Recipient decrypts with their private key
 let mut input  = Cursor::new(&ciphertext);
 let mut output = Cursor::new(Vec::new());
-
-let _meta = decrypt_arsenic(
-    &mut input,
-    &mut output,
-    &password,
-    &NoUi,
+decrypt_arsenic_with_key(
+    &mut input, &mut output,
+    &Secret::new(privkey), &NoUi,
     ciphertext.len() as u64,
 )?;
-
-let plaintext = output.into_inner();
 ```
 
 ### File-level helpers
@@ -96,17 +110,13 @@ use arsenic::{arsenic_main_routine, arsenic_rekey, Direction, Secret, Ui};
 struct NoUi;
 impl Ui for NoUi { fn output(&self, _: i32) {} }
 
-// Encrypt a file → file.arsn
+// Encrypt file → file.arsn
 arsenic_main_routine(
-    &Direction::Encrypt,
-    Some("file.txt"),
-    Some("file.txt.arsn"),
-    &Secret::new("passphrase".to_string()),
-    Box::new(NoUi),
-    None,                    // use default ArsenicParams
+    &Direction::Encrypt, Some("file.txt"), Some("file.txt.arsn"),
+    &Secret::new("passphrase".to_string()), Box::new(NoUi), None,
 )?;
 
-// Change password in-place (only rewrites the 48-byte keyslot)
+// Change password (only rewrites the 48-byte keyslot — instant on any file size)
 arsenic_rekey(
     Path::new("file.txt.arsn"),
     &Secret::new("old passphrase".to_string()),
@@ -121,35 +131,48 @@ arsenic_rekey(
 
 | Symbol | Description |
 |---|---|
-| `encrypt_arsenic` | Stream encrypt: `Read` → `Write` |
-| `decrypt_arsenic` | Stream decrypt: `Read` → `Write`; returns `EnvelopeMetadata` |
-| `arsenic_main_routine` | File-level encrypt / decrypt with automatic output path handling |
+| `encrypt_arsenic` | Stream encrypt: `Read` → `Write + Seek` |
+| `decrypt_arsenic` | Stream decrypt: `Read + Seek` → `Write`; two-pass (verify Merkle, then write) |
+| `decrypt_arsenic_with_key` | Asymmetric stream decrypt with X25519 private key |
+| `find_decrypting_key` | Probe header to find which private key can open a file |
+| `arsenic_main_routine` | File-level encrypt/decrypt |
+| `arsenic_main_routine_with_key` | File-level asymmetric decrypt |
 | `arsenic_rekey` | Crash-safe in-place password change |
-| `ArsenicParams` | Cipher IDs, Argon2id cost, compression — full control over encryption parameters |
-| `ArsenicStrength` | `Interactive` (256 MiB, ~1–3 s) / `Sensitive` (1 GiB, ~10–30 s) preset |
+| `arsenic_add_recipient` | Add a hybrid keyslot to an existing file |
+| `arsenic_remove_recipient` | Remove a keyslot by index |
+| `arsenic_list_recipients` | List ephemeral X25519 keys of all keyslots |
+| `arsenic_find_matching_key` | Find which stored key can decrypt a file |
+| `ArsenicParams` | Cipher IDs, Argon2id cost, recipients |
+| `HybridRecipient` | Combined X25519 + ML-KEM-768 public key |
+| `hybrid_recipient_from_privkey` | Build a `HybridRecipient` from a private key |
+| `hybrid_encapsulation_key` | Derive ML-KEM EK from X25519 private key |
+| `ArsenicStrength` | `Interactive` (256 MiB) / `Sensitive` (1 GiB) |
 | `CipherId` | `DeoxysII256` · `XChaCha20Poly1305` · `Aes256GcmSiv` |
-| `Compression` | `None` · `Zstd(level)` |
-| `EnvelopeMetadata` | Filename, comment, timestamp, sizes recovered from the header on decrypt |
-| `Secret<T>` | Zeroize-on-drop wrapper for sensitive values (passwords, keys) |
-| `Ui` | Progress callback trait — implement to receive 0–100 % progress ticks |
-| `bench_cipher_combinations` | Benchmark all three AEAD ciphers and rank by throughput |
-| `is_arsenic_file` | Quick magic-byte check (`ARSN`) |
-| `arsenic_read_params` | Read Argon2id parameters from a file header without decrypting |
+| `EnvelopeMetadata` | Filename, comment, timestamp from decrypted header |
+| `Secret<T>` | Zeroize-on-drop wrapper |
+| `Ui` | Progress callback trait (0–100 %) |
+| `bench_cipher_combinations` | Benchmark all ciphers, rank by throughput |
+| `keystore::load_keystore` | Load hybrid keypairs from `{config}/cryptyrust/keys/` |
+| `keystore::load_contacts` | Load contacts (hybrid public keys) |
+| `keystore::resolve_recipient` | Resolve name/path → `HybridRecipient` |
+| `encode_pubkey` / `decode_pubkey` | X25519 key bech32 encoding (`arsenic1…`) |
+| `encode_mlkem_pubkey` / `decode_mlkem_pubkey` | ML-KEM EK bech32 encoding (`arsenic1m…`) |
+| `encode_privkey` / `decode_privkey` | Private key bech32 encoding (`ARSENIC-SECRET-KEY-1…`) |
 
 ---
 
 ## Cryptographic parameters
 
-### Key derivation — Argon2id
+### Argon2id presets
 
-| Preset | `t_cost` | `m_cost` (KB) | `p_cost` | RAM | Typical time |
+| Preset | t | m (KB) | p | RAM | Time |
 |---|---|---|---|---|---|
 | `Interactive` *(default)* | 4 | 262 144 | 4 | 256 MiB | ~1–3 s |
 | `Sensitive` | 12 | 1 048 576 | 4 | 1 GiB | ~10–30 s |
 
-Pre-authentication uses a tiny Argon2id pass (t=1, m=8 192 KB, p=1) to verify the header MAC before running the full KDF.
+Pre-auth uses t=1, m=8 192 KB, p=1 → ~2 ms to reject wrong passwords fast.
 
-### Cipher IDs (as stored in the header)
+### Cipher IDs (header byte)
 
 | Byte | Algorithm | Default role |
 |---|---|---|
@@ -157,28 +180,39 @@ Pre-authentication uses a tiny Argon2id pass (t=1, m=8 192 KB, p=1) to verify th
 | `0x03` | XChaCha20-Poly1305 | Payload cipher |
 | `0x04` | AES-256-GCM-SIV | — |
 
+### Hybrid KEM
+
+| Component | Algorithm | Key size | Security |
+|---|---|---|---|
+| Classical | X25519 ECDH | 32 bytes | 128-bit classical |
+| Post-quantum | ML-KEM-768 (NIST FIPS 203) | EK: 1184 B, CT: 1088 B | NIST level 3 |
+| Combined | Hybrid binding via BLAKE3 | — | Secure if either holds |
+
+Both keys are derived from the same 32-byte seed stored in the `.key` file.
+
 ---
 
 ## Format summary
 
 ```
-┌──────────────────────────────────────────┐  ← offset 0x00
-│  Public section      76 bytes  (pre-MAC) │  plaintext, integrity-protected
-│  HeaderMAC           32 bytes            │  HMAC-SHA256(PreKey, public section)
-│  WrappedDEK          48 bytes            │  AEAD-encrypted 32-byte DEK (keyslot)
-│  ProtectedMetadata  ≥76 bytes            │  AEAD-encrypted TLV metadata
-└──────────────────────────────────────────┘  ← offset = header_total_size (≥ 232 bytes)
-┌──────────────────────────────────────────┐
-│  Block 0: ciphertext + 16-byte AEAD tag  │
-│  Block 1: ciphertext + 16-byte AEAD tag  │
-│  …                                       │
-└──────────────────────────────────────────┘
-     ↓
-  BLAKE3 Merkle tree over all encrypted blocks
-  root stored encrypted in ProtectedMetadata
+┌──────────────────────────────────────────────┐  ← offset 0x00
+│  Section pré-MAC   77 bytes  (pre-MAC)        │  plaintext, integrity-protected
+│  HeaderMAC         32 bytes                   │  HMAC-SHA256(PreKey, pre-MAC)
+│  WrappedDEK        48 bytes                   │  AEAD-encrypted DEK (symmetric keyslot)
+│  hybrid_count       4 bytes                   │  number of hybrid keyslots
+│  Keyslot_0       1180 bytes  ┐               │  X25519+ML-KEM-768 wrapped DEK
+│  Keyslot_1       1180 bytes  │ × N           │
+│  ProtectedMeta    ≥76 bytes  ┘               │  AEAD-encrypted TLV (Merkle root, sizes…)
+└──────────────────────────────────────────────┘  ← offset = header_total_size (≥237 bytes)
+┌──────────────────────────────────────────────┐
+│  Block 0: ciphertext + 16-byte AEAD tag       │
+│  Block 1: ciphertext + 16-byte AEAD tag       │  blocks processed sequentially,
+│  …                                            │  parallel file-level processing in GUI
+└──────────────────────────────────────────────┘
+  ↓ BLAKE3 Merkle tree over all encrypted blocks (root stored in ProtectedMeta)
 ```
 
-Full specification: [`FORMAT.md`](FORMAT.md).
+Full specification: [`FORMAT.md`](FORMAT.md) · Rendered: [`FORMAT.html`](FORMAT.html).
 
 ---
 

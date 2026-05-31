@@ -2,6 +2,8 @@ use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use crate::app::CryptyApp;
 use crate::file_utils::{
@@ -9,7 +11,9 @@ use crate::file_utils::{
     Mode,
 };
 use crate::job::PasswordPopup;
-use arsenic::{best_combination, ArsenicStrength, CipherId, Compression};
+use arsenic::{encode_privkey, encode_pubkey};
+use crate::keystore::{contacts_path, keys_dir, pubkey_short};
+use arsenic::{best_combination, ArsenicStrength, CipherId};
 
 pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool) {
     ui.menu_button("Config", |ui| {
@@ -63,13 +67,6 @@ pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bo
             ] {
                 ui.selectable_value(&mut app.pld_cipher, cipher, cipher_label(cipher));
             }
-
-            ui.add_space(6.0);
-
-            // ── Compression ───────────────────────────────────────────
-            ui.label(egui::RichText::new("Compression").strong());
-            ui.separator();
-            ui.checkbox(&mut app.compress, "zstd  (level 3)");
 
             ui.add_space(6.0);
             ui.separator();
@@ -179,18 +176,16 @@ pub fn render_bench_window(app: &mut CryptyApp, ctx: &egui::Context) {
     }
 }
 
-pub fn compression_short_label(c: Compression) -> &'static str {
-    match c {
-        Compression::None => "no compression",
-        Compression::Zstd(_) => "zstd",
-    }
-}
-
 pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
     let title = match app.mode {
-        Mode::Encrypt => "Confirm password",
-        Mode::Decrypt => "Password",
+        Mode::Encrypt => "Encrypt",
+        Mode::Decrypt => "Decrypt",
     };
+
+    let has_contacts = app.mode == Mode::Encrypt
+        && (!app.contacts.is_empty() || !app.keys.is_empty());
+    let has_decrypt_keys = app.mode == Mode::Decrypt && !app.keys.is_empty();
+    let window_width = if has_contacts || has_decrypt_keys { 360.0f32 } else { 310.0 };
 
     let mut do_ok = false;
     let mut do_cancel = false;
@@ -199,35 +194,186 @@ pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
         .collapsible(false)
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, egui::vec2(0.0, 0.0))
-        .fixed_size(egui::vec2(310.0, 10.0))
+        .min_width(window_width)
+        .max_width(window_width)
         .show(ctx, |ui| {
             ui.add_space(6.0);
+
+            // ── Password fields ───────────────────────────────────────────
+            let n_sel_now = app.pw_selected_own_keys.iter().filter(|&&s| s).count()
+                + app.pw_selected_recipients.iter().filter(|&&s| s).count();
+            let pw_optional = (app.mode == Mode::Encrypt && n_sel_now > 0)
+                || (app.mode == Mode::Decrypt && app.decrypt_key_index.is_some());
+
+            let pw_hint = if pw_optional && app.mode == Mode::Encrypt {
+                "Password… (optional — recipients selected)"
+            } else if pw_optional && app.mode == Mode::Decrypt {
+                "Password… (optional — keypair selected)"
+            } else {
+                "Password…"
+            };
 
             let resp = ui.add(
                 egui::TextEdit::singleline(&mut app.pw)
                     .password(!app.pw_show)
-                    .hint_text("Password…")
-                    .desired_width(260.0),
+                    .hint_text(pw_hint)
+                    .desired_width(window_width - 24.0),
             );
-
             if app.pw_focus {
                 resp.request_focus();
                 app.pw_focus = false;
             }
 
-            if app.mode == Mode::Encrypt {
+            // Confirm field: shown in encrypt mode only when a password is being set.
+            if app.mode == Mode::Encrypt && !app.pw.is_empty() {
                 ui.add_space(4.0);
                 ui.add(
                     egui::TextEdit::singleline(&mut app.pw_confirm)
                         .password(!app.pw_show)
-                        .hint_text("Confirm…")
-                        .desired_width(260.0),
+                        .hint_text("Confirm password…")
+                        .desired_width(window_width - 24.0),
                 );
+            } else {
+                // Clear confirm so it doesn't cause a mismatch when the user
+                // leaves the password empty and submits.
+                app.pw_confirm.clear();
             }
 
             ui.add_space(4.0);
-            ui.checkbox(&mut app.pw_show, "Show password");
+            if !app.pw.is_empty() {
+                ui.checkbox(&mut app.pw_show, "Show password");
+            }
 
+            // Note when encrypting without a password.
+            if pw_optional && app.pw.is_empty() {
+                ui.add_space(2.0);
+                ui.label(
+                    egui::RichText::new(
+                        "ℹ No password — only selected recipients can decrypt.",
+                    )
+                    .small()
+                    .color(egui::Color32::from_rgb(80, 160, 220)),
+                );
+            }
+
+            // ── Recipient selection (encrypt mode, when any key/contact exists) ──
+            if has_contacts {
+                // Keep selection vecs in sync with their lists.
+                if app.pw_selected_own_keys.len() != app.keys.len() {
+                    app.pw_selected_own_keys.resize(app.keys.len(), false);
+                }
+                if app.pw_selected_recipients.len() != app.contacts.len() {
+                    app.pw_selected_recipients.resize(app.contacts.len(), false);
+                }
+
+                let n_sel = app.pw_selected_own_keys.iter().filter(|&&s| s).count()
+                    + app.pw_selected_recipients.iter().filter(|&&s| s).count();
+
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Recipients").strong());
+                    if n_sel > 0 {
+                        ui.label(
+                            egui::RichText::new(format!("({n_sel} selected)"))
+                                .small()
+                                .color(egui::Color32::from_rgb(80, 180, 80)),
+                        );
+                    } else {
+                        ui.label(egui::RichText::new("(none — password only)").small().weak());
+                    }
+                });
+                ui.label(
+                    egui::RichText::new(
+                        "Checked keys can decrypt without the password.",
+                    )
+                    .small()
+                    .weak(),
+                );
+                ui.add_space(4.0);
+
+                let n_rows = app.keys.len() + app.contacts.len();
+                let scroll_h = (n_rows as f32 * 24.0 + 24.0).min(180.0);
+                egui::ScrollArea::vertical()
+                    .max_height(scroll_h)
+                    .id_salt("pw_recipients")
+                    .show(ui, |ui| {
+                        // ── My keypairs ───────────────────────────────────
+                        if !app.keys.is_empty() {
+                            ui.label(
+                                egui::RichText::new("My keypairs")
+                                    .small()
+                                    .strong()
+                                    .weak(),
+                            );
+                            for i in 0..app.keys.len() {
+                                let short = pubkey_short(&app.keys[i].public_key);
+                                let label = format!("{}   {}", app.keys[i].name, short);
+                                ui.checkbox(&mut app.pw_selected_own_keys[i], label);
+                            }
+                        }
+                        // ── Contacts ──────────────────────────────────────
+                        if !app.contacts.is_empty() {
+                            if !app.keys.is_empty() {
+                                ui.add_space(4.0);
+                            }
+                            ui.label(
+                                egui::RichText::new("Contacts")
+                                    .small()
+                                    .strong()
+                                    .weak(),
+                            );
+                            for i in 0..app.contacts.len() {
+                                let short = pubkey_short(&app.contacts[i].public_key);
+                                let label =
+                                    format!("{}   {}", app.contacts[i].name, short);
+                                ui.checkbox(&mut app.pw_selected_recipients[i], label);
+                            }
+                        }
+                    });
+            }
+
+            // ── Keypair selection (decrypt mode) ──────────────────────────
+            if has_decrypt_keys {
+                ui.add_space(6.0);
+                ui.separator();
+                ui.add_space(4.0);
+
+                ui.horizontal(|ui| {
+                    ui.label(egui::RichText::new("Decrypt with keypair").strong());
+                    if app.decrypt_key_index.is_none() {
+                        ui.label(egui::RichText::new("(none — use password)").small().weak());
+                    }
+                });
+                ui.label(
+                    egui::RichText::new("Select your keypair if the file was encrypted for you.")
+                        .small()
+                        .weak(),
+                );
+                ui.add_space(4.0);
+
+                let scroll_h = (app.keys.len() as f32 * 26.0 + 8.0).min(150.0);
+                egui::ScrollArea::vertical()
+                    .max_height(scroll_h)
+                    .id_salt("decrypt_key_sel")
+                    .show(ui, |ui| {
+                        // "None" option: password only
+                        ui.radio_value(
+                            &mut app.decrypt_key_index,
+                            None,
+                            egui::RichText::new("None (password only)").weak(),
+                        );
+                        for i in 0..app.keys.len() {
+                            let short = pubkey_short(&app.keys[i].public_key);
+                            let label = format!("{}   {}", app.keys[i].name, short);
+                            ui.radio_value(&mut app.decrypt_key_index, Some(i), label);
+                        }
+                    });
+            }
+
+            // ── Error + buttons ───────────────────────────────────────────
             if let Some(err) = &app.pw_error {
                 ui.add_space(4.0);
                 ui.colored_label(ui.visuals().error_fg_color, err);
@@ -336,8 +482,11 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
     let modal =
         egui::Modal::new(egui::Id::new("about_modal")).backdrop_color(egui::Color32::TRANSPARENT);
 
+    let pq_color    = egui::Color32::from_rgb(167, 139, 250); // violet ML-KEM
+    let accent_color = egui::Color32::from_rgb(80, 180, 120);
+
     let response = modal.show(ctx, |ui| {
-        ui.set_min_width(380.0);
+        ui.set_min_width(420.0);
 
         if ui.input(|i| i.key_pressed(egui::Key::Escape)) {
             app.show_about = false;
@@ -345,31 +494,49 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
 
         ui.add_space(8.0);
 
+        // ── Titre + logo ───────────────────────────────────────────────────
         ui.vertical_centered(|ui| {
             ui.horizontal(|ui| {
                 ui.add(
                     egui::Image::new(egui::include_image!(
                         "../../../packaging/cryptyrust-icon.png"
                     ))
-                    .fit_to_exact_size(egui::vec2(120.0, 120.0))
-                    .corner_radius(12.0),
+                    .fit_to_exact_size(egui::vec2(80.0, 80.0))
+                    .corner_radius(10.0),
                 );
-                ui.add_space(10.0);
+                ui.add_space(12.0);
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new("Cryptyrust").size(22.0).strong());
+                    ui.label(egui::RichText::new("Cryptyrust").size(24.0).strong());
                     ui.label(
                         egui::RichText::new(format!(
-                            "v{}  —  by Antidote1911",
+                            "v{}  —  Antidote1911",
                             env!("CARGO_PKG_VERSION")
                         ))
                         .size(13.0)
                         .weak(),
                     );
+                    ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new("Ultra secure authenticated file encryption")
-                            .size(13.0)
+                        egui::RichText::new("Chiffrement de fichiers post-quantique")
+                            .size(12.0)
                             .weak(),
                     );
+                    // Badge post-quantique
+                    ui.add_space(4.0);
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("⬡  Post-Quantum")
+                                .size(11.0)
+                                .color(pq_color)
+                                .strong(),
+                        );
+                        ui.label(
+                            egui::RichText::new("X25519 + ML-KEM-768")
+                                .size(11.0)
+                                .color(pq_color)
+                                .weak(),
+                        );
+                    });
                 });
             });
         });
@@ -378,47 +545,89 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
         ui.separator();
         ui.add_space(8.0);
 
-        ui.horizontal(|ui| {
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Arsenic V1 format").size(13.0).strong());
-                ui.add_space(3.0);
-                ui.label(
-                    egui::RichText::new(format!("{} (header)", cipher_short_label(app.hdr_cipher)))
-                        .size(13.0),
-                );
-                ui.label(
-                    egui::RichText::new(format!(
-                        "{} (payload)",
-                        cipher_short_label(app.pld_cipher)
-                    ))
-                    .size(13.0),
-                );
-                ui.label(egui::RichText::new("BLAKE3 Merkle tree integrity").size(13.0));
-            });
+        // ── Colonne gauche : format Arsenic — Colonne droite : crypto ─────
+        ui.columns(2, |cols| {
+            // Colonne 1 — Format
+            let ui = &mut cols[0];
+            ui.label(egui::RichText::new("Format Arsenic V1").size(13.0).strong());
+            ui.add_space(4.0);
+            ui.label(
+                egui::RichText::new(format!("{}  (en-tête)", cipher_short_label(app.hdr_cipher)))
+                    .size(12.5),
+            );
+            ui.label(
+                egui::RichText::new(format!("{}  (payload)", cipher_short_label(app.pld_cipher)))
+                    .size(12.5),
+            );
+            ui.label(egui::RichText::new("BLAKE3 Merkle tree").size(12.5));
+            ui.label(egui::RichText::new("Streaming par blocs").size(12.5));
 
-            ui.add_space(24.0);
-
-            ui.vertical(|ui| {
-                ui.label(egui::RichText::new("Key Derivation").size(13.0).strong());
-                ui.add_space(3.0);
-                ui.label(egui::RichText::new("Argon2id").size(13.0));
-                ui.label(
-                    egui::RichText::new("Interactive · Sensitive")
-                        .size(12.0)
-                        .weak(),
-                );
-            });
+            // Colonne 2 — Crypto
+            let ui = &mut cols[1];
+            ui.label(egui::RichText::new("Cryptographie").size(13.0).strong());
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("Argon2id  (KDF)").size(12.5));
+            ui.label(
+                egui::RichText::new("Interactive · Sensitive")
+                    .size(11.5)
+                    .weak(),
+            );
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new("X25519 + ML-KEM-768")
+                    .size(12.5)
+                    .color(pq_color),
+            );
+            ui.label(
+                egui::RichText::new("KEM hybride post-quantique")
+                    .size(11.5)
+                    .color(pq_color)
+                    .weak(),
+            );
         });
 
         ui.add_space(8.0);
         ui.separator();
-        ui.add_space(4.0);
+        ui.add_space(6.0);
 
+        // ── Keystore actif ─────────────────────────────────────────────────
+        if !app.keys.is_empty() {
+            ui.horizontal(|ui| {
+                ui.label(
+                    egui::RichText::new(format!(
+                        "🔑  {} keypair{}  stocké{}",
+                        app.keys.len(),
+                        if app.keys.len() > 1 { "s" } else { "" },
+                        if app.keys.len() > 1 { "s" } else { "" },
+                    ))
+                    .size(12.0)
+                    .color(accent_color),
+                );
+                if !app.contacts.is_empty() {
+                    ui.label(
+                        egui::RichText::new(format!(
+                            "·  {} contact{}",
+                            app.contacts.len(),
+                            if app.contacts.len() > 1 { "s" } else { "" },
+                        ))
+                        .size(12.0)
+                        .weak(),
+                    );
+                }
+            });
+            ui.add_space(4.0);
+        }
+
+        // ── Pied de page ───────────────────────────────────────────────────
         ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("Built with Rust • eframe/egui").weak());
+            ui.label(
+                egui::RichText::new("Rust • eframe / egui • NIST FIPS 203")
+                    .size(11.5)
+                    .weak(),
+            );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add(egui::Button::new("Close").min_size(egui::vec2(50.0, 20.0)))
+                    .add(egui::Button::new("Fermer").min_size(egui::vec2(60.0, 22.0)))
                     .clicked()
                 {
                     app.show_about = false;
@@ -429,6 +638,332 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
 
     if response.should_close() {
         app.show_about = false;
+    }
+}
+
+// ── Key Manager content ───────────────────────────────────────────────────────
+
+/// Renders the key manager content inside whatever container the caller provides
+/// (viewport CentralPanel or legacy Window).
+///
+/// Sets `*close = true` when the user clicks Close or presses Escape.
+/// The caller is responsible for the actual cleanup (resetting km_* state).
+pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close: &mut bool) {
+    // Deferred actions — collected first, applied after to avoid borrow conflicts.
+    let mut do_generate = false;
+    let mut do_confirm_delete: Option<usize> = None;
+    let mut do_delete: Option<usize> = None;
+    let mut cancel_confirm = false;
+    let mut copy_text: Option<String> = None;
+    let mut open_privkey_popup: Option<usize> = None;
+    let mut do_add_contact = false;
+    let mut do_confirm_delete_contact: Option<usize> = None;
+    let mut do_delete_contact: Option<usize> = None;
+    let mut cancel_confirm_contact = false;
+
+    egui::ScrollArea::vertical().show(ui, |ui| {
+
+        // ════════════════════════════════════════════════════════
+        // Section 1 — My keypairs
+        // ════════════════════════════════════════════════════════
+        ui.label(egui::RichText::new("My keypairs").strong().size(14.0));
+        ui.add_space(4.0);
+
+        if app.keys.is_empty() {
+            ui.label(egui::RichText::new("No keypairs yet — generate one below.").weak().italics());
+        } else {
+            TableBuilder::new(ui)
+                .striped(true)
+                .min_scrolled_height(0.0)
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .column(Column::initial(130.0).at_least(60.0).clip(true))
+                .column(Column::initial(155.0).at_least(90.0).clip(true))
+                .column(Column::remainder().at_least(160.0))
+                .header(24.0, |mut h| {
+                    h.col(|ui| { ui.label(egui::RichText::new("Name").small().strong()); });
+                    h.col(|ui| { ui.label(egui::RichText::new("Public key").small().strong()); });
+                    h.col(|ui| { ui.label(egui::RichText::new("Actions").small().strong()); });
+                })
+                .body(|mut body| {
+                    for i in 0..app.keys.len() {
+                        let key = &app.keys[i];
+                        let short    = pubkey_short(&key.public_key);
+                        let full_pub = encode_pubkey(&key.public_key);
+                        let pending  = app.km_confirm_delete == Some(i);
+
+                        body.row(30.0, |mut row| {
+                            row.col(|ui| { ui.label(&key.name); });
+                            row.col(|ui| {
+                                ui.label(egui::RichText::new(&short).monospace().weak())
+                                    .on_hover_text(egui::RichText::new(&full_pub).monospace());
+                            });
+                            row.col(|ui| {
+                                ui.horizontal(|ui| {
+                                    if ui.button("📋 Copy").on_hover_text("Copy public key").clicked() {
+                                        copy_text = Some(full_pub.clone());
+                                        cancel_confirm = true;
+                                    }
+                                    if ui.button("🔑 Secret key").on_hover_text("Reveal private key").clicked() {
+                                        open_privkey_popup = Some(i);
+                                        cancel_confirm = true;
+                                    }
+                                    if pending {
+                                        if ui.add(egui::Button::new(
+                                            egui::RichText::new("Confirm?").color(egui::Color32::WHITE))
+                                            .fill(egui::Color32::from_rgb(200, 60, 60)))
+                                            .clicked()
+                                        {
+                                            do_delete = Some(i);
+                                        }
+                                        if ui.button("Cancel").clicked() { cancel_confirm = true; }
+                                    } else {
+                                        if ui.add(egui::Button::new("🗑 Delete").fill(egui::Color32::TRANSPARENT)).clicked() {
+                                            do_confirm_delete = Some(i);
+                                        }
+                                    }
+                                });
+                            });
+                        });
+                    }
+                });
+        }
+
+        ui.add_space(6.0);
+
+        // Generate form
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("New keypair:").small());
+            ui.add(egui::TextEdit::singleline(&mut app.km_new_name)
+                .hint_text("Name…")
+                .desired_width(180.0));
+            if ui.button("⚡ Generate").clicked() { do_generate = true; }
+        });
+        if let Some(err) = &app.km_error {
+            ui.colored_label(ui.visuals().error_fg_color, err);
+        }
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(6.0);
+
+        // ════════════════════════════════════════════════════════
+        // Section 2 — Contacts
+        // ════════════════════════════════════════════════════════
+        ui.label(egui::RichText::new("Contacts").strong().size(14.0));
+        ui.label(egui::RichText::new("Hybrid public keys (X25519 + ML-KEM-768) received from correspondents.").small().weak());
+        ui.add_space(4.0);
+
+        if app.contacts.is_empty() {
+            ui.label(egui::RichText::new("No contacts yet — add one below.").weak().italics());
+        } else {
+            TableBuilder::new(ui)
+                .striped(true)
+                .min_scrolled_height(0.0)
+                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+                .column(Column::initial(130.0).at_least(60.0).clip(true))
+                .column(Column::initial(155.0).at_least(90.0).clip(true))
+                .column(Column::remainder().at_least(120.0))
+                .header(24.0, |mut h| {
+                    h.col(|ui| { ui.label(egui::RichText::new("Name").small().strong()); });
+                    h.col(|ui| { ui.label(egui::RichText::new("Public key").small().strong()); });
+                    h.col(|ui| { ui.label(egui::RichText::new("Actions").small().strong()); });
+                })
+                .body(|mut body| {
+                    for i in 0..app.contacts.len() {
+                        let c = &app.contacts[i];
+                        let short    = pubkey_short(&c.public_key);
+                        let full_pub = encode_pubkey(&c.public_key);
+                        let pending  = app.km_confirm_delete_contact == Some(i);
+
+                        body.row(30.0, |mut row| {
+                            row.col(|ui| { ui.label(&c.name); });
+                            row.col(|ui| {
+                                ui.label(egui::RichText::new(&short).monospace().weak())
+                                    .on_hover_text(egui::RichText::new(&full_pub).monospace());
+                            });
+                            row.col(|ui| {
+                                ui.horizontal(|ui| {
+                                    if ui.button("📋 Copy").on_hover_text("Copy X25519 public key").clicked() {
+                                        copy_text = Some(full_pub.clone());
+                                        cancel_confirm_contact = true;
+                                    }
+                                    if pending {
+                                        if ui.add(egui::Button::new(
+                                            egui::RichText::new("Confirm?").color(egui::Color32::WHITE))
+                                            .fill(egui::Color32::from_rgb(200, 60, 60)))
+                                            .clicked()
+                                        {
+                                            do_delete_contact = Some(i);
+                                        }
+                                        if ui.button("Cancel").clicked() { cancel_confirm_contact = true; }
+                                    } else {
+                                        if ui.add(egui::Button::new("🗑 Delete").fill(egui::Color32::TRANSPARENT)).clicked() {
+                                            do_confirm_delete_contact = Some(i);
+                                        }
+                                    }
+                                });
+                            });
+                        });
+                    }
+                });
+        }
+
+        ui.add_space(6.0);
+
+        // Add contact form — requires both X25519 and ML-KEM keys
+        ui.label(egui::RichText::new("Add contact:").small());
+        ui.horizontal(|ui| {
+            ui.add(egui::TextEdit::singleline(&mut app.km_new_contact_name)
+                .hint_text("Name…")
+                .desired_width(110.0));
+            ui.add(egui::TextEdit::singleline(&mut app.km_new_contact_key)
+                .hint_text("arsenic1…  (X25519)")
+                .font(egui::TextStyle::Monospace)
+                .desired_width(180.0));
+            ui.add(egui::TextEdit::singleline(&mut app.km_new_contact_mlkem_key)
+                .hint_text("arsenic1m…  (ML-KEM-768)")
+                .font(egui::TextStyle::Monospace)
+                .desired_width(200.0));
+            if ui.button("➕ Add").clicked() { do_add_contact = true; }
+        });
+        if let Some(err) = &app.km_contact_error {
+            ui.colored_label(ui.visuals().error_fg_color, err);
+        }
+
+        ui.add_space(10.0);
+        ui.separator();
+        ui.add_space(4.0);
+
+        // ── Storage paths + security warning ─────────────────────────────
+        let keys_label = keys_dir()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "unknown".into());
+        let contacts_label = contacts_path()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_else(|| "unknown".into());
+
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("⚠").color(egui::Color32::from_rgb(220, 180, 40)).size(14.0));
+            ui.label(egui::RichText::new("Private keys are stored unencrypted.").small().color(egui::Color32::from_rgb(220, 180, 40)));
+        });
+        ui.label(egui::RichText::new(format!("Keys: {keys_label}")).small().weak().monospace());
+        ui.label(egui::RichText::new(format!("Contacts: {contacts_label}")).small().weak().monospace());
+
+        ui.add_space(8.0);
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            if ui.button("Close").clicked() || ui.input(|i| i.key_pressed(egui::Key::Escape)) {
+                *close = true;
+            }
+        });
+        ui.add_space(4.0);
+    });
+
+    // ── Apply deferred actions ────────────────────────────────────────────────
+    if cancel_confirm           { app.km_confirm_delete = None; }
+    if cancel_confirm_contact   { app.km_confirm_delete_contact = None; }
+    if let Some(t) = copy_text  { ui.ctx().copy_text(t); }
+    if do_generate              { app.km_generate_key(); }
+    if do_add_contact           { app.km_add_contact(); }
+    if let Some(i) = do_confirm_delete         { app.km_confirm_delete = Some(i); app.km_error = None; }
+    if let Some(i) = do_delete                 { app.km_delete_key(i); }
+    if let Some(i) = do_confirm_delete_contact { app.km_confirm_delete_contact = Some(i); app.km_contact_error = None; }
+    if let Some(i) = do_delete_contact         { app.km_delete_contact(i); }
+    if let Some(i) = open_privkey_popup        { app.km_show_privkey = Some(i); }
+}
+
+/// Secret key reveal popup.  Call every frame when `app.km_show_privkey` is Some.
+pub fn render_privkey_popup(app: &mut CryptyApp, ctx: &egui::Context) {
+    let Some(idx) = app.km_show_privkey else { return };
+    let Some(key) = app.keys.get(idx) else {
+        app.km_show_privkey = None;
+        return;
+    };
+
+    let name = key.name.clone();
+    let encoded = encode_privkey(&key.private_key);
+
+    let mut close = false;
+    let mut copy = false;
+
+    let warn_color = egui::Color32::from_rgb(220, 80, 60);
+
+    egui::Window::new(format!("Secret key — {name}"))
+        .collapsible(false)
+        .resizable(false)
+        .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
+        .min_width(480.0)
+        .show(ctx, |ui| {
+            ui.add_space(4.0);
+
+            // Warning banner
+            egui::Frame::new()
+                .fill(egui::Color32::from_rgba_unmultiplied(200, 60, 40, 40))
+                .corner_radius(4.0)
+                .inner_margin(egui::Margin::symmetric(10, 8))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new("⚠")
+                                .color(warn_color)
+                                .size(16.0),
+                        );
+                        ui.vertical(|ui| {
+                            ui.label(
+                                egui::RichText::new("Never share this key.")
+                                    .color(warn_color)
+                                    .strong(),
+                            );
+                            ui.label(
+                                egui::RichText::new(
+                                    "Anyone with this key can decrypt files encrypted for you.",
+                                )
+                                .color(warn_color)
+                                .small(),
+                            );
+                        });
+                    });
+                });
+
+            ui.add_space(10.0);
+
+            // Key display — read-only selectable text so the user can select+copy manually
+            ui.label(egui::RichText::new("Private key:").strong());
+            ui.add_space(4.0);
+            egui::Frame::new()
+                .fill(ui.visuals().extreme_bg_color)
+                .corner_radius(4.0)
+                .inner_margin(egui::Margin::symmetric(8, 6))
+                .show(ui, |ui| {
+                    ui.add(
+                        egui::TextEdit::multiline(&mut encoded.as_str())
+                            .font(egui::TextStyle::Monospace)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(2)
+                            .interactive(false),
+                    );
+                });
+
+            ui.add_space(10.0);
+            ui.horizontal(|ui| {
+                if ui.button("📋 Copy to clipboard").clicked() {
+                    copy = true;
+                }
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    if ui.button("Close").clicked()
+                        || ui.input(|i| i.key_pressed(egui::Key::Escape))
+                    {
+                        close = true;
+                    }
+                });
+            });
+            ui.add_space(4.0);
+        });
+
+    if copy {
+        ctx.copy_text(encoded);
+    }
+    if close {
+        app.km_show_privkey = None;
     }
 }
 
@@ -462,7 +997,7 @@ fn render_type_cell(ui: &mut egui::Ui, is_encrypted: bool) {
         })
         .response;
     if is_encrypted {
-        resp.on_hover_text("Arsenic V1 format");
+        resp.on_hover_text("Arsenic format");
     }
 }
 
@@ -536,7 +1071,30 @@ pub fn render_processing_table(
     files: &[PathBuf],
     progress_map: &HashMap<usize, i32>,
     current_idx: usize,
+    cancel_flags: &[Arc<AtomicBool>],
+    cancel_all: &Arc<AtomicBool>,
 ) {
+    // "Stop all" button above the table
+    ui.horizontal(|ui| {
+        let all_cancelled = cancel_all.load(Ordering::Relaxed);
+        if all_cancelled {
+            ui.label(
+                egui::RichText::new("⏹  Cancellation in progress…")
+                    .color(egui::Color32::from_rgb(220, 160, 40))
+                    .small(),
+            );
+        } else {
+            let btn = egui::Button::new(
+                egui::RichText::new("⏹  Stop all tasks").color(egui::Color32::from_rgb(220, 80, 60)),
+            )
+            .min_size(egui::vec2(130.0, 24.0));
+            if ui.add(btn).clicked() {
+                cancel_all.store(true, Ordering::Relaxed);
+            }
+        }
+    });
+    ui.add_space(4.0);
+
     TableBuilder::new(ui)
         .striped(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
@@ -545,6 +1103,7 @@ pub fn render_processing_table(
         .column(Column::remainder().clip(true))
         .column(Column::auto())
         .column(Column::auto())
+        .column(Column::initial(130.0).at_least(100.0))
         .header(30.0, |mut header| {
             header.col(|_ui| {});
             header.col(|ui| {
@@ -559,16 +1118,24 @@ pub fn render_processing_table(
             header.col(|ui| {
                 header_label(ui, "Progress");
             });
+            header.col(|ui| {
+                header_label(ui, "Action");
+            });
         })
         .body(|mut body| {
             for (i, path) in files.iter().enumerate() {
                 let is_enc = is_cryptyrust_file(path);
                 let pct = progress_map.get(&i).copied().unwrap_or(0);
                 let is_current = i == current_idx;
+                let is_cancelled = cancel_flags
+                    .get(i)
+                    .map(|f| f.load(Ordering::Relaxed))
+                    .unwrap_or(false)
+                    || cancel_all.load(Ordering::Relaxed);
 
                 body.row(32.0, |mut row| {
                     row.col(|ui| {
-                        if is_current && pct < 100 {
+                        if is_current && pct < 100 && !is_cancelled {
                             ui.label(egui::RichText::new("▶").size(10.0));
                         }
                     });
@@ -582,7 +1149,31 @@ pub fn render_processing_table(
                         ui.label(egui::RichText::new(get_file_size(path)).weak());
                     });
                     row.col(|ui| {
-                        render_progress_cell(ui, pct);
+                        if is_cancelled {
+                            ui.label(
+                                egui::RichText::new("Cancelling…")
+                                    .color(egui::Color32::from_rgb(220, 160, 40))
+                                    .small(),
+                            );
+                        } else {
+                            render_progress_cell(ui, pct);
+                        }
+                    });
+                    row.col(|ui| {
+                        if !is_cancelled {
+                            let flag = cancel_flags.get(i).cloned();
+                            let stop_btn = egui::Button::new(
+                                egui::RichText::new("⏹  Stop")
+                                    .color(egui::Color32::from_rgb(220, 80, 60))
+                                    .small(),
+                            )
+                            .min_size(egui::vec2(60.0, 22.0));
+                            if ui.add(stop_btn).on_hover_text("Cancel this file").clicked() {
+                                if let Some(flag) = flag {
+                                    flag.store(true, Ordering::Relaxed);
+                                }
+                            }
+                        }
                     });
                 });
             }
@@ -658,6 +1249,12 @@ pub fn render_completed_table(
                             ui.label(
                                 egui::RichText::new(format!("❌  {error}"))
                                     .color(ui.visuals().error_fg_color),
+                            );
+                        }
+                        crate::job::FileStatus::Cancelled => {
+                            ui.label(
+                                egui::RichText::new("⏹  Cancelled")
+                                    .color(egui::Color32::from_rgb(180, 140, 60)),
                             );
                         }
                         _ => {}

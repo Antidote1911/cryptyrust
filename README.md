@@ -3,118 +3,114 @@
 
 # Cryptyrust
 
-**Cross-platform file encryption with a drag-and-drop GUI and a CLI.**
+**Chiffrement de fichiers cross-platform — GUI drag-and-drop, CLI, et bibliothèque C FFI.**
 
-Pre-built binaries for Linux, macOS (universal), and Windows are available on the [releases page](https://github.com/Antidote1911/cryptyrust/releases/latest).
+Binaires pré-compilés pour Linux, macOS (universal) et Windows disponibles sur la [page releases](https://github.com/Antidote1911/cryptyrust/releases/latest).
 
 <img src='cryptyrust.png'/>
 
 ---
 
-## Table of Contents
+## Fonctionnalités
 
-- [Features](#features)
-- [Project Structure](#project-structure)
-- [GUI Usage](#gui-usage)
-- [CLI Usage](#cli-usage)
-- [Build Instructions](#build-instructions)
-- [Data Loss Disclaimer](#data-loss-disclaimer)
-
----
-
-## Features
-
-- Encrypts any file with the **Arsenic V1** format (`.arsn`)
-- **Drag-and-drop GUI** — drop files to encrypt or decrypt; mode is auto-detected
-- **CLI** for scripting and automation
-- Three selectable **AEAD ciphers** for header and payload, independently configurable
-- **Argon2id** key derivation (Interactive 256 MB / Sensitive 1 GB)
-- **Password change** without re-encrypting the payload
-- Optional **zstd compression** before encryption
-- Built-in **cipher benchmark** — finds the fastest cipher for your machine
-- Cross-platform: Linux, Windows, macOS
+- Format **Arsenic V1** (`.arsn`) — entièrement documenté dans [`arsenic/FORMAT.md`](arsenic/FORMAT.md)
+- **Chiffrement hybride post-quantique** — X25519 + ML-KEM-768 (NIST FIPS 203) pour les destinataires asymétriques. Résiste aux ordinateurs quantiques futurs (harvest-now-decrypt-later)
+- **GUI drag-and-drop** — déposer des fichiers pour chiffrer ou déchiffrer ; mode auto-détecté
+- **CLI** pour le scripting et l'automatisation
+- **Gestion de clés** intégrée : générer des paires de clés hybrides, ajouter des contacts, chiffrer pour plusieurs destinataires
+- Trois **chiffrements AEAD** sélectionnables indépendamment pour l'en-tête et le payload
+- **Argon2id** pour la dérivation de clé (Interactive 256 MiB / Sensitive 1 GiB)
+- **Changement de mot de passe** sans re-chiffrer le payload
+- **Benchmark** intégré — trouve le chiffrement le plus rapide pour votre machine
+- Cross-platform : Linux, Windows, macOS
 
 ---
 
-## Project Structure
+## Structure du projet
 
-| Crate / Dir | Output | Description |
+| Crate / Répertoire | Sortie | Description |
 |---|---|---|
-| [`arsenic/`](arsenic/) | — | Core cryptographic library — [README](arsenic/README.md) · [Format spec](arsenic/FORMAT.md) |
-| [`cli/`](cli/) | `cryptyrust_cli` | Command-line interface |
-| [`gui/`](gui/) | `cryptyrust` | Native GUI built with [egui](https://github.com/emilk/egui) |
-| [`ffi/`](ffi/) | `libarsenic_ffi.so/.a` | C-compatible FFI layer |
-| [`ffi_test/`](ffi_test/) | `arsenic_test` | Minimal C++ demo (encrypt / decrypt / bench) |
+| [`arsenic/`](arsenic/) | bibliothèque | Core cryptographique — [README](arsenic/README.md) · [Spec format](arsenic/FORMAT.md) |
+| [`cli/`](cli/) | `cryptyrust_cli` | Interface ligne de commande — [README](cli/README.md) |
+| [`gui/`](gui/) | `cryptyrust` | GUI native (egui) — [README](gui/README.md) |
+| [`ffi/`](ffi/) | `libarsenic_ffi.so/.a` | Couche FFI compatible C — [README](ffi/README.md) |
+| [`crypty-keygen/`](crypty-keygen/) | `crypty-keygen` | Générateur de clés hybrides — [README](crypty-keygen/README.md) |
 
 ---
 
-## GUI Usage
+## GUI — utilisation
 
-1. **Drag and drop** files onto the window — or click **Add files**.
-2. Cryptyrust auto-detects the mode:
-   - All files are `.arsn` → **Decrypt** mode
-   - All files are plaintext → **Encrypt** mode
-   - Mixed selection → a warning is shown; remove the odd files to proceed
-3. Click **Encrypt** or **Decrypt**, enter your password (confirm on encryption).
-4. To **change the password** of a single `.arsn` file, select it alone and click **Change password**.
+1. **Glisser-déposer** des fichiers sur la fenêtre, ou cliquer **Add files**.
+2. Le mode est auto-détecté : `.arsn` → **Decrypt**, plaintext → **Encrypt**.
+3. Cliquer **Encrypt** / **Decrypt** et entrer le mot de passe.
+
+### Chiffrement pour des destinataires (sans mot de passe)
+
+1. Ouvrir **Keys → Key Manager** → générer un keypair ou ajouter un contact.
+2. Lors du chiffrement, sélectionner les destinataires dans la popup — le mot de passe devient optionnel.
+3. Le destinataire déchiffre avec sa clé privée, sans connaître le mot de passe.
 
 ### Configuration
 
-Open the **Config** menu to adjust encryption settings:
-
-| Setting | Options | Default |
+| Réglage | Options | Défaut |
 |---|---|---|
-| Argon2id strength | Interactive (256 MB) · Sensitive (1 GB) | Interactive |
+| Argon2id strength | Interactive (256 MiB) · Sensitive (1 GiB) | Interactive |
 | Header cipher | Deoxys-II-256 · AES-256-GCM-SIV · XChaCha20-Poly1305 | Deoxys-II-256 |
 | Payload cipher | XChaCha20-Poly1305 · AES-256-GCM-SIV · Deoxys-II-256 | XChaCha20-Poly1305 |
-| Compression | zstd level 3 | Disabled |
-
-The status bar always shows the active configuration. Settings are persisted between sessions.
-
-Click **⏱ Benchmark ciphers…** to measure throughput on your machine and apply the fastest combination automatically.
 
 ---
 
-## CLI Usage
+## CLI — utilisation rapide
 
 ```bash
-# Encrypt
-cryptyrust_cli -e secret.pdf -p "my passphrase"
+# Chiffrer avec mot de passe
+cryptyrust_cli -e document.pdf -p "ma phrase secrète"
 
-# Decrypt
-cryptyrust_cli -d secret.pdf.arsn -p "my passphrase"
+# Déchiffrer (essai auto des clés stockées, puis demande le mot de passe)
+cryptyrust_cli -d document.pdf.arsn
 
-# Change password in-place
-cryptyrust_cli --rekey secret.pdf.arsn
+# Chiffrer pour des destinataires (sans mot de passe)
+cryptyrust_cli -e document.pdf -R alice -R bob
 
-# Benchmark ciphers
+# Déchiffrer avec un fichier de clé spécifique
+cryptyrust_cli -d document.pdf.arsn -i ~/.config/cryptyrust/keys/alice.key
+
+# Changer le mot de passe (ne re-chiffre pas le payload)
+cryptyrust_cli --rekey document.pdf.arsn
+
+# Benchmark des chiffrements
 cryptyrust_cli --bench
 ```
 
+---
+
+## crypty-keygen — gestion des clés
+
+```bash
+# Générer un keypair et l'afficher (stdout)
+crypty-keygen -n alice
+
+# Sauvegarder directement dans le keystore partagé (~/.config/cryptyrust/keys/)
+crypty-keygen -n alice --store
+
+# Lister les clés stockées
+crypty-keygen --list
+
+# Extraire la clé publique d'un fichier .key
+crypty-keygen -y alice.key
 ```
-Options:
-  -e, --encrypt <FILE>         File to encrypt
-  -d, --decrypt <FILE>         File to decrypt
-  -k, --rekey <FILE>           Change password of an encrypted file in-place
-      --bench                  Benchmark AEAD cipher throughput on this machine
-  -o, --output <PATH>          Output file
-  -p, --password <PASSWORD>    Password
-  -f, --passwordfile <FILE>    Read password from a file (UTF-8)
-      --strength <STRENGTH>    interactive (default) | sensitive
-      --hdr-cipher <CIPHER>    deoxys-ii (default) | xchacha20 | aes-gcm-siv
-      --pld-cipher <CIPHER>    xchacha20 (default) | deoxys-ii | aes-gcm-siv
-```
+
+Le keystore est partagé entre la GUI, le CLI et crypty-keygen — une clé générée par l'un est immédiatement disponible dans les autres.
 
 ---
 
-## Build Instructions
+## Compilation
 
-### Prerequisites
+### Prérequis
 
-- [Rust toolchain](https://rustup.rs/) (stable)
-- **Linux only** — X11 / Wayland development packages:
+- [Rust toolchain](https://rustup.rs/) stable
+- **Linux uniquement** — paquets de développement X11 / Wayland :
   ```bash
-  # Debian / Ubuntu
   sudo apt install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
                    libxkbcommon-dev libssl-dev pkg-config
   ```
@@ -125,6 +121,7 @@ Options:
 cargo build --release
 # CLI → target/release/cryptyrust_cli
 # GUI → target/release/cryptyrust
+# keygen → target/release/crypty-keygen
 ```
 
 ### macOS universal binary
@@ -138,23 +135,17 @@ lipo -create target/x86_64-apple-darwin/release/cryptyrust \
              -output cryptyrust_universal
 ```
 
-### Windows
+---
 
-Install [Visual Studio Build Tools](https://visualstudio.microsoft.com/visual-cpp-build-tools/) with the **Desktop development with C++** workload, then:
+## Avertissement sur la perte de données
 
-```bat
-cargo build --release
-```
+Si vous perdez ou oubliez votre mot de passe, **vos données ne peuvent pas être récupérées.** Il n'y a pas de porte dérobée ni de mécanisme de récupération. Utilisez un gestionnaire de mots de passe ou conservez une sauvegarde sécurisée de votre phrase de passe.
+
+Si vous avez chiffré pour des destinataires asymétriques sans mot de passe, la perte de la clé privée `.key` est également irrécupérable.
 
 ---
 
-## Data Loss Disclaimer
+## Bibliothèque et format
 
-If you lose or forget your password, **your data cannot be recovered.** There is no back door and no recovery mechanism. Use a password manager or keep a secure backup of your passphrase.
-
----
-
-## Cryptographic library & format
-
-All cryptographic logic lives in the [`arsenic`](arsenic/) crate.
-See [`arsenic/README.md`](arsenic/README.md) for the API and [`arsenic/FORMAT.md`](arsenic/FORMAT.md) for the full Arsenic V1 binary format specification.
+Toute la logique cryptographique est dans la crate [`arsenic`](arsenic/).  
+Voir [`arsenic/README.md`](arsenic/README.md) pour l'API et [`arsenic/FORMAT.md`](arsenic/FORMAT.md) pour la spécification binaire complète du format Arsenic V1.

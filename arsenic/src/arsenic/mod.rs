@@ -2,13 +2,21 @@ pub mod bench;
 mod cipher_dispatch;
 mod crypto;
 pub(crate) mod header;
+pub(crate) mod hybrid_kem;
 
-pub use crypto::{decrypt_arsenic, encrypt_arsenic, rekey_arsenic};
-pub use header::{EnvelopeMetadata, MIN_HEADER_TOTAL_SIZE, WRAPPED_DEK_LEN};
+pub use crypto::{
+    decrypt_arsenic, decrypt_arsenic_with_key, encrypt_arsenic, find_decrypting_key,
+    list_recipients, rekey_arsenic,
+    build_header_with_added_recipient, build_header_with_removed_recipient,
+};
 
-// Safety limits (DoS protection)
+use crate::arsenic::hybrid_kem::EK_LEN as MLKEM_EK_LEN;
+pub use header::{HybridKeyslot, EnvelopeMetadata, MIN_HEADER_TOTAL_SIZE, WRAPPED_DEK_LEN};
+
+// Safety limits (DoS protection).
+// u32 header_total_size allows headers up to 64 MiB, supporting ~700 000 recipients.
 pub const MAX_ARGON2_RAM_KB: u32 = 8 * 1024 * 1024; // 8 GB
-pub const MAX_HEADER_TOTAL_SIZE: u16 = 4096;
+pub const MAX_HEADER_TOTAL_SIZE: u32 = 64 * 1024 * 1024; // 64 MiB
 
 // Block size constants
 pub const BLOCK_SIZE_4MB: usize = 4 * 1024 * 1024;
@@ -18,10 +26,25 @@ pub const LARGE_FILE_THRESHOLD: u64 = 4 * 1024 * 1024 * 1024; // 4 GB
 pub const BLOCK_ID_4MB: u8 = 0x01;
 pub const BLOCK_ID_32MB: u8 = 0x02;
 
-/// Default zstd compression level (zstd's own default: good ratio, fast).
-pub const ZSTD_DEFAULT_LEVEL: i32 = 3;
+/// A hybrid X25519 + ML-KEM-768 recipient public key.
+///
+/// Both components are derived from the same seed stored in the recipient's
+/// `.key` file, so contacts only need to share one combined key string.
+#[derive(Clone, Debug)]
+pub struct HybridRecipient {
+    /// X25519 public key — 32 bytes.
+    pub x25519: [u8; 32],
+    /// ML-KEM-768 encapsulation key — 1184 bytes.
+    pub mlkem: [u8; MLKEM_EK_LEN],
+}
 
-/// Cipher algorithm identifiers stored in the Arsenic V1 header.
+impl HybridRecipient {
+    pub fn new(x25519: [u8; 32], mlkem: [u8; MLKEM_EK_LEN]) -> Self {
+        Self { x25519, mlkem }
+    }
+}
+
+/// Cipher algorithm identifiers stored in the Arsenic header.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CipherId {
     DeoxysII256 = 0x02,
@@ -46,42 +69,6 @@ impl CipherId {
     }
 }
 
-/// Compression algorithm applied to the plaintext before block splitting.
-/// Stored as a single byte in the public header (covered by HeaderMAC).
-///
-/// `None` is the default — existing files without compression are unaffected.
-/// `Zstd(level)` compresses the entire plaintext with zstd before encryption;
-/// the level (1–22) is an encryption-time parameter and is NOT stored in the file
-/// (decompression does not need it).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum Compression {
-    #[default]
-    None,
-    Zstd(i32),
-}
-
-impl Compression {
-    /// Map to the header byte stored at `0x09`.
-    pub fn to_byte(self) -> u8 {
-        match self {
-            Self::None => header::COMPRESS_NONE,
-            Self::Zstd(_) => header::COMPRESS_ZSTD,
-        }
-    }
-
-    /// Reconstruct from the header byte for decryption.
-    /// The level is irrelevant for decompression, so `Zstd(0)` is returned.
-    pub fn from_byte(b: u8) -> Result<Self, crate::errors::CoreErr> {
-        match b {
-            header::COMPRESS_NONE => Ok(Self::None),
-            header::COMPRESS_ZSTD => Ok(Self::Zstd(0)), // level unused on decrypt
-            _ => Err(crate::errors::CoreErr::DecryptFail(format!(
-                "Unknown compression ID: {b:#x}"
-            ))),
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ArsenicStrength {
     Interactive,
@@ -95,10 +82,9 @@ pub struct ArsenicParams {
     pub p_cost: u32,
     pub hdr_cipher: CipherId,
     pub pld_cipher: CipherId,
-    /// Optional metadata stored inside the encrypted TLV envelope.
     pub metadata: EnvelopeMetadata,
-    /// Compression applied before block encryption. Disabled by default.
-    pub compression: Compression,
+    /// Hybrid (X25519 + ML-KEM-768) recipients. Each gets an independent keyslot.
+    pub recipients: Vec<HybridRecipient>,
 }
 
 impl Default for ArsenicParams {
@@ -112,21 +98,21 @@ impl From<ArsenicStrength> for ArsenicParams {
         match s {
             ArsenicStrength::Interactive => Self {
                 t_cost: 4,
-                m_cost: 256 * 1024, // 256 MB
+                m_cost: 256 * 1024,
                 p_cost: 4,
                 hdr_cipher: CipherId::DeoxysII256,
                 pld_cipher: CipherId::XChaCha20Poly1305,
                 metadata: EnvelopeMetadata::default(),
-                compression: Compression::None,
+                recipients: vec![],
             },
             ArsenicStrength::Sensitive => Self {
                 t_cost: 12,
-                m_cost: 1024 * 1024, // 1 GB
+                m_cost: 1024 * 1024,
                 p_cost: 4,
                 hdr_cipher: CipherId::DeoxysII256,
                 pld_cipher: CipherId::XChaCha20Poly1305,
                 metadata: EnvelopeMetadata::default(),
-                compression: Compression::None,
+                recipients: vec![],
             },
         }
     }

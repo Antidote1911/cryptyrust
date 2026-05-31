@@ -4,8 +4,8 @@ use crate::app::CryptyApp;
 use crate::file_utils::{arsenic_strength_label, cipher_short_label, is_cryptyrust_file, Mode};
 use crate::job::JobState;
 use crate::ui::components;
-use crate::ui::components::compression_short_label;
-use arsenic::Compression;
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 
 pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool, popup_open: bool) {
     egui::Panel::top("menubar").show_inside(ui, |ui| {
@@ -20,6 +20,16 @@ pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool,
                         app.add_files(paths);
                     }
                 }
+                if ui
+                    .add_enabled(!is_running && !popup_open, egui::Button::new("Add folder…"))
+                    .on_hover_text("Add all files inside a folder (recursive)")
+                    .clicked()
+                {
+                    ui.close();
+                    if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+                        app.add_files(std::iter::once(folder));
+                    }
+                }
                 ui.separator();
                 if ui
                     .add_enabled(
@@ -31,6 +41,22 @@ pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool,
                     ui.close();
                     app.clear_all();
                 }
+                if is_running {
+                    ui.separator();
+                    if ui
+                        .add(
+                            egui::Button::new(
+                                egui::RichText::new("⏹  Stop all tasks")
+                                    .color(egui::Color32::from_rgb(220, 80, 60)),
+                            ),
+                        )
+                        .on_hover_text("Cancel all pending and in-progress operations")
+                        .clicked()
+                    {
+                        ui.close();
+                        app.job.cancel_all();
+                    }
+                }
                 ui.separator();
                 if ui.button("Quit").clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
@@ -38,6 +64,13 @@ pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool,
             });
 
             components::render_config_menu(app, ui, is_running);
+
+            ui.menu_button("Keys", |ui| {
+                if ui.button("Key Manager…").clicked() {
+                    ui.close();
+                    app.show_key_manager = true;
+                }
+            });
 
             ui.menu_button("About", |ui| {
                 if ui.button("About Cryptyrust…").clicked() {
@@ -72,13 +105,6 @@ pub fn render_bottom_bar(app: &CryptyApp, ui: &mut egui::Ui) {
                     cipher_short_label(app.hdr_cipher),
                     cipher_short_label(app.pld_cipher),
                 )));
-                ui.separator();
-                let compress_label = compression_short_label(if app.compress {
-                    Compression::Zstd(0)
-                } else {
-                    Compression::None
-                });
-                ui.label(egui::RichText::new(format!("📦  {compress_label}")));
             });
         });
 }
@@ -100,6 +126,7 @@ pub fn render_action_bar(
     let mut do_change_pw = false;
     let mut do_clear = false;
     let mut do_add = false;
+    let mut do_add_folder = false;
     let mut do_quit = false;
 
     egui::Panel::bottom("actionbar")
@@ -125,6 +152,20 @@ pub fn render_action_bar(
                         .clicked()
                     {
                         do_add = true;
+                    }
+
+                    ui.add_space(4.0);
+
+                    // ── Add folder ─────────────────────────────────────
+                    if ui
+                        .add_enabled(
+                            !is_running && !popup_open,
+                            egui::Button::new("📁  Add folder").min_size(egui::vec2(105.0, 32.0)),
+                        )
+                        .on_hover_text("Add all files inside a folder (recursive)")
+                        .clicked()
+                    {
+                        do_add_folder = true;
                     }
 
                     if !app.files.is_empty() {
@@ -190,7 +231,7 @@ pub fn render_action_bar(
         });
 
     if do_open_popup {
-        app.open_popup();
+        app.open_popup_or_auto_decrypt(ui.ctx());
     }
     if do_change_pw {
         app.open_change_pw_popup();
@@ -201,6 +242,11 @@ pub fn render_action_bar(
     if do_add {
         if let Some(paths) = rfd::FileDialog::new().pick_files() {
             app.add_files(paths);
+        }
+    }
+    if do_add_folder {
+        if let Some(folder) = rfd::FileDialog::new().pick_folder() {
+            app.add_files(std::iter::once(folder));
         }
     }
     if do_quit {
@@ -220,9 +266,18 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
                 progress,
                 current_file,
                 processing_files,
+                cancel_flags,
+                cancel_all,
                 ..
             } => {
-                render_processing_view(ui, progress, current_file, processing_files);
+                render_processing_view(
+                    ui,
+                    progress,
+                    current_file,
+                    processing_files,
+                    cancel_flags,
+                    cancel_all,
+                );
             }
             JobState::Completed {
                 files,
@@ -257,10 +312,19 @@ fn render_processing_view(
     progress: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<usize, i32>>>,
     current_file: &std::sync::Arc<std::sync::Mutex<usize>>,
     processing_files: &[std::path::PathBuf],
+    cancel_flags: &[Arc<AtomicBool>],
+    cancel_all: &Arc<AtomicBool>,
 ) {
     let current_idx = *current_file.lock().unwrap();
     let file_progress = progress.lock().unwrap();
-    components::render_processing_table(ui, processing_files, &file_progress, current_idx);
+    components::render_processing_table(
+        ui,
+        processing_files,
+        &file_progress,
+        current_idx,
+        cancel_flags,
+        cancel_all,
+    );
 }
 
 fn render_completed_view(

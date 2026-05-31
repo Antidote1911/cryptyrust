@@ -1,5 +1,7 @@
 use arsenic::{
-    arsenic_main_routine, arsenic_rekey, is_arsenic_file,
+    arsenic_find_matching_key, arsenic_main_routine, arsenic_main_routine_with_key,
+    arsenic_rekey, is_arsenic_file,
+    keystore::{load_identity_file, load_keystore, resolve_recipient},
     ArsenicParams, Direction, Secret, Ui,
     bench_cipher_combinations, best_combination, CipherId,
 };
@@ -87,10 +89,7 @@ fn main() {
     if app.rekey().is_some() {
         match run_rekey(&app) {
             Ok(path) => println!("\nSuccess! Password changed for {}", path),
-            Err(e) => {
-                eprintln!("\n{}", e);
-                std::process::exit(1);
-            }
+            Err(e) => { eprintln!("\n{}", e); std::process::exit(1); }
         }
     } else {
         match run_crypt(&app) {
@@ -100,13 +99,10 @@ fn main() {
                     Direction::Decrypt => "decrypted",
                 };
                 if let Some(name) = output_filename {
-                    println!("\nSuccess! {} has been {} in {} s", name, m, time);
+                    println!("\nSuccess! {} has been {} in {:.2} s", name, m, time);
                 }
             }
-            Err(e) => {
-                eprintln!("\n{}", e);
-                std::process::exit(1);
-            }
+            Err(e) => { eprintln!("\n{}", e); std::process::exit(1); }
         }
     }
 }
@@ -116,20 +112,18 @@ fn main() {
 fn run_rekey(app: &Cli) -> Result<String> {
     let f = app.rekey().unwrap();
     let path = Path::new(f);
-
     if !(path.exists() && path.is_file()) {
         return Err(anyhow!("Invalid filename: {}", f));
     }
     if !is_arsenic_file(path) {
-        return Err(anyhow!("{} is not a valid Arsenic V1 (.arsn) file", f));
+        return Err(anyhow!("{} is not a valid Arsenic (.arsn) file", f));
     }
-
     let old_password = Secret::new(
         rpassword::prompt_password("Current password: ")
             .context("could not read current password")?,
     );
     let new_password = Secret::new(
-        rpassword::prompt_password("New password (minimum 8 characters, longer is better): ")
+        rpassword::prompt_password("New password (minimum 8 characters): ")
             .context("could not read new password")?,
     );
     if new_password.expose().len() < 8 {
@@ -140,10 +134,8 @@ fn run_rekey(app: &Cli) -> Result<String> {
     if new_password.expose() != &confirm {
         return Err(anyhow!("new passwords do not match"));
     }
-
-    let ui = RekeyProgress::new();
-    arsenic_rekey(path, &old_password, &new_password, &ui).map_err(|e| anyhow!(e))?;
-
+    arsenic_rekey(path, &old_password, &new_password, &RekeyProgress::new())
+        .map_err(|e| anyhow!(e))?;
     Ok(f.to_string())
 }
 
@@ -157,92 +149,185 @@ fn run_crypt(app: &Cli) -> Result<(Option<String>, Direction, f64)> {
     };
 
     let filename = if app.encrypt().is_some() {
-        let f = app.encrypt().ok_or("file to encrypt not given").unwrap();
-        let p = Path::new(&f);
-        if !(p.exists() && p.is_file()) {
-            return Err(anyhow!("Invalid filename: {}", f));
-        }
-        Some(f)
-    } else if app.decrypt().is_some() {
-        let f = app.decrypt().ok_or("file to decrypt not given").unwrap();
-        let p = Path::new(&f);
+        let f = app.encrypt().unwrap();
+        let p = Path::new(f);
         if !(p.exists() && p.is_file()) {
             return Err(anyhow!("Invalid filename: {}", f));
         }
         Some(f)
     } else {
-        None
+        let f = app.decrypt().unwrap();
+        let p = Path::new(f);
+        if !(p.exists() && p.is_file()) {
+            return Err(anyhow!("Invalid filename: {}", f));
+        }
+        Some(f)
     };
 
-    let output_path = {
-        let s = generate_output_path(&direction, filename, app.output())
-            .unwrap()
-            .to_str()
-            .ok_or("could not convert output path to string")
-            .unwrap()
-            .to_string();
-        Some(s)
-    };
+    let output_path = generate_output_path(&direction, filename, app.output())
+        .unwrap()
+        .to_str()
+        .ok_or("could not convert output path to string")
+        .unwrap()
+        .to_string();
 
-    let password: Secret<String> = if app.password().is_some() {
-        Secret::new(app.password().unwrap())
-    } else if app.passwordfile().is_some() {
-        let pw_file = app.passwordfile().unwrap();
-        let p = Path::new(&pw_file);
-        let tmp = std::fs::read_to_string(p)
-            .with_context(|| format!("could not read password file: {}", pw_file))?;
-        Secret::new(tmp)
-    } else {
-        get_password(&direction)?
-    };
-
-    let out_str = output_path.as_deref().unwrap();
+    let out_str = output_path.as_str();
     let ui = Box::new(ProgressUpdater::new(direction.clone()));
+
+    let duration = match direction {
+        Direction::Encrypt => run_encrypt(app, filename, out_str, ui)?,
+        Direction::Decrypt => run_decrypt(app, filename.unwrap(), out_str, ui)?,
+    };
+
+    Ok((Some(output_path), direction, duration))
+}
+
+// ── Encrypt ───────────────────────────────────────────────────────────────────
+
+fn run_encrypt(
+    app: &Cli,
+    filename: Option<&str>,
+    out_str: &str,
+    ui: Box<ProgressUpdater>,
+) -> Result<f64> {
+    // Resolve --recipient values to hybrid public keys.
+    let mut recipients: Vec<arsenic::HybridRecipient> = Vec::new();
+    for spec in app.recipients() {
+        match resolve_recipient(spec) {
+            Some(r) => recipients.push(r),
+            None => return Err(anyhow!(
+                "cannot resolve recipient '{}': not a contact name or key file with hybrid key",
+                spec
+            )),
+        }
+    }
+
+    // Determine password.
+    let password: Secret<String> = if !recipients.is_empty() && app.password().is_none()
+        && app.passwordfile().is_none()
+    {
+        // Recipients only, no password — use a random KEK (symmetric slot inaccessible).
+        let r = arsenic::random_bytes_32();
+        Secret::new(r.iter().map(|b| format!("{b:02x}")).collect())
+    } else {
+        get_password_for_encrypt(app)?
+    };
+
     let params = ArsenicParams {
         hdr_cipher: app.hdr_cipher(),
         pld_cipher: app.pld_cipher(),
+        recipients,
         ..ArsenicParams::from(app.strength())
     };
 
-    let duration = match arsenic_main_routine(
-        &direction,
+    arsenic_main_routine(
+        &Direction::Encrypt,
         filename,
         Some(out_str),
         &password,
         ui,
         Some(params),
-    ) {
-        Ok(d) => d,
-        Err(e) => return Err(anyhow!(e)),
-    };
-
-    Ok((output_path, direction, duration))
+    )
+    .map_err(|e| anyhow!(e))
 }
 
-// ── Password prompts ──────────────────────────────────────────────────────────
+// ── Decrypt ───────────────────────────────────────────────────────────────────
 
-fn get_password(mode: &Direction) -> Result<Secret<String>> {
-    match mode {
-        Direction::Encrypt => {
-            let password =
-                rpassword::prompt_password("Password (minimum 8 characters, longer is better): ")
-                    .context("could not get password from user")?;
-            if password.len() < 8 {
-                return Err(anyhow!("password must be at least 8 characters"));
-            }
-            let verified_password = rpassword::prompt_password("Confirm password: ")
-                .context("could not get password from user")?;
-            if password != verified_password {
-                return Err(anyhow!("passwords do not match"));
-            }
-            Ok(Secret::new(password))
+fn run_decrypt(
+    app: &Cli,
+    filename: &str,
+    out_str: &str,
+    ui: Box<ProgressUpdater>,
+) -> Result<f64> {
+    let path = Path::new(filename);
+
+    // 1. Explicit identity files via --identity/-i.
+    let explicit_identities: Vec<_> = app
+        .identities()
+        .iter()
+        .filter_map(|p| load_identity_file(Path::new(p)))
+        .collect();
+
+    if !explicit_identities.is_empty() {
+        let privkeys: Vec<[u8; 32]> = explicit_identities.iter().map(|k| k.private_key).collect();
+        if let Some(idx) = arsenic_find_matching_key(path, &privkeys) {
+            eprintln!("Decrypting with identity: {}", explicit_identities[idx].name);
+            return arsenic_main_routine_with_key(
+                Some(filename),
+                Some(out_str),
+                &Secret::new(privkeys[idx]),
+                ui,
+            )
+            .map_err(|e| anyhow!(e));
         }
-        Direction::Decrypt => {
-            let password = rpassword::prompt_password("Password: ")
-                .context("could not get password from user")?;
-            Ok(Secret::new(password))
+        // Explicit identities given but none matched — fall through to password.
+        eprintln!("Note: none of the provided identities matched; trying password.");
+    } else {
+        // 2. Auto-detect from the shared keystore (same behaviour as the GUI).
+        let keystore = load_keystore();
+        if !keystore.is_empty() {
+            let privkeys: Vec<[u8; 32]> = keystore.iter().map(|k| k.private_key).collect();
+            if let Some(idx) = arsenic_find_matching_key(path, &privkeys) {
+                eprintln!("Decrypting with stored key: {}", keystore[idx].name);
+                return arsenic_main_routine_with_key(
+                    Some(filename),
+                    Some(out_str),
+                    &Secret::new(privkeys[idx]),
+                    ui,
+                )
+                .map_err(|e| anyhow!(e));
+            }
         }
     }
+
+    // 3. Fall back to password.
+    let password = get_password_for_decrypt(app)?;
+    arsenic_main_routine(
+        &Direction::Decrypt,
+        Some(filename),
+        Some(out_str),
+        &password,
+        ui,
+        None,
+    )
+    .map_err(|e| anyhow!(e))
+}
+
+// ── Password helpers ──────────────────────────────────────────────────────────
+
+fn get_password_for_encrypt(app: &Cli) -> Result<Secret<String>> {
+    if let Some(p) = app.password() {
+        return Ok(Secret::new(p));
+    }
+    if let Some(f) = app.passwordfile() {
+        let s = std::fs::read_to_string(f)
+            .with_context(|| format!("cannot read password file: {}", f))?;
+        return Ok(Secret::new(s));
+    }
+    let pw = rpassword::prompt_password("Password (minimum 8 characters): ")
+        .context("could not read password")?;
+    if pw.len() < 8 {
+        return Err(anyhow!("password must be at least 8 characters"));
+    }
+    let confirm = rpassword::prompt_password("Confirm password: ")
+        .context("could not confirm password")?;
+    if pw != confirm {
+        return Err(anyhow!("passwords do not match"));
+    }
+    Ok(Secret::new(pw))
+}
+
+fn get_password_for_decrypt(app: &Cli) -> Result<Secret<String>> {
+    if let Some(p) = app.password() {
+        return Ok(Secret::new(p));
+    }
+    if let Some(f) = app.passwordfile() {
+        let s = std::fs::read_to_string(f)
+            .with_context(|| format!("cannot read password file: {}", f))?;
+        return Ok(Secret::new(s));
+    }
+    let pw = rpassword::prompt_password("Password: ").context("could not read password")?;
+    Ok(Secret::new(pw))
 }
 
 // ── Output path helpers ───────────────────────────────────────────────────────
@@ -257,7 +342,7 @@ fn generate_output_path(
         if p.exists() && p.is_dir() {
             generate_default_filename(mode, p, input)
         } else if p.exists() && p.is_file() {
-            Err(format!("Error: file {:?} already exists. Must choose new filename or specify directory to generate default filename.", p))
+            Err(format!("Error: file {:?} already exists.", p))
         } else {
             Ok(p)
         }
@@ -284,7 +369,7 @@ fn generate_default_filename(
                 name.strip_suffix(ARSENIC_EXTENSION).unwrap().to_string()
             } else {
                 prepend("decrypted_".to_string(), name)
-                    .ok_or(format!("could not prepend decrypted_ to filename {}", name))?
+                    .ok_or(format!("could not prepend decrypted_ to {}", name))?
             }
         }
     };
@@ -295,21 +380,16 @@ fn generate_default_filename(
 fn find_filename(path: PathBuf) -> Option<PathBuf> {
     let mut i = 1;
     let mut path = path;
-    let backup_path = path.clone();
+    let backup = path.clone();
     while path.exists() {
-        path = backup_path.clone();
-        let stem = match path.file_stem() {
-            Some(s) => s.to_string_lossy().to_string(),
-            None => "".to_string(),
-        };
-        let ext = match path.extension() {
-            Some(s) => s.to_string_lossy().to_string(),
-            None => "".to_string(),
-        };
+        path = backup.clone();
+        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+        let ext  = path.extension().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let parent = path.parent()?;
-        let new_file = match ext.as_str() {
-            "" => format!("{} ({})", stem, i),
-            _ => format!("{} ({}).{}", stem, i, ext),
+        let new_file = if ext.is_empty() {
+            format!("{} ({})", stem, i)
+        } else {
+            format!("{} ({}).{}", stem, i, ext)
         };
         path = [parent, Path::new(&new_file)].iter().collect();
         i += 1;
@@ -321,12 +401,7 @@ fn prepend(prefix: String, p: &str) -> Option<String> {
     let mut path = PathBuf::from(p);
     let file = path.file_name()?;
     let parent = path.parent()?;
-    path = [
-        parent,
-        Path::new(&format!("{}{}", prefix, file.to_string_lossy())),
-    ]
-    .iter()
-    .collect();
+    path = [parent, Path::new(&format!("{}{}", prefix, file.to_string_lossy()))].iter().collect();
     Some(path.to_string_lossy().to_string())
 }
 
@@ -334,11 +409,7 @@ fn prepend(prefix: String, p: &str) -> Option<String> {
 
 fn run_bench() {
     const PAYLOAD_MIB: usize = 32;
-
-    println!(
-        "Benchmarking 3 AEAD ciphers on {} MiB (Interactive Argon2id key, single run)...\n",
-        PAYLOAD_MIB
-    );
+    println!("Benchmarking 3 AEAD ciphers on {} MiB...\n", PAYLOAD_MIB);
 
     let pb = ProgressBar::new(100);
     pb.set_style(
@@ -346,15 +417,12 @@ fn run_bench() {
             .unwrap()
             .progress_chars("#>-"),
     );
-    pb.set_message("Argon2id key derivation...");
 
     struct BenchUi(ProgressBar);
     impl Ui for BenchUi {
         fn output(&self, pct: i32) {
             self.0.set_position(pct as u64);
-            if pct >= 10 {
-                self.0.set_message("Testing ciphers...");
-            }
+            if pct >= 10 { self.0.set_message("Testing ciphers..."); }
         }
     }
 
@@ -365,36 +433,23 @@ fn run_bench() {
     println!("  {}", "─".repeat(52));
     for (i, r) in results.iter().enumerate() {
         let tag = if i == 0 { "  ★ fastest" } else { "" };
-        println!(
-            "  {:<22} {:>9.0} MiB/s {:>9.0} MiB/s{}",
-            cipher_display_name(r.cipher),
-            r.encrypt_mibps,
-            r.decrypt_mibps,
-            tag,
-        );
+        println!("  {:<22} {:>9.0} MiB/s {:>9.0} MiB/s{}", cipher_name(r.cipher), r.encrypt_mibps, r.decrypt_mibps, tag);
     }
-
     let (hdr, pld) = best_combination(&results);
-    println!("\n  Fastest combination for this machine:");
-    println!(
-        "    --hdr-cipher {}  --pld-cipher {}\n",
-        cipher_cli_arg(hdr),
-        cipher_cli_arg(pld),
-    );
+    println!("\n  Fastest:  --hdr-cipher {}  --pld-cipher {}\n", cipher_arg(hdr), cipher_arg(pld));
 }
 
-fn cipher_display_name(c: CipherId) -> &'static str {
+fn cipher_name(c: CipherId) -> &'static str {
     match c {
-        CipherId::DeoxysII256 => "Deoxys-II-256",
+        CipherId::DeoxysII256      => "Deoxys-II-256",
         CipherId::XChaCha20Poly1305 => "XChaCha20-Poly1305",
-        CipherId::Aes256GcmSiv => "AES-256-GCM-SIV",
+        CipherId::Aes256GcmSiv     => "AES-256-GCM-SIV",
     }
 }
-
-fn cipher_cli_arg(c: CipherId) -> &'static str {
+fn cipher_arg(c: CipherId) -> &'static str {
     match c {
-        CipherId::DeoxysII256 => "deoxys-ii",
+        CipherId::DeoxysII256      => "deoxys-ii",
         CipherId::XChaCha20Poly1305 => "xchacha20",
-        CipherId::Aes256GcmSiv => "aes-gcm-siv",
+        CipherId::Aes256GcmSiv     => "aes-gcm-siv",
     }
 }

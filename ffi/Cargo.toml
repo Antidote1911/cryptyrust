@@ -12,6 +12,9 @@ crate-type = ["cdylib", "staticlib"]
 [dependencies]
 arsenic = { path = "../arsenic" }
 
+[dev-dependencies]
+tempfile = "3"
+
 # FFI requires unsafe code — do not inherit workspace's unsafe_code = "forbid"
 [lints.rust]
 unsafe_code = "allow"
