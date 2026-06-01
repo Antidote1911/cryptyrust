@@ -1,19 +1,29 @@
 use clap::{ArgGroup, Parser};
 use arsenic::{ArsenicStrength, CipherId};
+use std::path::PathBuf;
 
 const ABOUT: &str = "
-Arsenic file encryption — encrypts and decrypts files with AEAD ciphers and
-an Argon2id-derived key.  Asymmetric (X25519) recipients are supported: use
-`crypty-keygen --store` to create a keypair, then pass `-R name` to encrypt.
+Arsenic file encryption — encrypts, decrypts, and manages keys.
+
+Key management:
+  cryptyrust keygen -n alice --store   Generate a keypair and save to keystore
+  cryptyrust keygen --list             List all stored keypairs
+  cryptyrust keygen -y alice.key       Show public key of a .key file
+
+Encryption / decryption:
+  cryptyrust -e FILE                   Encrypt
+  cryptyrust -d FILE                   Decrypt
+  cryptyrust --rekey FILE              Change password
+  cryptyrust --bench                   Benchmark ciphers
 
 Author : Fabrice Corraire <antidote1911@gmail.com>
 Github : https://github.com/Antidote1911/
 ";
 
 #[derive(Parser)]
-#[clap(about=ABOUT, author, version)]
-#[clap(group(ArgGroup::new("mode").required(true).args(&["encrypt","decrypt","rekey","bench"])))]
-#[clap(group(ArgGroup::new("passwordflags").args(&["password","passwordfile"])))]
+#[clap(about = ABOUT, author, version)]
+#[clap(group(ArgGroup::new("mode").required(true).args(&["encrypt", "decrypt", "rekey", "bench"])))]
+#[clap(group(ArgGroup::new("passwordflags").args(&["password", "passwordfile"])))]
 pub struct Cli {
     /// File to encrypt.
     #[clap(long, short, value_name = "FILE")]
@@ -41,7 +51,6 @@ pub struct Cli {
 
     /// Encrypt for a recipient (repeatable).
     /// Each value can be:
-    ///   - a public key string (arsenic1...)
     ///   - a contact name stored in the keystore
     ///   - a path to an identity file (.key)
     #[clap(short = 'R', long = "recipient", value_name = "PUBKEY_OR_NAME", action = clap::ArgAction::Append)]
@@ -82,16 +91,47 @@ pub enum CipherArg {
     AesGcmSiv,
 }
 
+// ── Key-management sub-command ────────────────────────────────────────────────
+
+#[derive(Parser)]
+#[clap(name = "cryptyrust keygen", author, version)]
+#[clap(about = "Generate and manage hybrid keypairs (X25519 + ML-KEM-768)")]
+pub struct KeygenCli {
+    /// Name to embed in the key file.
+    #[clap(short, long, value_name = "NAME", default_value = "")]
+    pub name: String,
+
+    /// Save the new keypair directly to the shared keystore
+    /// (`{config}/cryptyrust/keys/`).  Requires --name.
+    #[clap(short, long)]
+    pub store: bool,
+
+    /// Write the identity file to OUTPUT instead of stdout (permissions 0600 on Unix).
+    #[clap(short, long, value_name = "FILE")]
+    pub output: Option<PathBuf>,
+
+    /// List all keypairs stored in the shared keystore and exit.
+    #[clap(short, long)]
+    pub list: bool,
+
+    /// Convert identity file(s) to their public keys and print to stdout.
+    /// Pass `-` to read from stdin.
+    #[clap(short = 'y', long = "to-public", value_name = "IDENTITY", num_args = 1..)]
+    pub to_public: Vec<String>,
+}
+
+// ── Main CLI ──────────────────────────────────────────────────────────────────
+
 impl Cli {
-    pub fn password(&self)     -> Option<String> { self.password.clone() }
-    pub fn passwordfile(&self)  -> Option<&str>   { self.passwordfile.as_deref() }
-    pub fn output(&self)        -> Option<&str>   { self.output.as_deref() }
-    pub fn encrypt(&self)       -> Option<&str>   { self.encrypt.as_deref() }
-    pub fn decrypt(&self)       -> Option<&str>   { self.decrypt.as_deref() }
-    pub fn rekey(&self)         -> Option<&str>   { self.rekey.as_deref() }
-    pub fn bench(&self)         -> bool           { self.bench }
-    pub fn recipients(&self)    -> &[String]      { &self.recipients }
-    pub fn identities(&self)    -> &[String]      { &self.identities }
+    pub fn password(&self)    -> Option<String> { self.password.clone() }
+    pub fn passwordfile(&self) -> Option<&str>  { self.passwordfile.as_deref() }
+    pub fn output(&self)       -> Option<&str>  { self.output.as_deref() }
+    pub fn encrypt(&self)      -> Option<&str>  { self.encrypt.as_deref() }
+    pub fn decrypt(&self)      -> Option<&str>  { self.decrypt.as_deref() }
+    pub fn rekey(&self)        -> Option<&str>  { self.rekey.as_deref() }
+    pub fn bench(&self)        -> bool          { self.bench }
+    pub fn recipients(&self)   -> &[String]     { &self.recipients }
+    pub fn identities(&self)   -> &[String]     { &self.identities }
 
     pub fn strength(&self) -> ArsenicStrength {
         match self.strength {

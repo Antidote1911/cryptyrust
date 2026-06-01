@@ -4,14 +4,12 @@ resolver = "2"
 
 members = [
 	"arsenic",
-	"cli",
-	"crypty-keygen",
-	"gui",
+	"cryptyrust",
 	"ffi",
 ]
 
 [workspace.package]
-version = "1.3.4"
+version = "1.4.0"
 authors = ["Antidote1911 <antidote1911@gmail.com>"]
 
 [workspace.lints.rust]

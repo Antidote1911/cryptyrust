@@ -1,6 +1,10 @@
-#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+// On Windows, suppress the console window only when launched without CLI args.
+// The subsystem is decided at link time, so instead we allocate/free the console
+// at runtime on Windows when needed.
 
 mod app;
+mod cli;
+mod cli_runner;
 mod file_utils;
 mod job;
 mod keystore;
@@ -11,19 +15,14 @@ use eframe::egui;
 fn load_system_font() -> Option<Vec<u8>> {
     #[cfg(target_os = "linux")]
     let candidates = [
-        // Noto Sans (très répandu)
         "/usr/share/fonts/noto/NotoSans-Regular.ttf",
         "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        // DejaVu (présent par défaut sur beaucoup de distros)
         "/usr/share/fonts/TTF/DejaVuSans.ttf",
         "/usr/share/fonts/dejavu/DejaVuSans.ttf",
         "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-        // Liberation (clone de Arial)
         "/usr/share/fonts/liberation/LiberationSans-Regular.ttf",
         "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
-        // Ubuntu
         "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
-        // Cantarell (GNOME)
         "/usr/share/fonts/cantarell/Cantarell-Regular.otf",
         "/usr/share/fonts/truetype/cantarell/Cantarell-Regular.ttf",
     ];
@@ -72,7 +71,21 @@ fn setup_fonts(ctx: &egui::Context) {
     ctx.set_global_style(style);
 }
 
-fn main() -> Result<(), eframe::Error> {
+fn main() {
+    // If any argument is passed, run as a CLI tool (no window).
+    if std::env::args().len() > 1 {
+        cli_runner::run();
+        return;
+    }
+
+    // No arguments: launch the GUI.
+    if let Err(e) = run_gui() {
+        eprintln!("GUI error: {e}");
+        std::process::exit(1);
+    }
+}
+
+fn run_gui() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_inner_size([900.0, 600.0])

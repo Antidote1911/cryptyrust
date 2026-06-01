@@ -1,376 +1,373 @@
-# Algorithmes cryptographiques utilisés dans Arsenic
+> [Version française](algos_list_fr.md)
 
-Ce document liste et explique chaque algorithme cryptographique utilisé dans la bibliothèque
-`arsenic`. Les algorithmes sont regroupés par rôle fonctionnel.
+# Cryptographic Algorithms Used in Arsenic
+
+This document lists and explains every cryptographic algorithm used in the `arsenic` library. Algorithms are grouped by functional role.
 
 ---
 
-## Table des matières
+## Table of Contents
 
-1. [Dérivation de clé depuis un mot de passe — Argon2id](#1-argon2id)
-2. [MAC d'en-tête — HMAC-SHA256](#2-hmac-sha256)
-3. [Fonctions de hachage et dérivation interne — BLAKE3](#3-blake3)
-4. [Chiffrements authentifiés (AEAD)](#4-chiffrements-aead)
+1. [Password-based Key Derivation — Argon2id](#1-argon2id)
+2. [Header MAC — HMAC-SHA256](#2-hmac-sha256)
+3. [Hash Functions and Internal Derivation — BLAKE3](#3-blake3)
+4. [Authenticated Ciphers (AEAD)](#4-aead-ciphers)
    - 4a. Deoxys-II-256
    - 4b. XChaCha20-Poly1305
    - 4c. AES-256-GCM-SIV
-5. [KEM hybride post-quantique](#5-kem-hybride-post-quantique)
+5. [Post-quantum Hybrid KEM](#5-post-quantum-hybrid-kem)
    - 5a. X25519 (ECDH)
    - 5b. ML-KEM-768 (CRYSTALS-Kyber, NIST FIPS 203)
-6. [Arbre de Merkle](#6-arbre-de-merkle)
-7. [Encodage des clés — Bech32](#7-bech32)
-8. [Effacement sécurisé en mémoire — Zeroize](#8-zeroize)
-9. [Vue d'ensemble des rôles et interactions](#9-vue-densemble)
+6. [Merkle Tree](#6-merkle-tree)
+7. [Key Encoding — Bech32](#7-bech32)
+8. [Secure Memory Erasure — Zeroize](#8-zeroize)
+9. [Role Overview and Interactions](#9-overview)
 
 ---
 
 ## 1. Argon2id
 
-**Rôle :** dériver une clé cryptographique à partir d'un mot de passe humain.
+**Role:** derive a cryptographic key from a human password.
 
-**Standard :** vainqueur du Password Hashing Competition (PHC) 2015,
-recommandé par NIST SP 800-63B et OWASP.
+**Standard:** winner of the Password Hashing Competition (PHC) 2015,
+recommended by NIST SP 800-63B and OWASP.
 
-**Pourquoi Argon2id et pas bcrypt / scrypt / PBKDF2 ?**
+**Why Argon2id and not bcrypt / scrypt / PBKDF2?**
 
-| Propriété | Argon2id | bcrypt | scrypt | PBKDF2 |
+| Property | Argon2id | bcrypt | scrypt | PBKDF2 |
 |---|---|---|---|---|
-| Résistance GPU | ✓✓ (mémoire + temps) | ✓ | ✓✓ | ✗ |
-| Résistance FPGA/ASIC | ✓✓ | ✗ | ✓ | ✗ |
-| Protection côté canal | ✓ (hybride d | ✗ | ✗ | ✗ |
-| Configurabilité | mémoire, temps, parallélisme | temps seulement | mémoire + temps | temps seulement |
+| GPU resistance | ✓✓ (memory + time) | ✓ | ✓✓ | ✗ |
+| FPGA/ASIC resistance | ✓✓ | ✗ | ✓ | ✗ |
+| Side-channel protection | ✓ (hybrid d) | ✗ | ✗ | ✗ |
+| Configurability | memory, time, parallelism | time only | memory + time | time only |
 
-Argon2id combine Argon2d (résistant aux attaques par canal latéral GPU) et
-Argon2i (résistant aux compromis temps-mémoire). La variante `id` est la
-meilleure par défaut.
+Argon2id combines Argon2d (resistant to GPU side-channel attacks) and
+Argon2i (resistant to time-memory trade-offs). The `id` variant is the
+best default.
 
-**Deux usages distincts dans Arsenic :**
+**Two distinct uses in Arsenic:**
 
-### 1a. Pre-authentication (paramètres fixes)
+### 1a. Pre-authentication (fixed parameters)
 
-Utilisé pour générer le `PreKey` servant à vérifier le `HeaderMAC` **avant**
-de lancer la dérivation principale.
+Used to generate the `PreKey` for verifying the `HeaderMAC` **before**
+launching the main derivation.
 
 ```
-t_cost = 1         (1 itération)
-m_cost = 8 192 KB  (8 Mio)
+t_cost = 1         (1 iteration)
+m_cost = 8 192 KB  (8 MiB)
 p_cost = 1         (1 thread)
-output = 32 octets
+output = 32 bytes
 ```
 
-Coût typique : **~2 ms**. Suffisant pour rejeter un mauvais mot de passe
-rapidement (~15 000 tentatives/s sur GPU, contre >10⁹/s pour un HMAC-SHA256 nu),
-sans exposer de vecteur oracle à coût nul.
+Typical cost: **~2 ms**. Sufficient to reject a wrong password
+quickly (~15 000 attempts/s on GPU, vs. >10⁹/s for a bare HMAC-SHA256),
+without exposing a zero-cost oracle.
 
-### 1b. Dérivation principale du KEK (paramètres configurables)
+### 1b. Main KEK derivation (configurable parameters)
 
-Génère le KEK (Key Encryption Key) qui protège le DEK.
+Generates the KEK (Key Encryption Key) that protects the DEK.
 
-| Preset | `t_cost` | `m_cost` | `p_cost` | RAM | Temps typique |
+| Preset | `t_cost` | `m_cost` | `p_cost` | RAM | Typical time |
 |---|---|---|---|---|---|
-| **Interactive** *(défaut)* | 4 | 262 144 Ko | 4 | 256 Mio | ~1–3 s |
-| **Sensitive** | 12 | 1 048 576 Ko | 4 | 1 Gio | ~10–30 s |
+| **Interactive** *(default)* | 4 | 262 144 KB | 4 | 256 MiB | ~1–3 s |
+| **Sensitive** | 12 | 1 048 576 KB | 4 | 1 GiB | ~10–30 s |
 
-Les paramètres sont stockés en clair dans l'en-tête du fichier, ce qui
-permet de déchiffrer sans configuration externe. Ils sont intégrés au
-`HeaderMAC` et ne peuvent donc pas être modifiés silencieusement.
+Parameters are stored in plaintext in the file header, allowing
+decryption without external configuration. They are covered by the
+`HeaderMAC` and cannot be silently tampered with.
 
-**Résistance post-quantique :** Argon2id est une fonction à sens unique
-classique. L'algorithme de Grover réduit la sécurité d'une clé symétrique
-de 256 bits à 128 bits effectifs — Argon2id avec une sortie de 32 octets
-(256 bits) reste donc sécurisé face aux ordinateurs quantiques.
+**Post-quantum resistance:** Argon2id is a classical one-way function.
+Grover's algorithm reduces the security of a 256-bit symmetric key
+to 128 effective bits — Argon2id with a 32-byte (256-bit) output
+therefore remains secure against quantum computers.
 
 ---
 
 ## 2. HMAC-SHA256
 
-**Rôle :** authentifier l'en-tête public du fichier (`HeaderMAC`).
+**Role:** authenticate the file's public header (`HeaderMAC`).
 
-**Standard :** RFC 2104, NIST FIPS 198-1.
+**Standard:** RFC 2104, NIST FIPS 198-1.
 
-**Pourquoi SHA-256 et pas SHA-3 / BLAKE3 ?**
-SHA-256 est omniprésent, accéléré matériellement, et son utilisation dans
-HMAC est bien analysée. BLAKE3 aurait pu être utilisé, mais SHA-256 offre
-une meilleure interopérabilité et une compatibilité plus large avec les
-outils de vérification externes.
+**Why SHA-256 and not SHA-3 / BLAKE3?**
+SHA-256 is ubiquitous, hardware-accelerated, and its use in
+HMAC is well-analysed. BLAKE3 could have been used, but SHA-256 offers
+better interoperability and wider compatibility with external verification tools.
 
-**Construction :**
+**Construction:**
 
 ```
-PreKey = Argon2id(password, salt, t=1, m=8192Ko, p=1) → 32 octets
+PreKey = Argon2id(password, salt, t=1, m=8192KB, p=1) → 32 bytes
 
 HeaderMAC = HMAC-SHA256(
     key  = PreKey[32],
-    msg  = section_pré_mac[77 octets]   ← tout l'en-tête public sauf le MAC lui-même
+    msg  = pre_mac[77 bytes]   ← all of public header except the MAC itself
 )
 ```
 
-**Ce que le MAC protège :**
-- Magic bytes et version du format
-- Identifiants des chiffrements (header et payload)
+**What the MAC protects:**
+- Magic bytes and format version
+- Cipher identifiers (header and payload)
 - `header_total_size`
-- Sel Argon2id et paramètres KDF (`t`, `m`, `p`)
-- `file_base_nonce` et `kek_nonce`
+- Argon2id salt and KDF parameters (`t`, `m`, `p`)
+- `file_base_nonce` and `kek_nonce`
 
-Toute manipulation de ces champs est détectée avant de lancer la dérivation
-Argon2id coûteuse (protection contre les attaques DoS par paramètres forgés).
+Any tampering with these fields is detected before launching the
+expensive Argon2id derivation (protection against DoS via forged parameters).
 
-**Résistance post-quantique :** HMAC-SHA256 offre 128 bits de sécurité
-post-quantique (Grover sur SHA-256 → 2¹²⁸ opérations), ce qui est suffisant.
+**Post-quantum resistance:** HMAC-SHA256 provides 128 bits of
+post-quantum security (Grover on SHA-256 → 2¹²⁸ operations), which is sufficient.
 
 ---
 
 ## 3. BLAKE3
 
-**Rôle :** dérivation interne de sous-clés, de nonces, et calcul de l'arbre
-de Merkle.
+**Role:** internal sub-key derivation, nonce derivation, and
+Merkle tree computation.
 
-**Standard :** BLAKE3 (2020), successeur de BLAKE2. Implémenté via la crate
-Rust `blake3`.
+**Standard:** BLAKE3 (2020), successor to BLAKE2. Implemented via the
+Rust `blake3` crate.
 
-**Deux interfaces utilisées :**
+**Two interfaces used:**
 
 ### 3a. `blake3::keyed_hash(key, data) → [u8; 32]`
 
-Hash BLAKE3 avec clé de 32 octets. Utilisé pour la dérivation des clés de
-bloc :
+BLAKE3 hash with a 32-byte key. Used for block key derivation:
 
 ```
 block_key_i = blake3::keyed_hash(DEK, i.to_le_bytes())
 ```
 
-La clé (`DEK`) garantit que les sorties sont pseudo-aléatoires même si
-l'entrée (`i`) est prévisible. Chaque bloc `i` obtient une clé unique et
-indépendante.
+The key (`DEK`) ensures outputs are pseudo-random even if
+the input (`i`) is predictable. Each block `i` gets a unique,
+independent key.
 
 ### 3b. `blake3::derive_key(context_string, material) → [u8; 32]`
 
-Dérivation de clé à contexte fixe (KDF). Le contexte est une chaîne de
-caractères ASCII unique qui sépare les domaines cryptographiques,
-empêchant la réutilisation d'une sortie dans un rôle différent.
+Fixed-context key derivation (KDF). The context is a unique ASCII
+string that separates cryptographic domains,
+preventing reuse of an output in a different role.
 
-Utilisations dans Arsenic :
+Uses in Arsenic:
 
-| Chaîne de contexte | Entrée | Sortie |
+| Context string | Input | Output |
 |---|---|---|
 | `"Arsenic V1 Block Nonce"` | `file_base_nonce \|\| i.to_le_bytes()` | `block_nonce_i[24]` |
 | `"Arsenic V1 Metadata Key"` | `DEK[32]` | `MetaKey[32]` |
 | `"Arsenic V1 Meta Nonce"` | `DEK[32]` | `MetaNonce[12]` |
-| `"Arsenic V1 Merkle Leaf v1"` | bloc chiffré | `leaf_i[32]` |
+| `"Arsenic V1 Merkle Leaf v1"` | encrypted block | `leaf_i[32]` |
 | `"Arsenic V1 Merkle Node v1"` | `left[32] \|\| right[32]` | `node[32]` |
-| `"Arsenic V1 KEK Nonce XChaCha20"` | `kek_nonce[12] \|\| 0×20` | nonce étendu [24] |
-| `"Arsenic V1 KEK Nonce DeoxysII256"` | `kek_nonce[12] \|\| 0×20` | nonce étendu [15] |
+| `"Arsenic V1 KEK Nonce XChaCha20"` | `kek_nonce[12] \|\| 0×20` | extended nonce [24] |
+| `"Arsenic V1 KEK Nonce DeoxysII256"` | `kek_nonce[12] \|\| 0×20` | extended nonce [15] |
 | `"Arsenic V2 X25519 Wrapping Key"` | `shared_secret_x25519[32]` | `wrapping_key[32]` |
-| `"Arsenic Hybrid KEM"` | voir §5 | `wrapping_key[32]` |
-| `"Arsenic ML-KEM d"` | `x25519_sk[32]` | `d[32]` (graine ML-KEM) |
-| `"Arsenic ML-KEM z"` | `x25519_sk[32]` | `z[32]` (graine ML-KEM) |
+| `"Arsenic Hybrid KEM"` | see §5 | `wrapping_key[32]` |
+| `"Arsenic ML-KEM d"` | `x25519_sk[32]` | `d[32]` (ML-KEM seed) |
+| `"Arsenic ML-KEM z"` | `x25519_sk[32]` | `z[32]` (ML-KEM seed) |
 
-**Pourquoi BLAKE3 plutôt que HKDF-SHA256 ou SHA3-KDF ?**
-- Vitesse : BLAKE3 est ~3–5× plus rapide que SHA-256 sur les CPU modernes,
-  grâce au parallélisme interne et à des optimisations SIMD (AVX2, NEON)
-- Sécurité prouvée : construit sur une structure basée sur des permutations
-  (Chacha-like), différente de la famille Merkle-Damgård
-- API de dérivation native : `derive_key` intègre directement la séparation
-  de domaines sans boilerplate HKDF
+**Why BLAKE3 rather than HKDF-SHA256 or SHA3-KDF?**
+- Speed: BLAKE3 is ~3–5× faster than SHA-256 on modern CPUs,
+  thanks to internal parallelism and SIMD optimisations (AVX2, NEON)
+- Proven security: built on a permutation-based structure
+  (ChaCha-like), different from the Merkle-Damgård family
+- Native derivation API: `derive_key` directly integrates domain
+  separation without HKDF boilerplate
 
-**Résistance post-quantique :** BLAKE3 est une fonction de hachage
-symétrique. Grover réduit la sécurité de 256 bits à 128 bits effectifs —
-suffisant pour une résistance post-quantique à long terme.
+**Post-quantum resistance:** BLAKE3 is a symmetric hash function.
+Grover reduces security from 256 bits to 128 effective bits —
+sufficient for long-term post-quantum resistance.
 
 ---
 
-## 4. Chiffrements AEAD
+## 4. AEAD Ciphers
 
-Tous les chiffrements AEAD utilisés produisent un **tag d'authentification
-de 16 octets** (`GCM_TAG = 16`). L'utilisateur peut choisir indépendamment
-le chiffrement pour l'en-tête (clés, métadonnées) et pour le payload (blocs
-de données).
+All AEAD ciphers used produce a **16-byte authentication tag**
+(`GCM_TAG = 16`). The user can independently choose the cipher
+for the header (keys, metadata) and the payload (data blocks).
 
 ### 4a. Deoxys-II-256
 
-**Standard :** soumission au concours CAESAR 2013–2019, finaliste dans la
-catégorie "usage défensif". Basé sur les permutations AES en mode tweakable
-block cipher (TBC).
+**Standard:** submission to the CAESAR competition 2013–2019, finalist in the
+"defence-in-depth" category. Based on AES permutations in tweakable
+block cipher (TBC) mode.
 
-**Caractéristiques :**
+**Characteristics:**
 
-| Propriété | Valeur |
+| Property | Value |
 |---|---|
 | Type | Tweakable block cipher AEAD (TBAR) |
-| Taille de clé | 256 bits |
-| Nonce natif | 120 bits (15 octets) |
-| Tag | 128 bits (16 octets) |
-| Sécurité | ≥ 128 bits classique |
-| Accélération matérielle | Oui (AES-NI) |
+| Key size | 256 bits |
+| Native nonce | 120 bits (15 bytes) |
+| Tag | 128 bits (16 bytes) |
+| Security | ≥ 128 bits classical |
+| Hardware acceleration | Yes (AES-NI) |
 
-**Rôle par défaut :** chiffrement de l'en-tête (WrappedDEK, ProtectedMetadata,
-keyslots hybrides).
+**Default role:** header encryption (WrappedDEK, ProtectedMetadata,
+hybrid keyslots).
 
-**Pourquoi Deoxys-II-256 pour l'en-tête ?**
-- Le mode TBC offre une sécurité "beyond-birthday-bound" : la sécurité est
-  maintenue même après 2⁹⁶ appels (contrairement à AES-GCM classique qui se
-  dégrade à 2⁶⁴ blocs)
-- Basé sur AES, accéléré par AES-NI sur x86/ARM
-- Résistant aux attaques par nonce réutilisé pour les keyslots (qui utilisent
-  des nonces générés aléatoirement)
+**Why Deoxys-II-256 for the header?**
+- TBC mode offers "beyond-birthday-bound" security: security is
+  maintained even after 2⁹⁶ calls (unlike classical AES-GCM which
+  degrades at 2⁶⁴ blocks)
+- AES-based, accelerated by AES-NI on x86/ARM
+- Resistant to nonce-reuse attacks for keyslots (which use
+  randomly generated nonces)
 
-**Gestion du nonce pour l'enveloppe :**
-Le `kek_nonce` de 12 octets stocké dans l'en-tête est étendu à 15 octets par
+**Nonce handling for envelope:**
+The 12-byte `kek_nonce` stored in the header is extended to 15 bytes via
 `BLAKE3_derive_key("Arsenic V1 KEK Nonce DeoxysII256", kek_nonce || 0×20)`.
 
-Pour les blocs payload, le `block_nonce_i` de 24 octets est tronqué à 15 :
+For payload blocks, the 24-byte `block_nonce_i` is truncated to 15:
 `block_nonce_i[0..15]`.
 
 ---
 
 ### 4b. XChaCha20-Poly1305
 
-**Standard :** RFC 8439 (ChaCha20-Poly1305), extension XChaCha20 avec nonce
-de 192 bits (draft IETF).
+**Standard:** RFC 8439 (ChaCha20-Poly1305), XChaCha20 extension with 192-bit
+nonce (IETF draft).
 
-**Caractéristiques :**
+**Characteristics:**
 
-| Propriété | Valeur |
+| Property | Value |
 |---|---|
 | Type | Stream cipher + MAC (ARX) |
-| Taille de clé | 256 bits |
-| Nonce natif | 192 bits (24 octets) |
-| Tag | 128 bits (16 octets) |
-| Sécurité | ≥ 128 bits classique |
-| Accélération matérielle | Non (mais rapide en pur logiciel) |
+| Key size | 256 bits |
+| Native nonce | 192 bits (24 bytes) |
+| Tag | 128 bits (16 bytes) |
+| Security | ≥ 128 bits classical |
+| Hardware acceleration | No (but fast in pure software) |
 
-**Rôle par défaut :** chiffrement du payload (blocs de données).
+**Default role:** payload encryption (data blocks).
 
-**Pourquoi XChaCha20 pour le payload ?**
-- L'extension "X" porte le nonce de 96 à 192 bits, éliminant pratiquement
-  tout risque de collision de nonce sur des fichiers volumineux traités en
-  parallèle
-- Implémentation pure logiciel très rapide sur les CPU sans AES-NI
-  (embarqué, mobile)
-- Basé sur ChaCha20, construit sur des opérations ARX (Addition, Rotation,
-  XOR) — différent structurellement d'AES, offrant une diversité
-  algorithmique
-- Poly1305 est un MAC à clé éphémère : même si un nonce est réutilisé, seul
-  le bit d'authenticité est compromis, pas la confidentialité
+**Why XChaCha20 for the payload?**
+- The "X" extension extends the nonce from 96 to 192 bits, practically
+  eliminating nonce collision risk on large files processed in parallel
+- Very fast pure-software implementation on CPUs without AES-NI
+  (embedded, mobile)
+- Based on ChaCha20, built on ARX (Addition, Rotation,
+  XOR) operations — structurally different from AES, offering
+  algorithmic diversity
+- Poly1305 is a one-time MAC: even if a nonce is reused, only
+  the authenticity bit is compromised, not confidentiality
 
-**Gestion du nonce pour l'enveloppe :**
-Le `kek_nonce` de 12 octets est étendu à 24 par
+**Nonce handling for envelope:**
+The 12-byte `kek_nonce` is extended to 24 via
 `BLAKE3_derive_key("Arsenic V1 KEK Nonce XChaCha20", kek_nonce || 0×20)`.
 
-Pour les blocs, `block_nonce_i[0..24]` est utilisé directement (24 octets).
+For blocks, `block_nonce_i[0..24]` is used directly (24 bytes).
 
 ---
 
 ### 4c. AES-256-GCM-SIV
 
-**Standard :** RFC 8452, conçu par Google et Shay Gueron.
+**Standard:** RFC 8452, designed by Google and Shay Gueron.
 
-**Caractéristiques :**
+**Characteristics:**
 
-| Propriété | Valeur |
+| Property | Value |
 |---|---|
 | Type | Synthetic IV AEAD (SIV) |
-| Taille de clé | 256 bits |
-| Nonce natif | 96 bits (12 octets) |
-| Tag | 128 bits (16 octets) |
-| Sécurité | ≥ 128 bits classique |
-| Résistance nonce-misuse | Oui |
-| Accélération matérielle | Oui (AES-NI + CLMUL) |
+| Key size | 256 bits |
+| Native nonce | 96 bits (12 bytes) |
+| Tag | 128 bits (16 bytes) |
+| Security | ≥ 128 bits classical |
+| Nonce-misuse resistance | Yes |
+| Hardware acceleration | Yes (AES-NI + CLMUL) |
 
-**Particularité :** AES-GCM-SIV est **résistant au mésusage de nonce**. Si
-le même nonce est utilisé deux fois avec la même clé, la confidentialité
-est préservée (seule l'authenticité peut être compromise). Standard AES-GCM
-se brise catastrophiquement en cas de réutilisation de nonce.
+**Key feature:** AES-GCM-SIV is **nonce-misuse resistant**. If the
+same nonce is used twice with the same key, confidentiality
+is preserved (only authenticity may be compromised). Standard AES-GCM
+fails catastrophically on nonce reuse.
 
-**Gestion du nonce :**
-Le `kek_nonce` de 12 octets est utilisé directement pour les keyslots et
-métadonnées. Pour les blocs, `block_nonce_i[0..12]` est utilisé.
+**Nonce handling:**
+The 12-byte `kek_nonce` is used directly for keyslots and
+metadata. For blocks, `block_nonce_i[0..12]` is used.
 
 ---
 
-## 5. KEM hybride post-quantique
+## 5. Post-quantum Hybrid KEM
 
-Le chiffrement asymétrique dans Arsenic utilise un **KEM hybride** combinant
-X25519 (classique) et ML-KEM-768 (post-quantique). L'hybridation garantit
-que la sécurité est maintenue tant qu'**au moins un** des deux composants
-n'est pas compromis.
+Asymmetric encryption in Arsenic uses a **hybrid KEM** combining
+X25519 (classical) and ML-KEM-768 (post-quantum). Hybridisation guarantees
+that security is maintained as long as **at least one** of the two components
+is not compromised.
 
 ### 5a. X25519 (ECDH)
 
-**Standard :** RFC 7748, basé sur la courbe Curve25519 de Daniel J. Bernstein.
+**Standard:** RFC 7748, based on Daniel J. Bernstein's Curve25519.
 
-**Caractéristiques :**
+**Characteristics:**
 
-| Propriété | Valeur |
+| Property | Value |
 |---|---|
-| Type | Échange de clés Diffie-Hellman sur courbe elliptique |
-| Courbe | Curve25519 (Montgomery) |
-| Taille de clé | 32 octets (privée et publique) |
-| Shared secret | 32 octets |
-| Sécurité classique | ~128 bits (courbe 255 bits) |
-| Sécurité post-quantique | ✗ (Shor casse ECDH en O(n³)) |
+| Type | Elliptic-curve Diffie-Hellman key exchange |
+| Curve | Curve25519 (Montgomery) |
+| Key size | 32 bytes (private and public) |
+| Shared secret | 32 bytes |
+| Classical security | ~128 bits (255-bit curve) |
+| Post-quantum security | ✗ (Shor breaks ECDH in O(n³)) |
 
-**Usage dans Arsenic :**
-Chaque keyslot génère une paire X25519 **éphémère** à usage unique :
+**Use in Arsenic:**
+Each keyslot generates a single-use **ephemeral** X25519 keypair:
 
 ```
 eph_sk ← random[32]
-eph_pk ← X25519(eph_sk, G)   (multiplication scalaire sur Curve25519)
+eph_pk ← X25519(eph_sk, G)   (scalar multiplication on Curve25519)
 ss_x25519 ← X25519(eph_sk, recipient_pk_x25519)
 ```
 
-La clé éphémère garantit la **forward secrecy** : même si la clé privée
-du destinataire est compromise ultérieurement, les messages passés restent
-confidentiels car `eph_sk` n'est jamais stocké.
+The ephemeral key guarantees **forward secrecy**: even if the recipient's
+private key is compromised later, past messages remain
+confidential because `eph_sk` is never stored.
 
-**Pourquoi Curve25519 ?**
-- Résistante aux attaques par canal latéral par construction (arithmétique
-  à temps constant sur les implémentations correctes)
-- Pas de paramètres potentiellement backdoorés (contrairement aux courbes
-  NIST P-256/P-384 dont les constantes sont d'origine obscure)
-- Largement adoptée (SSH, TLS 1.3, Signal, WireGuard)
+**Why Curve25519?**
+- Resistant to side-channel attacks by construction (constant-time
+  arithmetic on correct implementations)
+- No potentially backdoored parameters (unlike
+  NIST curves P-256/P-384 whose constants have obscure origins)
+- Widely adopted (SSH, TLS 1.3, Signal, WireGuard)
 
 ---
 
 ### 5b. ML-KEM-768 (CRYSTALS-Kyber)
 
-**Standard :** NIST FIPS 203 (août 2024) — premier algorithme KEM
-post-quantique standardisé par le NIST.
+**Standard:** NIST FIPS 203 (August 2024) — the first post-quantum
+KEM algorithm standardised by NIST.
 
-**Caractéristiques :**
+**Characteristics:**
 
-| Propriété | Valeur |
+| Property | Value |
 |---|---|
-| Type | Key Encapsulation Mechanism (KEM) sur réseaux modulaires |
-| Niveau de sécurité | NIST niveau 3 (≈ AES-192) |
-| Clé d'encapsulation (publique) | 1 184 octets |
-| Clé de décapsulation (secrète) | 2 400 octets (graine : 64 octets) |
-| Ciphertext | 1 088 octets |
-| Shared secret | 32 octets |
-| Hypothèse de sécurité | Module-LWE (Module Learning With Errors) |
-| Sécurité post-quantique | ✓ (Shor ne s'applique pas aux réseaux) |
+| Type | Key Encapsulation Mechanism (KEM) over module lattices |
+| Security level | NIST level 3 (≈ AES-192) |
+| Encapsulation key (public) | 1 184 bytes |
+| Decapsulation key (secret) | 2 400 bytes (seed: 64 bytes) |
+| Ciphertext | 1 088 bytes |
+| Shared secret | 32 bytes |
+| Security assumption | Module-LWE (Module Learning With Errors) |
+| Post-quantum security | ✓ (Shor does not apply to lattices) |
 
-**Différence avec X25519 — API KEM vs. Key Agreement :**
+**Difference from X25519 — KEM API vs. Key Agreement:**
 
 ```
-X25519 (ECDH) :
-  Alice : (eph_sk, eph_pk) ← KeyGen()
-  Alice → Bob : eph_pk
-  Bob   : ss ← ECDH(bob_sk, eph_pk)
-  Alice : ss ← ECDH(eph_sk, bob_pk)
-  → ss identique des deux côtés
+X25519 (ECDH):
+  Alice: (eph_sk, eph_pk) ← KeyGen()
+  Alice → Bob: eph_pk
+  Bob:   ss ← ECDH(bob_sk, eph_pk)
+  Alice: ss ← ECDH(eph_sk, bob_pk)
+  → identical ss on both sides
 
-ML-KEM-768 (KEM) :
-  Bob possède : (dk, ek) ← KeyGen()
-  Alice : (ct, ss) ← Encaps(ek)   ← seul Alice connaît ss avant envoi
-  Alice → Bob : ct
-  Bob   : ss ← Decaps(dk, ct)
-  → ss identique des deux côtés
+ML-KEM-768 (KEM):
+  Bob has: (dk, ek) ← KeyGen()
+  Alice: (ct, ss) ← Encaps(ek)   ← only Alice knows ss before sending
+  Alice → Bob: ct
+  Bob:   ss ← Decaps(dk, ct)
+  → identical ss on both sides
 ```
 
-**Dérivation déterministe depuis la clé X25519 :**
-Pour simplifier la gestion des clés, la graine ML-KEM est dérivée de la
-clé privée X25519, évitant de stocker un second secret :
+**Deterministic derivation from X25519 key:**
+To simplify key management, the ML-KEM seed is derived from the
+X25519 private key, avoiding storing a second secret:
 
 ```
 seed[64] = BLAKE3_derive_key("Arsenic ML-KEM d", x25519_sk)[32]
@@ -379,186 +376,186 @@ seed[64] = BLAKE3_derive_key("Arsenic ML-KEM d", x25519_sk)[32]
 (dk_mlkem, ek_mlkem) ← ML-KEM-768.KeyGen_internal(d=seed[0..32], z=seed[32..64])
 ```
 
-Un seul fichier `.key` de 32 octets suffit pour gérer l'intégralité du
-keypair hybride.
+A single 32-byte `.key` file is sufficient to manage the entire
+hybrid keypair.
 
-**Encapsulation déterministe :**
-Pour éviter toute dépendance vis-à-vis d'une version spécifique du générateur
-de nombres aléatoires (`rand_core`), Arsenic utilise
-`encapsulate_deterministic(m)` avec `m ← rand::random::<[u8; 32]>()`.
-La randomisation est fournie par l'appelant.
+**Deterministic encapsulation:**
+To avoid any dependency on a specific version of the random number generator
+(`rand_core`), Arsenic uses
+`encapsulate_deterministic(m)` with `m ← rand::random::<[u8; 32]>()`.
+Randomisation is provided by the caller.
 
 ---
 
-### Construction hybride et binding
+### Hybrid Construction and Binding
 
-La clé de wrapping du keyslot combine les deux shared secrets pour éviter
-toute attaque par substitution ou isolation d'un composant :
+The keyslot wrapping key combines both shared secrets to prevent
+any substitution or component isolation attack:
 
 ```
 wrapping_key = BLAKE3_derive_key(
     "Arsenic Hybrid KEM",
-    eph_x25519_pk[32]     ← public, lie la clé éphémère X25519
-    || mlkem_ct[1088]     ← public, lie le ciphertext ML-KEM
+    eph_x25519_pk[32]     ← public, binds the ephemeral X25519 key
+    || mlkem_ct[1088]     ← public, binds the ML-KEM ciphertext
     || ss_x25519[32]      ← secret X25519
     || ss_mlkem[32]       ← secret ML-KEM
 )
 ```
 
-Cette construction garantit :
-1. **Bind-and-commit** : `wrapping_key` est cryptographiquement lié à
-   tous les éléments publics ET secrets, rendant impossible toute
-   attaque "key commitment"
-2. **Domaine séparé** : la chaîne `"Arsenic Hybrid KEM"` empêche toute
-   réutilisation de cette sortie pour un autre usage
-3. **Défense en profondeur** : si X25519 est cassé (ordinateur quantique),
-   ML-KEM maintient la sécurité. Si ML-KEM est vulnérable (faille
-   algorithmique), X25519 maintient la sécurité classique
+This construction guarantees:
+1. **Bind-and-commit**: `wrapping_key` is cryptographically bound to
+   all public AND secret elements, making any "key commitment"
+   attack impossible
+2. **Domain separation**: the string `"Arsenic Hybrid KEM"` prevents
+   reuse of this output for another purpose
+3. **Defence in depth**: if X25519 is broken (quantum computer),
+   ML-KEM maintains security. If ML-KEM is vulnerable (algorithmic flaw),
+   X25519 maintains classical security
 
 ---
 
-## 6. Arbre de Merkle
+## 6. Merkle Tree
 
-**Rôle :** vérifier l'intégrité de l'intégralité du fichier chiffré **avant**
-d'écrire le moindre octet de plaintext.
+**Role:** verify the integrity of the entire encrypted file **before**
+writing a single byte of plaintext.
 
-**Construction :** arbre binaire BLAKE3, domaine-séparé, calculé sur les
-**blocs chiffrés** (pas sur le plaintext).
+**Construction:** domain-separated BLAKE3 binary tree, computed over
+**encrypted blocks** (not plaintext).
 
 ```
-leaf_i  = BLAKE3_derive_key("Arsenic V1 Merkle Leaf v1",  bloc_chiffré_i)
-node(g, d) = BLAKE3_derive_key("Arsenic V1 Merkle Node v1", g[32] || d[32])
+leaf_i  = BLAKE3_derive_key("Arsenic V1 Merkle Leaf v1",  encrypted_block_i)
+node(l, r) = BLAKE3_derive_key("Arsenic V1 Merkle Node v1", l[32] || r[32])
 ```
 
-Les nœuds sont calculés de bas en haut par paires successives. Si le nombre
-de nœuds est impair, le dernier est promu tel quel (sans duplication). La
-racine est stockée dans la `ProtectedMetadata` chiffrée (tag TLV `0x02`).
+Nodes are computed bottom-up in successive pairs. If the number
+of nodes is odd, the last one is promoted as-is (no duplication). The
+root is stored in the encrypted `ProtectedMetadata` (TLV tag `0x02`).
 
-**Pourquoi BLAKE3 et pas SHA-256 pour Merkle ?**
-- BLAKE3 est ~5× plus rapide que SHA-256 pour les hachages de blocs
-- `derive_key` avec des contextes distincts pour feuilles et nœuds
-  élimine les **attaques de second préimage par confusion** (une feuille
-  ne peut pas être confondue avec un nœud interne)
-- Un arbre SHA-256 naïf sans séparation de domaines est vulnérable à ce
-  type d'attaque
+**Why BLAKE3 and not SHA-256 for Merkle?**
+- BLAKE3 is ~5× faster than SHA-256 for block hashing
+- `derive_key` with distinct contexts for leaves and nodes
+  eliminates **second preimage confusion attacks** (a leaf
+  cannot be confused with an internal node)
+- A naive SHA-256 tree without domain separation is vulnerable to
+  this class of attack
 
-**Propriétés de sécurité :**
-- Authentifie chaque bloc **et** leur ordre (l'index est lié comme AAD dans
-  chaque AEAD de bloc)
-- Empêche la troncature silencieuse (le nombre de blocs est implicite dans
-  la racine)
-- Calculé sur le texte chiffré → vérification sans déchiffrement en passe 1
+**Security properties:**
+- Authenticates each block **and** their order (the index is bound as AAD in
+  each block AEAD)
+- Prevents silent truncation (the number of blocks is implicit in
+  the root)
+- Computed over ciphertext → verification without decryption in pass 1
 
 ---
 
 ## 7. Bech32
 
-**Rôle :** encodage lisible par l'humain des clés publiques et privées.
+**Role:** human-readable encoding of public and private keys.
 
-**Standard :** adapté de BIP-0173 (Bitcoin), utilisant l'alphabet
-`qpzry9x8gf2tvdw0s3jn54khce6mua7l` (32 caractères, 5 bits/char).
+**Standard:** adapted from BIP-0173 (Bitcoin), using the
+`qpzry9x8gf2tvdw0s3jn54khce6mua7l` alphabet (32 characters, 5 bits/char).
 
-Arsenic utilise Bech32 **sans checksum** (les clés sont vérifiées
-cryptographiquement lors de l'usage, pas à l'encodage).
+Arsenic uses Bech32 **without checksum** (keys are verified
+cryptographically on use, not at encoding time).
 
-| Type | Préfixe | Longueur | Exemple |
+| Type | Prefix | Length | Example |
 |---|---|---|---|
-| Clé publique X25519 | `arsenic1` | 60 chars | `arsenic1ql3z7hjy…` |
-| Clé privée | `ARSENIC-SECRET-KEY-1` | 72 chars | `ARSENIC-SECRET-KEY-1GQ9…` |
-| Clé d'encapsulation ML-KEM-768 | `arsenic1m` | ~1 955 chars | `arsenic1mq…` |
+| X25519 public key | `arsenic1` | 60 chars | `arsenic1ql3z7hjy…` |
+| Private key | `ARSENIC-SECRET-KEY-1` | 72 chars | `ARSENIC-SECRET-KEY-1GQ9…` |
+| ML-KEM-768 encapsulation key | `arsenic1m` | ~1 955 chars | `arsenic1mq…` |
 
-**Calcul :**
-32 octets × 8 bits = 256 bits → ⌈256/5⌉ = 52 caractères bech32 + préfixe.
-Pour ML-KEM : 1 184 octets × 8 bits = 9 472 bits → 1 946 caractères.
+**Calculation:**
+32 bytes × 8 bits = 256 bits → ⌈256/5⌉ = 52 bech32 chars + prefix.
+For ML-KEM: 1 184 bytes × 8 bits = 9 472 bits → 1 946 characters.
 
-**Pourquoi Bech32 plutôt que Base64/Hex ?**
-- L'alphabet évite les caractères ambigus (O/0, I/l/1)
-- Entièrement en minuscules pour X25519 (facile à copier sans erreur de casse)
-- La convention MAJUSCULES pour la clé privée signale visuellement le danger
+**Why Bech32 rather than Base64/Hex?**
+- The alphabet avoids ambiguous characters (O/0, I/l/1)
+- Entirely lowercase for X25519 (easy to copy without case errors)
+- The UPPERCASE convention for private keys visually signals danger
 
 ---
 
 ## 8. Zeroize
 
-**Rôle :** effacer de façon sécurisée les valeurs sensibles en mémoire
-quand elles ne sont plus nécessaires.
+**Role:** securely erase sensitive values from memory
+when they are no longer needed.
 
-**Standard :** crate Rust `zeroize`, conforme aux recommandations de
-sécurité mémoire (CERT C, MISRA, NIST).
+**Standard:** Rust `zeroize` crate, conforming to
+security memory recommendations (CERT C, MISRA, NIST).
 
-**Problème résolu :** le compilateur C/Rust peut optimiser et supprimer
-`memset(secret, 0, len)` s'il détecte que la mémoire n'est plus utilisée
-après. `Zeroize` utilise des barrières mémoire et des écritures volatiles
-pour garantir l'effacement effectif.
+**Problem solved:** the C/Rust compiler may optimise and remove
+`memset(secret, 0, len)` if it detects the memory is no longer used
+afterward. `Zeroize` uses memory barriers and volatile writes
+to guarantee effective erasure.
 
-**Usage dans Arsenic :**
-Le type `Secret<T>` est un wrapper autour de toute valeur sensible :
+**Use in Arsenic:**
+The `Secret<T>` type is a wrapper around any sensitive value:
 
 ```rust
 pub struct Secret<T: Zeroize>(T);
 
 impl<T: Zeroize> Drop for Secret<T> {
     fn drop(&mut self) {
-        self.0.zeroize();  // efface à zéro à la destruction
+        self.0.zeroize();  // zeroes on destruction
     }
 }
 ```
 
-Valeurs concernées :
-- Mot de passe (`Secret<String>`)
-- DEK — Data Encryption Key (`[u8; 32]` + `zeroize()` explicite)
+Values covered:
+- Password (`Secret<String>`)
+- DEK — Data Encryption Key (`[u8; 32]` + explicit `zeroize()`)
 - KEK — Key Encryption Key (`Secret<[u8; 32]>`)
-- `dek_vec` intermédiaire lors du déchiffrement de l'enveloppe
-- Vecteurs de clés privées dans les fonctions de dérivation
+- Intermediate `dek_vec` during envelope decryption
+- Private key vectors in derivation functions
 
-**Remarque :** la clé de décapsulation ML-KEM (2 400 octets) est calculée
-en RAM à la demande et jamais stockée en dehors de la pile de la fonction
-qui la crée. La crate `ml-kem` utilise la feature `zeroize` pour effacer
-automatiquement les structures internes.
+**Note:** the ML-KEM decapsulation key (2 400 bytes) is computed
+in RAM on demand and never stored outside the stack frame of the
+function that creates it. The `ml-kem` crate uses the `zeroize` feature to
+automatically erase internal structures.
 
 ---
 
-## 9. Vue d'ensemble
+## 9. Overview
 
 ```
-Mot de passe ──► Argon2id ──► KEK[32] ──► AEAD ──► WrappedDEK[48]
-                                                          │
-                  ┌───────────────────────────────────────┘
+Password ──► Argon2id ──► KEK[32] ──► AEAD ──► WrappedDEK[48]
+                                                      │
+                  ┌───────────────────────────────────┘
                   ▼
-               DEK[32] (aléatoire par fichier)
+               DEK[32] (random per file)
                   │
-                  ├──► BLAKE3_keyed_hash ──► block_key_i[32] ──► AEAD ──► bloc chiffré_i
+                  ├──► BLAKE3_keyed_hash ──► block_key_i[32] ──► AEAD ──► encrypted_block_i
                   ├──► BLAKE3_derive_key ──► block_nonce_i[24]
                   ├──► BLAKE3_derive_key ──► MetaKey/MetaNonce ──► AEAD ──► ProtectedMetadata
                   │
-                  └──► (pour chaque destinataire)
+                  └──► (for each recipient)
                          X25519_ECDH ──┐
                          ML-KEM-768 ──┼──► BLAKE3 "Arsenic Hybrid KEM" ──► wrapping_key
-                                      └──► AEAD ──► wrapped_dek dans HybridKeyslot
+                                      └──► AEAD ──► wrapped_dek in HybridKeyslot
 
 ┌──────────────────────────────────────────────────────────┐
-│ BLAKE3 Merkle tree  (sur tous les blocs chiffrés)         │
-│   leaf_i = BLAKE3_derive_key("…Leaf…", bloc_chiffré_i)   │
-│   root   → stockée dans ProtectedMetadata (déchiffrée)   │
-│   Vérification complète avant toute écriture plaintext   │
+│ BLAKE3 Merkle tree  (over all encrypted blocks)           │
+│   leaf_i = BLAKE3_derive_key("…Leaf…", encrypted_block_i) │
+│   root   → stored in ProtectedMetadata (decrypted)        │
+│   Full verification before any plaintext write             │
 └──────────────────────────────────────────────────────────┘
 
-En-tête protégé par : HMAC-SHA256(Argon2id(password), en-tête_public)
+Header protected by: HMAC-SHA256(Argon2id(password), public_header)
 ```
 
-### Résumé de la résistance post-quantique
+### Post-quantum Resistance Summary
 
-| Composant | Algorithme | PQ-safe ? | Raison |
+| Component | Algorithm | PQ-safe? | Reason |
 |---|---|---|---|
-| Chiffrement payload | XChaCha20 / Deoxys-II / AES-GCM-SIV | ✓ | Symétrique 256 bits, Grover → 128 bits |
-| KDF mot de passe | Argon2id | ✓ | Symétrique, Grover → 128 bits |
-| Header MAC | HMAC-SHA256 | ✓ | 128 bits post-quantique |
-| Dérivation interne | BLAKE3 | ✓ | Symétrique |
-| Keyslot X25519 | X25519 | ✗ | Shor casse ECDH |
-| Keyslot ML-KEM-768 | ML-KEM-768 | ✓ | FIPS 203, résiste à Shor |
-| **Keyslot hybride** | **X25519 + ML-KEM-768** | **✓** | Sécurisé si l'un des deux tient |
+| Payload encryption | XChaCha20 / Deoxys-II / AES-GCM-SIV | ✓ | Symmetric 256 bits, Grover → 128 bits |
+| Password KDF | Argon2id | ✓ | Symmetric, Grover → 128 bits |
+| Header MAC | HMAC-SHA256 | ✓ | 128 bits post-quantum |
+| Internal derivation | BLAKE3 | ✓ | Symmetric |
+| X25519 keyslot | X25519 | ✗ | Shor breaks ECDH |
+| ML-KEM-768 keyslot | ML-KEM-768 | ✓ | FIPS 203, resists Shor |
+| **Hybrid keyslot** | **X25519 + ML-KEM-768** | **✓** | Secure if either holds |
 
-Le seul composant classiquement vulnérable est X25519, et il est **toujours
-accompagné de ML-KEM-768** dans le keyslot hybride. Si un ordinateur
-quantique suffisamment puissant venait à exister, il casserait X25519 mais
-pas ML-KEM-768, laissant le DEK (et donc les données) protégé.
+The only classically vulnerable component is X25519, and it is **always
+paired with ML-KEM-768** in the hybrid keyslot. If a sufficiently powerful
+quantum computer were to exist, it would break X25519 but
+not ML-KEM-768, leaving the DEK (and thus the data) protected.

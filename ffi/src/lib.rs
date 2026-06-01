@@ -33,6 +33,7 @@ use arsenic::{
     arsenic_main_routine, arsenic_main_routine_with_key, arsenic_rekey,
     arsenic_remove_recipient, decrypt_arsenic, decrypt_arsenic_with_key,
     encode_privkey, encode_pubkey, decode_privkey, decode_pubkey,
+    encode_mlkem_pubkey, decode_mlkem_pubkey,
     encrypt_arsenic, generate_x25519_keypair, hybrid_encapsulation_key,
     is_arsenic_file, pubkey_from_privkey,
     bench_cipher_combinations,
@@ -840,6 +841,53 @@ pub unsafe extern "C" fn arsenic_decode_privkey(
     }
 }
 
+/// Encode a 1184-byte ML-KEM-768 encapsulation key as a null-terminated `arsenic1m…` string.
+///
+/// The buffer must be at least 1956 bytes (1955 chars + null). Returns the number of bytes
+/// written (excluding null), or 0 on error.
+///
+/// # Safety
+/// `ek` must point to 1184 readable bytes; `buf` to `buf_len` writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn arsenic_encode_mlkem_pubkey(
+    ek:      *const u8,
+    buf:     *mut c_char,
+    buf_len: usize,
+) -> usize {
+    if ek.is_null() || buf.is_null() || buf_len < 1956 { return 0; }
+    let ek: [u8; 1184] = unsafe { std::slice::from_raw_parts(ek, 1184) }.try_into().expect("1184 bytes");
+    let encoded = encode_mlkem_pubkey(&ek);
+    let bytes = encoded.as_bytes();
+    let n = bytes.len().min(buf_len - 1);
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), buf, n);
+        *buf.add(n) = 0;
+    }
+    n
+}
+
+/// Decode an `arsenic1m…` string into a 1184-byte ML-KEM-768 encapsulation key.
+///
+/// Returns `1` on success (writes 1184 bytes to `ek_out`), `0` on failure.
+///
+/// # Safety
+/// `encoded` must be a valid null-terminated C string; `ek_out` must point to 1184 writable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn arsenic_decode_mlkem_pubkey(
+    encoded: *const c_char,
+    ek_out:  *mut u8,
+) -> i32 {
+    if encoded.is_null() || ek_out.is_null() { return 0; }
+    let Ok(s) = (unsafe { CStr::from_ptr(encoded) }).to_str() else { return 0 };
+    match decode_mlkem_pubkey(s) {
+        Some(ek) => {
+            unsafe { std::ptr::copy_nonoverlapping(ek.as_ptr(), ek_out, 1184) };
+            1
+        }
+        None => 0,
+    }
+}
+
 // ── Version ───────────────────────────────────────────────────────────────────
 
 /// Returns the library version string (e.g. `"1.3.2"`).
@@ -1114,7 +1162,7 @@ mod tests {
         let dst = tmp_path("wpw_dst.bin");
         std::fs::write(&src, b"test").unwrap();
 
-        let pwd   = CString::new(src.to_str().unwrap()).unwrap();
+        let _pwd  = CString::new(src.to_str().unwrap()).unwrap();
         let ct_c  = CString::new(ct.to_str().unwrap()).unwrap();
         let dst_c = CString::new(dst.to_str().unwrap()).unwrap();
         let src_c = CString::new(src.to_str().unwrap()).unwrap();

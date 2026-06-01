@@ -1,21 +1,20 @@
 use arsenic::{
     arsenic_find_matching_key, arsenic_main_routine, arsenic_main_routine_with_key,
     arsenic_rekey, is_arsenic_file,
-    keystore::{load_identity_file, load_keystore, resolve_recipient},
+    keystore::{load_identity_file, load_keystore, resolve_recipient, keys_dir, save_key, KeyEntry, serialize_identity, parse_identity},
+    encode_pubkey,
     ArsenicParams, Direction, Secret, Ui,
     bench_cipher_combinations, best_combination, CipherId,
 };
-mod cli;
 use clap::Parser;
-use cli::Cli;
+use crate::cli::{Cli, KeygenCli};
 use std::{
     env,
+    io::{self, BufRead, Write},
     path::{Path, PathBuf},
 };
-
 use anyhow::{anyhow, Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
-use std::result::Result::Ok;
 
 const ARSENIC_EXTENSION: &str = ".arsn";
 
@@ -31,7 +30,7 @@ impl ProgressUpdater {
         let pb = ProgressBar::new(100);
         pb.set_style(
             ProgressStyle::with_template("{spinner:.green} [{wide_bar:.cyan/blue}] {pos}%")
-                .unwrap()
+                .unwrap_or_else(|_| ProgressStyle::default_bar())
                 .progress_chars("#>-"),
         );
         Self { mode, pb }
@@ -60,7 +59,7 @@ impl RekeyProgress {
         let pb = ProgressBar::new(100);
         pb.set_style(
             ProgressStyle::with_template("{spinner:.green} [{wide_bar:.cyan/blue}] {pos}%")
-                .unwrap()
+                .unwrap_or_else(|_| ProgressStyle::default_bar())
                 .progress_chars("#>-"),
         );
         Self { pb }
@@ -76,9 +75,25 @@ impl Ui for RekeyProgress {
     }
 }
 
-// ── Entry point ───────────────────────────────────────────────────────────────
+// ── Public entry point ────────────────────────────────────────────────────────
 
-fn main() {
+pub fn run() {
+    // Dispatch `cryptyrust keygen [...]` before the main clap parser so the
+    // existing required-mode group does not interfere.
+    let raw: Vec<String> = std::env::args().collect();
+    if raw.get(1).map(|s| s.as_str()) == Some("keygen") {
+        // Prepend "cryptyrust keygen" as argv[0] so clap shows the right usage line.
+        let argv: Vec<String> = std::iter::once("cryptyrust keygen".to_string())
+            .chain(raw.into_iter().skip(2))
+            .collect();
+        let cli = KeygenCli::parse_from(argv);
+        if let Err(e) = run_keygen(cli) {
+            eprintln!("\n{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
     let app = Cli::parse();
 
     if app.bench() {
@@ -88,8 +103,8 @@ fn main() {
 
     if app.rekey().is_some() {
         match run_rekey(&app) {
-            Ok(path) => println!("\nSuccess! Password changed for {}", path),
-            Err(e) => { eprintln!("\n{}", e); std::process::exit(1); }
+            Ok(path) => println!("\nSuccess! Password changed for {path}"),
+            Err(e) => { eprintln!("\n{e}"); std::process::exit(1); }
         }
     } else {
         match run_crypt(&app) {
@@ -99,10 +114,10 @@ fn main() {
                     Direction::Decrypt => "decrypted",
                 };
                 if let Some(name) = output_filename {
-                    println!("\nSuccess! {} has been {} in {:.2} s", name, m, time);
+                    println!("\nSuccess! {name} has been {m} in {time:.2} s");
                 }
             }
-            Err(e) => { eprintln!("\n{}", e); std::process::exit(1); }
+            Err(e) => { eprintln!("\n{e}"); std::process::exit(1); }
         }
     }
 }
@@ -113,10 +128,10 @@ fn run_rekey(app: &Cli) -> Result<String> {
     let f = app.rekey().unwrap();
     let path = Path::new(f);
     if !(path.exists() && path.is_file()) {
-        return Err(anyhow!("Invalid filename: {}", f));
+        return Err(anyhow!("Invalid filename: {f}"));
     }
     if !is_arsenic_file(path) {
-        return Err(anyhow!("{} is not a valid Arsenic (.arsn) file", f));
+        return Err(anyhow!("{f} is not a valid Arsenic (.arsn) file"));
     }
     let old_password = Secret::new(
         rpassword::prompt_password("Current password: ")
@@ -152,14 +167,14 @@ fn run_crypt(app: &Cli) -> Result<(Option<String>, Direction, f64)> {
         let f = app.encrypt().unwrap();
         let p = Path::new(f);
         if !(p.exists() && p.is_file()) {
-            return Err(anyhow!("Invalid filename: {}", f));
+            return Err(anyhow!("Invalid filename: {f}"));
         }
         Some(f)
     } else {
         let f = app.decrypt().unwrap();
         let p = Path::new(f);
         if !(p.exists() && p.is_file()) {
-            return Err(anyhow!("Invalid filename: {}", f));
+            return Err(anyhow!("Invalid filename: {f}"));
         }
         Some(f)
     };
@@ -167,8 +182,7 @@ fn run_crypt(app: &Cli) -> Result<(Option<String>, Direction, f64)> {
     let output_path = generate_output_path(&direction, filename, app.output())
         .unwrap()
         .to_str()
-        .ok_or("could not convert output path to string")
-        .unwrap()
+        .ok_or_else(|| anyhow!("could not convert output path to string"))?
         .to_string();
 
     let out_str = output_path.as_str();
@@ -190,23 +204,20 @@ fn run_encrypt(
     out_str: &str,
     ui: Box<ProgressUpdater>,
 ) -> Result<f64> {
-    // Resolve --recipient values to hybrid public keys.
     let mut recipients: Vec<arsenic::HybridRecipient> = Vec::new();
     for spec in app.recipients() {
         match resolve_recipient(spec) {
             Some(r) => recipients.push(r),
             None => return Err(anyhow!(
-                "cannot resolve recipient '{}': not a contact name or key file with hybrid key",
-                spec
+                "cannot resolve recipient '{spec}': not a contact name or key file with hybrid key"
             )),
         }
     }
 
-    // Determine password.
-    let password: Secret<String> = if !recipients.is_empty() && app.password().is_none()
+    let password: Secret<String> = if !recipients.is_empty()
+        && app.password().is_none()
         && app.passwordfile().is_none()
     {
-        // Recipients only, no password — use a random KEK (symmetric slot inaccessible).
         let r = arsenic::random_bytes_32();
         Secret::new(r.iter().map(|b| format!("{b:02x}")).collect())
     } else {
@@ -241,7 +252,6 @@ fn run_decrypt(
 ) -> Result<f64> {
     let path = Path::new(filename);
 
-    // 1. Explicit identity files via --identity/-i.
     let explicit_identities: Vec<_> = app
         .identities()
         .iter()
@@ -260,10 +270,8 @@ fn run_decrypt(
             )
             .map_err(|e| anyhow!(e));
         }
-        // Explicit identities given but none matched — fall through to password.
-        eprintln!("Note: none of the provided identities matched; trying password.");
+        return Err(anyhow!("none of the provided identity files can decrypt this file"));
     } else {
-        // 2. Auto-detect from the shared keystore (same behaviour as the GUI).
         let keystore = load_keystore();
         if !keystore.is_empty() {
             let privkeys: Vec<[u8; 32]> = keystore.iter().map(|k| k.private_key).collect();
@@ -280,7 +288,6 @@ fn run_decrypt(
         }
     }
 
-    // 3. Fall back to password.
     let password = get_password_for_decrypt(app)?;
     arsenic_main_routine(
         &Direction::Decrypt,
@@ -301,7 +308,7 @@ fn get_password_for_encrypt(app: &Cli) -> Result<Secret<String>> {
     }
     if let Some(f) = app.passwordfile() {
         let s = std::fs::read_to_string(f)
-            .with_context(|| format!("cannot read password file: {}", f))?;
+            .with_context(|| format!("cannot read password file: {f}"))?;
         return Ok(Secret::new(s));
     }
     let pw = rpassword::prompt_password("Password (minimum 8 characters): ")
@@ -323,7 +330,7 @@ fn get_password_for_decrypt(app: &Cli) -> Result<Secret<String>> {
     }
     if let Some(f) = app.passwordfile() {
         let s = std::fs::read_to_string(f)
-            .with_context(|| format!("cannot read password file: {}", f))?;
+            .with_context(|| format!("cannot read password file: {f}"))?;
         return Ok(Secret::new(s));
     }
     let pw = rpassword::prompt_password("Password: ").context("could not read password")?;
@@ -342,7 +349,7 @@ fn generate_output_path(
         if p.exists() && p.is_dir() {
             generate_default_filename(mode, p, input)
         } else if p.exists() && p.is_file() {
-            Err(format!("Error: file {:?} already exists.", p))
+            Err(format!("Error: file {p:?} already exists."))
         } else {
             Ok(p)
         }
@@ -361,7 +368,7 @@ fn generate_default_filename(
     let f = match mode {
         Direction::Encrypt => {
             let base = name.unwrap_or("encrypted").to_string();
-            format!("{}{}", base, ARSENIC_EXTENSION)
+            format!("{base}{ARSENIC_EXTENSION}")
         }
         Direction::Decrypt => {
             let name = name.unwrap_or("stdin");
@@ -369,7 +376,7 @@ fn generate_default_filename(
                 name.strip_suffix(ARSENIC_EXTENSION).unwrap().to_string()
             } else {
                 prepend("decrypted_".to_string(), name)
-                    .ok_or(format!("could not prepend decrypted_ to {}", name))?
+                    .ok_or_else(|| format!("could not prepend decrypted_ to {name}"))?
             }
         }
     };
@@ -387,9 +394,9 @@ fn find_filename(path: PathBuf) -> Option<PathBuf> {
         let ext  = path.extension().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
         let parent = path.parent()?;
         let new_file = if ext.is_empty() {
-            format!("{} ({})", stem, i)
+            format!("{stem} ({i})")
         } else {
-            format!("{} ({}).{}", stem, i, ext)
+            format!("{stem} ({i}).{ext}")
         };
         path = [parent, Path::new(&new_file)].iter().collect();
         i += 1;
@@ -409,12 +416,12 @@ fn prepend(prefix: String, p: &str) -> Option<String> {
 
 fn run_bench() {
     const PAYLOAD_MIB: usize = 32;
-    println!("Benchmarking 3 AEAD ciphers on {} MiB...\n", PAYLOAD_MIB);
+    println!("Benchmarking 3 AEAD ciphers on {PAYLOAD_MIB} MiB...\n");
 
     let pb = ProgressBar::new(100);
     pb.set_style(
         ProgressStyle::with_template("{spinner:.green} [{wide_bar:.cyan/blue}] {pos}%")
-            .unwrap()
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
             .progress_chars("#>-"),
     );
 
@@ -433,7 +440,10 @@ fn run_bench() {
     println!("  {}", "─".repeat(52));
     for (i, r) in results.iter().enumerate() {
         let tag = if i == 0 { "  ★ fastest" } else { "" };
-        println!("  {:<22} {:>9.0} MiB/s {:>9.0} MiB/s{}", cipher_name(r.cipher), r.encrypt_mibps, r.decrypt_mibps, tag);
+        println!(
+            "  {:<22} {:>9.0} MiB/s {:>9.0} MiB/s{}",
+            cipher_name(r.cipher), r.encrypt_mibps, r.decrypt_mibps, tag
+        );
     }
     let (hdr, pld) = best_combination(&results);
     println!("\n  Fastest:  --hdr-cipher {}  --pld-cipher {}\n", cipher_arg(hdr), cipher_arg(pld));
@@ -441,15 +451,110 @@ fn run_bench() {
 
 fn cipher_name(c: CipherId) -> &'static str {
     match c {
-        CipherId::DeoxysII256      => "Deoxys-II-256",
+        CipherId::DeoxysII256       => "Deoxys-II-256",
         CipherId::XChaCha20Poly1305 => "XChaCha20-Poly1305",
-        CipherId::Aes256GcmSiv     => "AES-256-GCM-SIV",
+        CipherId::Aes256GcmSiv      => "AES-256-GCM-SIV",
     }
 }
+
 fn cipher_arg(c: CipherId) -> &'static str {
     match c {
-        CipherId::DeoxysII256      => "deoxys-ii",
+        CipherId::DeoxysII256       => "deoxys-ii",
         CipherId::XChaCha20Poly1305 => "xchacha20",
-        CipherId::Aes256GcmSiv     => "aes-gcm-siv",
+        CipherId::Aes256GcmSiv      => "aes-gcm-siv",
     }
+}
+
+// ── Key management ────────────────────────────────────────────────────────────
+
+fn run_keygen(cli: KeygenCli) -> Result<()> {
+    if cli.list {
+        return keygen_list();
+    }
+    if !cli.to_public.is_empty() {
+        return keygen_to_public(&cli.to_public);
+    }
+    keygen_generate(cli)
+}
+
+fn keygen_list() -> Result<()> {
+    let keys = load_keystore();
+    if keys.is_empty() {
+        let dir = keys_dir()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "unknown".into());
+        println!("No keypairs found in keystore ({dir}).");
+        return Ok(());
+    }
+    println!("{:<20} {}", "Name", "Public key");
+    println!("{}", "─".repeat(80));
+    for key in &keys {
+        println!("{:<20} {}", key.name, encode_pubkey(&key.public_key));
+    }
+    Ok(())
+}
+
+fn keygen_generate(cli: KeygenCli) -> Result<()> {
+    if cli.store && cli.name.is_empty() {
+        return Err(anyhow!("--name is required when using --store"));
+    }
+
+    let mut entry = KeyEntry::generate(cli.name.clone());
+    let pub_enc = encode_pubkey(&entry.public_key);
+
+    if cli.store {
+        save_key(&mut entry).map_err(|e| anyhow!(e))?;
+        let path = entry.file_path.as_ref().unwrap();
+        eprintln!("Identity written to: {}", path.display());
+        eprintln!("Public key: {pub_enc}");
+    } else if let Some(path) = &cli.output {
+        let content = serialize_identity(&entry);
+        write_identity_file(path, &content)
+            .with_context(|| format!("cannot write to {}", path.display()))?;
+        eprintln!("Identity written to: {}", path.display());
+        eprintln!("Public key: {pub_enc}");
+    } else {
+        let content = serialize_identity(&entry);
+        print!("{content}");
+        eprintln!("Public key: {pub_enc}");
+    }
+
+    Ok(())
+}
+
+fn keygen_to_public(sources: &[String]) -> Result<()> {
+    for source in sources {
+        let content = if source == "-" {
+            let stdin = io::stdin();
+            stdin.lock().lines().collect::<io::Result<Vec<_>>>()?.join("\n")
+        } else {
+            std::fs::read_to_string(source)
+                .with_context(|| format!("cannot read {source}"))?
+        };
+        let path = PathBuf::from(source);
+        let entry = parse_identity(&content, path)
+            .ok_or_else(|| anyhow!("no valid private key found in {source}"))?;
+        println!("{}", encode_pubkey(&entry.public_key));
+    }
+    Ok(())
+}
+
+#[cfg(unix)]
+fn write_identity_file(path: &Path, content: &str) -> Result<()> {
+    use std::os::unix::fs::OpenOptionsExt;
+    let mut f = std::fs::OpenOptions::new()
+        .write(true).create_new(true)
+        .mode(0o600)
+        .open(path)?;
+    f.write_all(content.as_bytes())?;
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn write_identity_file(path: &Path, content: &str) -> Result<()> {
+    if path.exists() {
+        return Err(anyhow!("{} already exists", path.display()));
+    }
+    std::fs::write(path, content)?;
+    Ok(())
 }

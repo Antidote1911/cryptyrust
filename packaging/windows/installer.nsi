@@ -28,7 +28,6 @@ Section "Install"
   SetOutPath "$INSTDIR"
 
   File "${APP_EXE}"
-  File "cryptyrust_cli.exe"
 
   CreateDirectory "$SMPROGRAMS\${APP_NAME}"
   CreateShortcut "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk" \
@@ -50,7 +49,6 @@ SectionEnd
 
 Section "Uninstall"
   Delete "$INSTDIR\${APP_EXE}"
-  Delete "$INSTDIR\cryptyrust_cli.exe"
   Delete "$INSTDIR\Uninstall.exe"
 
   Delete "$SMPROGRAMS\${APP_NAME}\${APP_NAME}.lnk"

@@ -1,6 +1,6 @@
 # Maintainer: Fabrice Corraire <antidote1911@gmail.com>
 pkgname=cryptyrust
-pkgver=1.3.4
+pkgver=1.4.0
 pkgrel=1
 pkgdesc="Post-quantum file encryption with a drag-and-drop GUI, CLI, and hybrid X25519+ML-KEM-768 key management"
 arch=('x86_64' 'aarch64')
@@ -33,9 +33,7 @@ check() {
 
 package() {
     cd "$pkgname-$pkgver"
-    install -Dm755 "target/release/cryptyrust_cli"  "$pkgdir/usr/bin/cryptyrust_cli"
-    install -Dm755 "target/release/cryptyrust"      "$pkgdir/usr/bin/cryptyrust"
-    install -Dm755 "target/release/crypty-keygen"   "$pkgdir/usr/bin/crypty-keygen"
+    install -Dm755 "target/release/cryptyrust" "$pkgdir/usr/bin/cryptyrust"
     install -Dm644 "packaging/linux/cryptyrust.desktop" \
         "$pkgdir/usr/share/applications/cryptyrust.desktop"
     install -Dm644 "packaging/cryptyrust.png" \

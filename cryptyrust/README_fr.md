@@ -1,6 +1,10 @@
-# cryptyrust GUI
+> [English version](README.md)
 
-Interface graphique native pour le chiffrement de fichiers Arsenic V1, construite avec [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui/tree/master/crates/eframe).
+# cryptyrust
+
+Binaire double-mode : ouvre la GUI native quand il est lancé sans argument, ou fonctionne en CLI quand des arguments sont fournis.
+
+Construit avec [egui](https://github.com/emilk/egui) / [eframe](https://github.com/emilk/egui/tree/master/crates/eframe).
 
 ---
 
@@ -55,6 +59,27 @@ Les paramètres sont persistés entre sessions via le stockage eframe.
 
 ---
 
+## Utilisation CLI
+
+```bash
+cryptyrust -e fichier.txt -p "phrase"        # chiffrement
+cryptyrust -d fichier.txt.arsn               # déchiffrement (essai auto keystore)
+cryptyrust -e fichier.txt -R alice -R bob    # chiffrement pour des destinataires
+cryptyrust --rekey fichier.txt.arsn          # changement de mot de passe
+cryptyrust --bench                           # benchmark des chiffrements
+cryptyrust --help                            # liste complète des options
+```
+
+## Gestion des clés
+
+```bash
+cryptyrust keygen -n alice --store           # générer un keypair → keystore partagé
+cryptyrust keygen -n alice -o alice.key      # générer un keypair → fichier spécifique
+cryptyrust keygen --list                     # lister tous les keypairs stockés
+cryptyrust keygen -y alice.key               # afficher la clé publique d'un fichier .key
+cryptyrust keygen --help                     # liste complète des options keygen
+```
+
 ## Compilation
 
 ```bash
@@ -73,7 +98,7 @@ sudo apt install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
 ## Structure du code
 
 ```
-gui/src/
+cryptyrust/src/
 ├── main.rs          Point d'entrée, initialisation eframe
 ├── app.rs           État de l'application, logique métier
 ├── job.rs           Gestion des jobs de chiffrement/déchiffrement (Rayon)

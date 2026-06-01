@@ -1,3 +1,5 @@
+> [Version française](README_fr.md)
+
 # arsenic
 
 Pure-Rust cryptographic library implementing the **Arsenic V1** file encryption format (`.arsn`).
