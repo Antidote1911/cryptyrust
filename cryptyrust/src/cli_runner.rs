@@ -1,13 +1,14 @@
 use arsenic::{
-    arsenic_find_matching_key, arsenic_main_routine, arsenic_main_routine_with_key,
-    arsenic_rekey, is_arsenic_file,
+    arsenic_add_recipient, arsenic_find_matching_key, arsenic_find_slot_for_key,
+    arsenic_list_recipients, arsenic_main_routine, arsenic_main_routine_with_key,
+    arsenic_rekey, arsenic_remove_recipient, is_arsenic_file,
     keystore::{load_identity_file, load_keystore, resolve_recipient, keys_dir, save_key, KeyEntry, serialize_identity, parse_identity},
     encode_pubkey,
     ArsenicParams, Direction, Secret, Ui,
     bench_cipher_combinations, best_combination, CipherId,
 };
 use clap::Parser;
-use crate::cli::{Cli, KeygenCli};
+use crate::cli::{Cli, KeygenCli, RecipientsCli, RecipientsAction};
 use std::{
     env,
     io::{self, BufRead, Write},
@@ -82,12 +83,23 @@ pub fn run() {
     // existing required-mode group does not interfere.
     let raw: Vec<String> = std::env::args().collect();
     if raw.get(1).map(|s| s.as_str()) == Some("keygen") {
-        // Prepend "cryptyrust keygen" as argv[0] so clap shows the right usage line.
         let argv: Vec<String> = std::iter::once("cryptyrust keygen".to_string())
             .chain(raw.into_iter().skip(2))
             .collect();
         let cli = KeygenCli::parse_from(argv);
         if let Err(e) = run_keygen(cli) {
+            eprintln!("\n{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if raw.get(1).map(|s| s.as_str()) == Some("recipients") {
+        let argv: Vec<String> = std::iter::once("cryptyrust recipients".to_string())
+            .chain(raw.into_iter().skip(2))
+            .collect();
+        let cli = RecipientsCli::parse_from(argv);
+        if let Err(e) = run_recipients(cli) {
             eprintln!("\n{e}");
             std::process::exit(1);
         }
@@ -537,6 +549,164 @@ fn keygen_to_public(sources: &[String]) -> Result<()> {
         println!("{}", encode_pubkey(&entry.public_key));
     }
     Ok(())
+}
+
+// ── Recipient management ──────────────────────────────────────────────────────
+
+fn run_recipients(cli: RecipientsCli) -> Result<()> {
+    match cli.action {
+        RecipientsAction::List { file, identities } => recipients_list(&file, &identities),
+        RecipientsAction::Add { file, recipient, password, passwordfile } =>
+            recipients_add(&file, &recipient, password, passwordfile.as_deref()),
+        RecipientsAction::Remove { file, identity, slot, password, passwordfile } =>
+            recipients_remove(&file, identity.as_deref(), slot, password, passwordfile.as_deref()),
+    }
+}
+
+/// List keyslots of `file`, probing the keystore + extra identity files to name them.
+fn recipients_list(file: &str, extra_identities: &[String]) -> Result<()> {
+    let path = Path::new(file);
+    if !(path.exists() && path.is_file()) {
+        return Err(anyhow!("File not found: {file}"));
+    }
+
+    let ephemeral_keys = arsenic_list_recipients(path).map_err(|e| anyhow!(e))?;
+    let n = ephemeral_keys.len();
+
+    println!("\nRecipients of '{}' — {} asymmetric keyslot(s):\n", file, n);
+
+    if n == 0 {
+        println!("  (no asymmetric keyslots — file is password-only)");
+        return Ok(());
+    }
+
+    // Build a map: slot_index → key_name
+    let mut slot_names: Vec<Option<String>> = vec![None; n];
+
+    // Probe keystore keys first
+    for entry in load_keystore() {
+        if let Some(slot_idx) = arsenic_find_slot_for_key(path, &entry.private_key) {
+            if slot_names[slot_idx].is_none() {
+                slot_names[slot_idx] = Some(entry.name.clone());
+            }
+        }
+    }
+
+    // Probe extra identity files supplied via -i
+    for id_path in extra_identities {
+        if let Some(entry) = load_identity_file(Path::new(id_path)) {
+            if let Some(slot_idx) = arsenic_find_slot_for_key(path, &entry.private_key) {
+                if slot_names[slot_idx].is_none() {
+                    let label = if entry.name.is_empty() { id_path.clone() } else { entry.name };
+                    slot_names[slot_idx] = Some(label);
+                }
+            }
+        }
+    }
+
+    for (i, (eph_key, name)) in ephemeral_keys.iter().zip(slot_names.iter()).enumerate() {
+        let eph_enc = encode_pubkey(eph_key);
+        match name {
+            Some(n) => println!("  Slot {i:<3} {n:<20} [ephemeral: {eph_enc}]"),
+            None    => println!("  Slot {i:<3} (unidentified)        [ephemeral: {eph_enc}]"),
+        }
+    }
+
+    println!();
+    println!("To remove a keyslot:");
+    println!("  cryptyrust recipients remove {file} -i KEY_FILE -p PASSWORD");
+    println!("  cryptyrust recipients remove {file} --slot N    -p PASSWORD");
+    Ok(())
+}
+
+/// Add a recipient keyslot to an existing file.
+fn recipients_add(
+    file: &str,
+    recipient_spec: &str,
+    password: Option<String>,
+    passwordfile: Option<&str>,
+) -> Result<()> {
+    let path = Path::new(file);
+    if !(path.exists() && path.is_file()) {
+        return Err(anyhow!("File not found: {file}"));
+    }
+    if !is_arsenic_file(path) {
+        return Err(anyhow!("{file} is not a valid Arsenic (.arsn) file"));
+    }
+
+    let recipient = resolve_recipient(recipient_spec)
+        .ok_or_else(|| anyhow!("Cannot resolve recipient '{recipient_spec}': not a contact name or key file"))?;
+
+    let pw = get_password_for_recipients(password, passwordfile)?;
+
+    struct NoProgress;
+    impl Ui for NoProgress { fn output(&self, _: i32) {} }
+
+    arsenic_add_recipient(path, &pw, &recipient, &NoProgress).map_err(|e| anyhow!(e))?;
+
+    println!("Recipient added to {file}.");
+    Ok(())
+}
+
+/// Remove a recipient keyslot, identified either by identity file or by slot index.
+fn recipients_remove(
+    file: &str,
+    identity: Option<&str>,
+    slot: Option<usize>,
+    password: Option<String>,
+    passwordfile: Option<&str>,
+) -> Result<()> {
+    let path = Path::new(file);
+    if !(path.exists() && path.is_file()) {
+        return Err(anyhow!("File not found: {file}"));
+    }
+    if !is_arsenic_file(path) {
+        return Err(anyhow!("{file} is not a valid Arsenic (.arsn) file"));
+    }
+
+    // Resolve slot index.
+    let slot_idx = match (identity, slot) {
+        (Some(id_path), _) => {
+            let entry = load_identity_file(Path::new(id_path))
+                .ok_or_else(|| anyhow!("Cannot read identity file: {id_path}"))?;
+            arsenic_find_slot_for_key(path, &entry.private_key)
+                .ok_or_else(|| anyhow!("No keyslot in '{file}' matches '{id_path}'"))?
+        }
+        (None, Some(n)) => n,
+        (None, None) => {
+            return Err(anyhow!(
+                "Specify a recipient with -i KEY_FILE or --slot N.\n\
+                 Use `cryptyrust recipients list {file}` to see slot indices."
+            ));
+        }
+    };
+
+    let pw = get_password_for_recipients(password, passwordfile)?;
+
+    struct NoProgress;
+    impl Ui for NoProgress { fn output(&self, _: i32) {} }
+
+    arsenic_remove_recipient(path, &pw, slot_idx, &NoProgress)
+        .map_err(|e| anyhow!("{e}"))?;
+
+    println!("Slot {slot_idx} removed from {file}.");
+    Ok(())
+}
+
+fn get_password_for_recipients(
+    password: Option<String>,
+    passwordfile: Option<&str>,
+) -> Result<Secret<String>> {
+    if let Some(p) = password {
+        return Ok(Secret::new(p));
+    }
+    if let Some(f) = passwordfile {
+        let s = std::fs::read_to_string(f)
+            .with_context(|| format!("cannot read password file: {f}"))?;
+        return Ok(Secret::new(s));
+    }
+    let pw = rpassword::prompt_password("Password: ").context("could not read password")?;
+    Ok(Secret::new(pw))
 }
 
 #[cfg(unix)]

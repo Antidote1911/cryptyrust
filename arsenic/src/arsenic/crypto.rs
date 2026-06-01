@@ -279,6 +279,40 @@ pub(crate) fn wrap_dek_hybrid(
     })
 }
 
+/// Find which hybrid keyslot (by slot index) can be opened with `x25519_privkey`.
+///
+/// Returns the **slot position** in the file's keyslot array, or `None`.
+/// Does not require the symmetric password — authentication is purely via ECDH + ML-KEM.
+pub fn find_slot_for_privkey<R: Read>(
+    input: &mut R,
+    x25519_privkey: &[u8; 32],
+) -> Result<Option<usize>, CoreErr> {
+    let header_buf = read_header(input)?;
+    let (pub_hdr, _, _, enc_env_region) = parse_header_bytes(&header_buf)?;
+    let hdr_cipher = CipherId::from_byte(pub_hdr.hdr_cipher_id)?;
+    let envelope = parse_envelope(&enc_env_region)?;
+
+    if envelope.hybrid_keyslots.is_empty() {
+        return Ok(None);
+    }
+
+    let x25519_secret = X25519StaticSecret::from(*x25519_privkey);
+    for (slot_idx, slot) in envelope.hybrid_keyslots.iter().enumerate() {
+        let eph_pk = X25519PublicKey::from(slot.ephemeral_x25519);
+        let ss_x25519 = x25519_secret.diffie_hellman(&eph_pk);
+        let ss_mlkem = hybrid_kem::decaps(x25519_privkey, &slot.mlkem_ct);
+        let wrapping_key = hybrid_wrapping_key(
+            &slot.ephemeral_x25519, &slot.mlkem_ct, ss_x25519.as_bytes(), &ss_mlkem,
+        );
+        if cipher_dispatch::envelope_decrypt(
+            hdr_cipher, &wrapping_key, &slot.kek_nonce, &[], &slot.wrapped_dek,
+        ).is_ok() {
+            return Ok(Some(slot_idx));
+        }
+    }
+    Ok(None)
+}
+
 /// Probe the file header to find which X25519 private key (if any) can open it.
 pub fn find_decrypting_key<R: Read>(
     input: &mut R,

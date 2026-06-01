@@ -326,6 +326,202 @@ fn decrypt_nonexistent_input_fails() {
         .failure();
 }
 
+// ── recipients subcommand ─────────────────────────────────────────────────────
+
+#[test]
+fn recipients_list_password_only_file() {
+    let tmp = TempDir::new().unwrap();
+    let plain = tmp.child("f.txt");
+    plain.write_str("data").unwrap();
+    let enc = tmp.child("f.arsn");
+
+    // Symmetric-only file has 0 keyslots.
+    encrypt(plain.path().to_str().unwrap(), enc.path().to_str().unwrap(), "pw123", &[]);
+    cryptyrust()
+        .args(["recipients", "list", enc.path().to_str().unwrap()])
+        .assert()
+        .success()
+        .stdout(predicates::str::contains("0 asymmetric keyslot"));
+}
+
+#[test]
+fn recipients_list_identifies_slots() {
+    let tmp = TempDir::new().unwrap();
+    let key_a = tmp.child("a.key");
+    let key_b = tmp.child("b.key");
+    let plain = tmp.child("msg.txt");
+    plain.write_str("hello").unwrap();
+    let enc = tmp.child("msg.arsn");
+
+    cryptyrust().args(["keygen", "-n", "alice", "-o", key_a.path().to_str().unwrap()]).assert().success();
+    cryptyrust().args(["keygen", "-n", "bob",   "-o", key_b.path().to_str().unwrap()]).assert().success();
+
+    cryptyrust()
+        .args(["-e", plain.path().to_str().unwrap(),
+               "-R", key_a.path().to_str().unwrap(),
+               "-R", key_b.path().to_str().unwrap(),
+               "-p", "listpass", "-o", enc.path().to_str().unwrap()])
+        .assert().success();
+
+    let out = cryptyrust()
+        .args(["recipients", "list", enc.path().to_str().unwrap(),
+               "-i", key_a.path().to_str().unwrap(),
+               "-i", key_b.path().to_str().unwrap()])
+        .assert().success()
+        .get_output()
+        .stdout.clone();
+
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.contains("Slot 0"), "expected Slot 0 in output");
+    assert!(text.contains("Slot 1"), "expected Slot 1 in output");
+    assert!(text.contains("alice"), "expected alice identified");
+    assert!(text.contains("bob"),   "expected bob identified");
+}
+
+#[test]
+fn recipients_remove_by_key_file() {
+    let tmp = TempDir::new().unwrap();
+    let key_a = tmp.child("a.key");
+    let key_b = tmp.child("b.key");
+    let plain = tmp.child("data.txt");
+    plain.write_str("secret").unwrap();
+    let enc = tmp.child("data.arsn");
+    let dec = tmp.child("data_out.txt");
+
+    cryptyrust().args(["keygen", "-n", "a", "-o", key_a.path().to_str().unwrap()]).assert().success();
+    cryptyrust().args(["keygen", "-n", "b", "-o", key_b.path().to_str().unwrap()]).assert().success();
+
+    cryptyrust()
+        .args(["-e", plain.path().to_str().unwrap(),
+               "-R", key_a.path().to_str().unwrap(),
+               "-R", key_b.path().to_str().unwrap(),
+               "-p", "mgmtpass", "-o", enc.path().to_str().unwrap()])
+        .assert().success();
+
+    // Remove alice's slot by key file.
+    cryptyrust()
+        .args(["recipients", "remove", enc.path().to_str().unwrap(),
+               "-i", key_a.path().to_str().unwrap(), "-p", "mgmtpass"])
+        .assert().success();
+
+    // Alice can no longer decrypt.
+    cryptyrust()
+        .args(["-d", enc.path().to_str().unwrap(),
+               "-i", key_a.path().to_str().unwrap(),
+               "-o", dec.path().to_str().unwrap()])
+        .assert().failure();
+
+    // Bob can still decrypt.
+    cryptyrust()
+        .args(["-d", enc.path().to_str().unwrap(),
+               "-i", key_b.path().to_str().unwrap(),
+               "-o", dec.path().to_str().unwrap()])
+        .assert().success();
+    assert_eq!(std::fs::read_to_string(dec.path()).unwrap(), "secret");
+}
+
+#[test]
+fn recipients_remove_by_slot_index() {
+    let tmp = TempDir::new().unwrap();
+    let key = tmp.child("k.key");
+    let plain = tmp.child("f.txt");
+    plain.write_str("data").unwrap();
+    let enc = tmp.child("f.arsn");
+
+    cryptyrust().args(["keygen", "-n", "k", "-o", key.path().to_str().unwrap()]).assert().success();
+    cryptyrust()
+        .args(["-e", plain.path().to_str().unwrap(),
+               "-R", key.path().to_str().unwrap(),
+               "-p", "slotpass", "-o", enc.path().to_str().unwrap()])
+        .assert().success();
+
+    // Remove slot 0 by index.
+    cryptyrust()
+        .args(["recipients", "remove", enc.path().to_str().unwrap(),
+               "--slot", "0", "-p", "slotpass"])
+        .assert().success();
+
+    // File now has 0 asymmetric keyslots.
+    cryptyrust()
+        .args(["recipients", "list", enc.path().to_str().unwrap()])
+        .assert().success()
+        .stdout(predicates::str::contains("0 asymmetric keyslot"));
+}
+
+#[test]
+fn recipients_remove_wrong_key_fails() {
+    let tmp = TempDir::new().unwrap();
+    let key_a = tmp.child("a.key");
+    let key_b = tmp.child("b.key");
+    let plain = tmp.child("f.txt");
+    plain.write_str("x").unwrap();
+    let enc = tmp.child("f.arsn");
+
+    cryptyrust().args(["keygen", "-n", "a", "-o", key_a.path().to_str().unwrap()]).assert().success();
+    cryptyrust().args(["keygen", "-n", "b", "-o", key_b.path().to_str().unwrap()]).assert().success();
+
+    // Encrypt for alice only.
+    cryptyrust()
+        .args(["-e", plain.path().to_str().unwrap(),
+               "-R", key_a.path().to_str().unwrap(),
+               "-p", "wrongkeypass", "-o", enc.path().to_str().unwrap()])
+        .assert().success();
+
+    // Try to remove using bob's key (not a recipient) — must fail.
+    cryptyrust()
+        .args(["recipients", "remove", enc.path().to_str().unwrap(),
+               "-i", key_b.path().to_str().unwrap(), "-p", "wrongkeypass"])
+        .assert().failure();
+}
+
+#[test]
+fn recipients_remove_requires_slot_or_identity() {
+    let tmp = TempDir::new().unwrap();
+    let plain = tmp.child("f.txt");
+    plain.write_str("x").unwrap();
+    let enc = tmp.child("f.arsn");
+    encrypt(plain.path().to_str().unwrap(), enc.path().to_str().unwrap(), "pw", &[]);
+
+    cryptyrust()
+        .args(["recipients", "remove", enc.path().to_str().unwrap(), "-p", "pw"])
+        .assert().failure();
+}
+
+#[test]
+fn recipients_add_then_new_recipient_can_decrypt() {
+    let tmp = TempDir::new().unwrap();
+    let key_a = tmp.child("a.key");
+    let key_b = tmp.child("b.key");
+    let plain = tmp.child("msg.txt");
+    plain.write_str("added recipient").unwrap();
+    let enc = tmp.child("msg.arsn");
+    let dec = tmp.child("msg_out.txt");
+
+    cryptyrust().args(["keygen", "-n", "a", "-o", key_a.path().to_str().unwrap()]).assert().success();
+    cryptyrust().args(["keygen", "-n", "b", "-o", key_b.path().to_str().unwrap()]).assert().success();
+
+    // Encrypt for alice only, with password.
+    cryptyrust()
+        .args(["-e", plain.path().to_str().unwrap(),
+               "-R", key_a.path().to_str().unwrap(),
+               "-p", "addpass", "-o", enc.path().to_str().unwrap()])
+        .assert().success();
+
+    // Add bob as a recipient.
+    cryptyrust()
+        .args(["recipients", "add", enc.path().to_str().unwrap(),
+               "-R", key_b.path().to_str().unwrap(), "-p", "addpass"])
+        .assert().success();
+
+    // Bob can now decrypt.
+    cryptyrust()
+        .args(["-d", enc.path().to_str().unwrap(),
+               "-i", key_b.path().to_str().unwrap(),
+               "-o", dec.path().to_str().unwrap()])
+        .assert().success();
+    assert_eq!(std::fs::read_to_string(dec.path()).unwrap(), "added recipient");
+}
+
 #[test]
 fn no_args_does_not_print_help_to_stderr() {
     // Without args the binary launches the GUI — we can't test the window

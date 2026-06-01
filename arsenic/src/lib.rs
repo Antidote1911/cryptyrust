@@ -12,7 +12,7 @@ pub use crate::arsenic::MAX_ARGON2_RAM_KB;
 pub use crate::arsenic::{
     ArsenicParams, ArsenicStrength, CipherId, EnvelopeMetadata, HybridKeyslot, HybridRecipient,
     decrypt_arsenic, decrypt_arsenic_with_key, encrypt_arsenic,
-    find_decrypting_key, list_recipients, rekey_arsenic,
+    find_decrypting_key, find_slot_for_privkey, list_recipients, rekey_arsenic,
     BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE,
 };
 pub use crate::config::{Direction, Ui};
@@ -104,6 +104,17 @@ pub fn arsenic_read_params(path: &std::path::Path) -> Option<ArsenicParams> {
 pub fn arsenic_find_matching_key(path: &std::path::Path, privkeys: &[[u8; 32]]) -> Option<usize> {
     let mut f = File::open(path).ok()?;
     arsenic::find_decrypting_key(&mut f, privkeys).ok().flatten()
+}
+
+/// Find which **keyslot index** (position in the file's keyslot array) can be opened
+/// with `privkey`.
+///
+/// Unlike `arsenic_find_matching_key` (which returns the index into the *privkeys* array),
+/// this returns the slot position inside the file — the value you need to pass to
+/// `arsenic_remove_recipient`.  No symmetric password is required.
+pub fn arsenic_find_slot_for_key(path: &std::path::Path, privkey: &[u8; 32]) -> Option<usize> {
+    let mut f = File::open(path).ok()?;
+    arsenic::find_slot_for_privkey(&mut f, privkey).ok().flatten()
 }
 
 /// Change the symmetric password of an Arsenic file without decrypting the payload.

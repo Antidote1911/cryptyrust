@@ -6,15 +6,21 @@ const ABOUT: &str = "
 Arsenic file encryption — encrypts, decrypts, and manages keys.
 
 Key management:
-  cryptyrust keygen -n alice --store   Generate a keypair and save to keystore
-  cryptyrust keygen --list             List all stored keypairs
-  cryptyrust keygen -y alice.key       Show public key of a .key file
+  cryptyrust keygen -n alice --store       Generate a keypair and save to keystore
+  cryptyrust keygen --list                 List all stored keypairs
+  cryptyrust keygen -y alice.key           Show public key of a .key file
+
+Recipient management:
+  cryptyrust recipients list FILE          List keyslots with identity names
+  cryptyrust recipients add FILE -R alice  Add a recipient to an existing file
+  cryptyrust recipients remove FILE -i KEY_FILE -p PASSWORD
+  cryptyrust recipients remove FILE --slot N     -p PASSWORD
 
 Encryption / decryption:
-  cryptyrust -e FILE                   Encrypt
-  cryptyrust -d FILE                   Decrypt
-  cryptyrust --rekey FILE              Change password
-  cryptyrust --bench                   Benchmark ciphers
+  cryptyrust -e FILE                       Encrypt
+  cryptyrust -d FILE                       Decrypt
+  cryptyrust --rekey FILE                  Change password
+  cryptyrust --bench                       Benchmark ciphers
 
 Author : Fabrice Corraire <antidote1911@gmail.com>
 Github : https://github.com/Antidote1911/
@@ -118,6 +124,82 @@ pub struct KeygenCli {
     /// Pass `-` to read from stdin.
     #[clap(short = 'y', long = "to-public", value_name = "IDENTITY", num_args = 1..)]
     pub to_public: Vec<String>,
+}
+
+// ── Recipient management sub-command ─────────────────────────────────────────
+
+#[derive(Parser)]
+#[clap(name = "cryptyrust recipients", author, version)]
+#[clap(about = "List, add, or remove asymmetric keyslots from an .arsn file")]
+pub struct RecipientsCli {
+    #[clap(subcommand)]
+    pub action: RecipientsAction,
+}
+
+#[derive(clap::Subcommand)]
+pub enum RecipientsAction {
+    /// List keyslots, matching them to known identities where possible.
+    ///
+    /// Probes the keystore and any supplied -i files to identify slot owners.
+    /// No password is required.
+    List {
+        /// The .arsn file to inspect.
+        #[clap(value_name = "FILE")]
+        file: String,
+
+        /// Extra identity file(s) to probe in addition to the shared keystore.
+        #[clap(short = 'i', long = "identity", value_name = "KEY_FILE", action = clap::ArgAction::Append)]
+        identities: Vec<String>,
+    },
+
+    /// Add a recipient keyslot to an existing file.
+    Add {
+        /// The .arsn file to modify.
+        #[clap(value_name = "FILE")]
+        file: String,
+
+        /// Recipient to add (contact name stored in keystore, or path to a .key file).
+        #[clap(short = 'R', long = "recipient", value_name = "SPEC")]
+        recipient: String,
+
+        /// Password (not recommended — appears in shell history).
+        #[clap(short, long, value_name = "PASSWORD")]
+        password: Option<String>,
+
+        /// Read the password from a UTF-8 file.
+        #[clap(short = 'f', long, value_name = "FILE")]
+        passwordfile: Option<String>,
+    },
+
+    /// Remove a recipient keyslot from an existing file.
+    ///
+    /// Specify the recipient either by identity file (-i) or by slot index (--slot).
+    /// Use `cryptyrust recipients list FILE` to discover slot indices.
+    ///
+    /// The symmetric password is always required to authorize the operation and
+    /// recompute the HeaderMAC. Files encrypted with recipients only (no password)
+    /// cannot have keyslots removed post-hoc unless they were also given a password.
+    Remove {
+        /// The .arsn file to modify.
+        #[clap(value_name = "FILE")]
+        file: String,
+
+        /// Remove the keyslot that matches this identity file.
+        #[clap(short = 'i', long = "identity", value_name = "KEY_FILE")]
+        identity: Option<String>,
+
+        /// Remove the keyslot at this index (0-based).
+        #[clap(long, value_name = "N")]
+        slot: Option<usize>,
+
+        /// Password (not recommended — appears in shell history).
+        #[clap(short, long, value_name = "PASSWORD")]
+        password: Option<String>,
+
+        /// Read the password from a UTF-8 file.
+        #[clap(short = 'f', long, value_name = "FILE")]
+        passwordfile: Option<String>,
+    },
 }
 
 // ── Main CLI ──────────────────────────────────────────────────────────────────

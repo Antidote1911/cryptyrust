@@ -29,7 +29,8 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use arsenic::{
-    arsenic_add_recipient, arsenic_find_matching_key, arsenic_list_recipients,
+    arsenic_add_recipient, arsenic_find_matching_key, arsenic_find_slot_for_key,
+    arsenic_list_recipients,
     arsenic_main_routine, arsenic_main_routine_with_key, arsenic_rekey,
     arsenic_remove_recipient, decrypt_arsenic, decrypt_arsenic_with_key,
     encode_privkey, encode_pubkey, decode_privkey, decode_pubkey,
@@ -686,6 +687,33 @@ pub unsafe extern "C" fn arsenic_find_matching_key_file(
     let privkeys_parsed: Vec<[u8; 32]> = flat.chunks_exact(32)
         .map(|c| c.try_into().unwrap()).collect();
     match arsenic_find_matching_key(Path::new(&path_s), &privkeys_parsed) {
+        Some(idx) => idx as i32,
+        None      => -1,
+    }
+}
+
+/// Find which **keyslot index** (position in the file's keyslot array) can be
+/// opened with `privkey` (32 bytes).
+///
+/// Returns the 0-based slot index on success, or `-1` if no slot matches, the file
+/// has no asymmetric keyslots, or an error occurred.
+///
+/// Unlike `arsenic_find_matching_key_file` (which returns the index into the *privkeys*
+/// array), this returns the slot position inside the file — the value to pass to
+/// `arsenic_remove_recipient_file`.  No symmetric password is required.
+///
+/// # Safety
+/// `path` must be a valid null-terminated C string; `privkey` must point to 32 readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn arsenic_find_slot_for_key_file(
+    path:    *const c_char,
+    privkey: *const u8,
+) -> i32 {
+    if privkey.is_null() { return -1; }
+    let Ok(path_s) = (unsafe { cstr_to_string(path, "path") }) else { return -1 };
+    let pk: [u8; 32] = unsafe { std::slice::from_raw_parts(privkey, 32) }
+        .try_into().expect("32 bytes");
+    match arsenic_find_slot_for_key(Path::new(&path_s), &pk) {
         Some(idx) => idx as i32,
         None      => -1,
     }

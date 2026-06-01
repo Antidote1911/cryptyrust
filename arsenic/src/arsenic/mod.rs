@@ -6,7 +6,7 @@ pub(crate) mod hybrid_kem;
 
 pub use crypto::{
     decrypt_arsenic, decrypt_arsenic_with_key, encrypt_arsenic, find_decrypting_key,
-    list_recipients, rekey_arsenic,
+    find_slot_for_privkey, list_recipients, rekey_arsenic,
     build_header_with_added_recipient, build_header_with_removed_recipient,
 };
 
