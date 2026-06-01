@@ -10,7 +10,8 @@ pub use crate::arsenic::bench::{bench_cipher_combinations, best_combination, Cip
 pub use crate::arsenic::header::{MAX_ASYM_KEYSLOTS, MAX_T_COST, MAX_P_COST};
 pub use crate::arsenic::MAX_ARGON2_RAM_KB;
 pub use crate::arsenic::{
-    ArsenicParams, ArsenicStrength, CipherId, EnvelopeMetadata, HybridKeyslot, HybridRecipient,
+    ArsenicParams, ArsenicStrength, CipherId, EnvelopeMetadata,
+    HybridKeyslot, HybridKeyslot1024, HybridRecipient, HybridPrivKey, KemLevel,
     decrypt_arsenic, decrypt_arsenic_with_key, encrypt_arsenic,
     find_decrypting_key, find_slot_for_privkey, list_recipients, rekey_arsenic,
     BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE,
@@ -19,6 +20,7 @@ pub use crate::config::{Direction, Ui};
 pub use crate::keyfmt::{
     decode_mlkem_pubkey, decode_privkey, decode_pubkey,
     encode_mlkem_pubkey, encode_privkey, encode_pubkey,
+    encode_mlkem_seed, decode_mlkem_seed,
 };
 pub use crate::constants::*;
 pub use crate::errors::CoreErr;
@@ -39,20 +41,35 @@ pub fn random_bytes_32() -> [u8; 32] {
     buf
 }
 
-/// Derive the ML-KEM-768 encapsulation (public) key from an X25519 private key.
-///
-/// Both keys are derived deterministically from the same 32-byte seed stored
-/// in the identity file, so users only need to store one secret.
-pub fn hybrid_encapsulation_key(x25519_sk: &[u8; 32]) -> [u8; 1184] {
-    arsenic::hybrid_kem::encapsulation_key(x25519_sk)
+/// Derive the ML-KEM-768 encapsulation key from a 64-byte ML-KEM seed.
+pub fn hybrid_encapsulation_key(mlkem_seed: &[u8; 64]) -> [u8; 1184] {
+    arsenic::hybrid_kem::encapsulation_key_768(mlkem_seed)
 }
 
-/// Build a `HybridRecipient` for the owner of `x25519_sk`.
+/// Build a `HybridRecipient` from a `KeyEntry` (uses independently-seeded keys).
+pub fn hybrid_recipient_from_key_entry(entry: &keystore::KeyEntry) -> HybridRecipient {
+    entry.as_recipient()
+}
+
+/// Build a `HybridRecipient` from an X25519 private key using BLAKE3-derived ML-KEM seed.
+///
+/// Legacy function for contexts where only the 32-byte X25519 key is available.
 pub fn hybrid_recipient_from_privkey(x25519_sk: &[u8; 32]) -> HybridRecipient {
+    let mlkem_seed = arsenic::hybrid_kem::seed_from_x25519(x25519_sk);
     HybridRecipient::new(
         pubkey_from_privkey(x25519_sk),
-        hybrid_encapsulation_key(x25519_sk),
+        arsenic::hybrid_kem::encapsulation_key_768(&mlkem_seed),
     )
+}
+
+/// Derive a 64-byte ML-KEM seed from a 32-byte X25519 key (legacy / backward compat).
+pub fn mlkem_seed_from_x25519(x25519_sk: &[u8; 32]) -> [u8; 64] {
+    arsenic::hybrid_kem::seed_from_x25519(x25519_sk)
+}
+
+/// Derive the ML-KEM-768 encapsulation key from a 64-byte seed.
+pub fn mlkem_encapsulation_key_768(mlkem_seed: &[u8; 64]) -> [u8; 1184] {
+    arsenic::hybrid_kem::encapsulation_key_768(mlkem_seed)
 }
 
 /// Derive the X25519 public key from a private key.
@@ -96,28 +113,36 @@ pub fn arsenic_read_params(path: &std::path::Path) -> Option<ArsenicParams> {
         pld_cipher: arsenic::CipherId::from_byte(buf[8]).ok()?,
         metadata: EnvelopeMetadata::default(),
         recipients: vec![],
+        kem_level: arsenic::KemLevel::L768,
+        signing_key: None,
     })
 }
 
-/// Probe a file to find which private key (if any) can decrypt it.
+/// Probe a file to find which keypair (if any) can decrypt it.
 ///
-/// Opens only the header — the payload is never read.  Returns `Some(i)` if
-/// `privkeys[i]` matches one of the file's asymmetric keyslots, `None` otherwise
-/// (no matching key, or the file has no asymmetric keyslots, or it cannot be read).
-pub fn arsenic_find_matching_key(path: &std::path::Path, privkeys: &[[u8; 32]]) -> Option<usize> {
+/// Returns `Some(i)` if `keys[i]` matches one of the file's asymmetric keyslots.
+pub fn arsenic_find_matching_key(path: &std::path::Path, keys: &[keystore::KeyEntry]) -> Option<usize> {
     let mut f = File::open(path).ok()?;
-    arsenic::find_decrypting_key(&mut f, privkeys).ok().flatten()
+    let hybrid_keys: Vec<HybridPrivKey<'_>> = keys
+        .iter()
+        .map(|k| HybridPrivKey { x25519_sk: &k.private_key, mlkem_seed: &k.mlkem_seed })
+        .collect();
+    arsenic::find_decrypting_key(&mut f, &hybrid_keys).ok().flatten()
 }
 
-/// Find which **keyslot index** (position in the file's keyslot array) can be opened
-/// with `privkey`.
-///
-/// Unlike `arsenic_find_matching_key` (which returns the index into the *privkeys* array),
-/// this returns the slot position inside the file — the value you need to pass to
-/// `arsenic_remove_recipient`.  No symmetric password is required.
-pub fn arsenic_find_slot_for_key(path: &std::path::Path, privkey: &[u8; 32]) -> Option<usize> {
+/// Find which **keyslot index** can be opened with this keypair.
+/// Returns the slot position to pass to `arsenic_remove_recipient`.
+pub fn arsenic_find_slot_for_key(path: &std::path::Path, key: &keystore::KeyEntry) -> Option<usize> {
     let mut f = File::open(path).ok()?;
-    arsenic::find_slot_for_privkey(&mut f, privkey).ok().flatten()
+    arsenic::find_slot_for_privkey(&mut f, &key.private_key, &key.mlkem_seed).ok().flatten()
+}
+
+/// Legacy variant for callers that only have a 32-byte X25519 key (FFI / old code).
+/// Derives the ML-KEM seed via BLAKE3 for backward compat.
+pub fn arsenic_find_slot_for_privkey_legacy(path: &std::path::Path, x25519_sk: &[u8; 32]) -> Option<usize> {
+    let mlkem_seed = arsenic::hybrid_kem::seed_from_x25519(x25519_sk);
+    let mut f = File::open(path).ok()?;
+    arsenic::find_slot_for_privkey(&mut f, x25519_sk, &mlkem_seed).ok().flatten()
 }
 
 /// Change the symmetric password of an Arsenic file without decrypting the payload.
@@ -299,11 +324,11 @@ fn rewrite_file_with_new_header(
     std::fs::rename(&tmp_path, path).map_err(CoreErr::IOError)
 }
 
-/// Decrypt an Arsenic file using an X25519 private key (asymmetric path).
+/// Decrypt an Arsenic file using a `KeyEntry` (X25519 + independent ML-KEM seed).
 pub fn arsenic_main_routine_with_key(
     filename: Option<&str>,
     out_file: Option<&str>,
-    privkey: &Secret<[u8; 32]>,
+    key: &keystore::KeyEntry,
     ui: Box<dyn Ui>,
 ) -> Result<f64, CoreErr> {
     let in_path = filename.ok_or_else(|| {
@@ -322,9 +347,12 @@ pub fn arsenic_main_routine_with_key(
     let mut in_file = File::open(in_path)?;
     let filesize = in_file.metadata()?.len();
     let start = Instant::now();
+    let privkey = Secret::new(key.private_key);
 
     let mut out = File::create(out_path)?;
-    if let Err(e) = arsenic::decrypt_arsenic_with_key(&mut in_file, &mut out, privkey, &*ui, filesize) {
+    if let Err(e) = arsenic::decrypt_arsenic_with_key(
+        &mut in_file, &mut out, &privkey, &key.mlkem_seed, &*ui, filesize,
+    ) {
         let _ = remove_file(out_path);
         return Err(e);
     }

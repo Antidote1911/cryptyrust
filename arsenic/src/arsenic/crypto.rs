@@ -13,15 +13,20 @@ use super::cipher_dispatch;
 use super::header::{
     build_envelope_region, build_header_bytes, compute_header_mac,
     deserialize_meta_tlv, parse_envelope, parse_header_bytes, serialize_meta_tlv,
-    serialize_pre_mac, verify_header_mac, HybridKeyslot, EnvelopeContent, EnvelopeMetadata,
-    ParsedEnvelope, PublicHeader, ASYM_COUNT_LEN, ASYM_KEYSLOT_LEN, GCM_TAG,
+    serialize_pre_mac, verify_header_mac,
+    HybridKeyslot, HybridKeyslot1024, MlDsaSignature, EnvelopeContent, EnvelopeMetadata,
+    ParsedEnvelope, PublicHeader,
+    ASYM_COUNT_LEN, ASYM_KEYSLOT_LEN, ASYM_1024_COUNT_LEN, ASYM_1024_KEYSLOT_LEN, GCM_TAG,
     MERKLE_V1, META_TLV_MANDATORY_PT_LEN, MIN_HEADER_TOTAL_SIZE, PUB_HEADER_LEN, WRAPPED_DEK_LEN,
+    SIG_PRESENT_LEN, MLDSA_VERIFYING_KEY_LEN, MLDSA_SIGNATURE_LEN,
 };
 use super::hybrid_kem;
 use super::{
-    CipherId, HybridRecipient, BLOCK_ID_32MB, BLOCK_ID_4MB, BLOCK_SIZE_32MB, BLOCK_SIZE_4MB,
+    CipherId, HybridRecipient, KemLevel,
+    BLOCK_ID_32MB, BLOCK_ID_4MB, BLOCK_SIZE_32MB, BLOCK_SIZE_4MB,
     LARGE_FILE_THRESHOLD, MAX_ARGON2_RAM_KB, MAX_HEADER_TOTAL_SIZE, MAX_T_COST, MAX_P_COST,
 };
+use ml_dsa::{MlDsa65, SigningKey as MlDsaSigningKey, Signer, Verifier, Keypair, Seed as MlDsaSeed};
 
 // ── KDF parameter validation ──────────────────────────────────────────────────
 
@@ -258,6 +263,58 @@ fn metadata_extra_pt_len(meta: &EnvelopeMetadata) -> usize {
 
 // ── Hybrid keyslot helpers ────────────────────────────────────────────────────
 
+/// Wrap `dek` for one hybrid (X25519 + ML-KEM-1024) recipient.
+pub(crate) fn wrap_dek_hybrid_1024(
+    hdr_cipher: CipherId,
+    recipient: &HybridRecipient,
+    dek: &[u8; 32],
+) -> Result<HybridKeyslot1024, CoreErr> {
+    use hybrid_kem::{EK_LEN_1024, CT_LEN_1024};
+    let ephemeral_bytes: [u8; 32] = random_array();
+    let ephemeral_secret = X25519StaticSecret::from(ephemeral_bytes);
+    let ephemeral_pk_x25519 = X25519PublicKey::from(&ephemeral_secret);
+    let recipient_x25519_pk = X25519PublicKey::from(recipient.x25519);
+    let ss_x25519 = ephemeral_secret.diffie_hellman(&recipient_x25519_pk);
+
+    // The 1024 EK is stored in recipient.mlkem_1024 (1568 bytes).
+    let ek_1024: [u8; EK_LEN_1024] = recipient.mlkem_1024.ok_or_else(|| {
+        CoreErr::EncryptFail("Recipient has no ML-KEM-1024 key — use KemLevel::L1024 when generating".into())
+    })?;
+    let m: [u8; 32] = random_array();
+    let (mlkem_ct, ss_mlkem) = hybrid_kem::encaps_1024(&ek_1024, &m);
+
+    let wrapping_key = hybrid_wrapping_key_1024(
+        ephemeral_pk_x25519.as_bytes(), &mlkem_ct, ss_x25519.as_bytes(), &ss_mlkem,
+    );
+
+    let kek_nonce: [u8; 12] = random_array();
+    let wrapped = cipher_dispatch::envelope_encrypt(hdr_cipher, &wrapping_key, &kek_nonce, AAD_HYBRID_WRAPPED_DEK, dek)?;
+    let mut wrapped_dek = [0u8; WRAPPED_DEK_LEN];
+    wrapped_dek.copy_from_slice(&wrapped);
+
+    Ok(HybridKeyslot1024 {
+        ephemeral_x25519: *ephemeral_pk_x25519.as_bytes(),
+        mlkem_ct,
+        kek_nonce,
+        wrapped_dek,
+    })
+}
+
+fn hybrid_wrapping_key_1024(
+    eph_x25519_pk: &[u8; 32],
+    mlkem_ct: &[u8; 1568],
+    ss_x25519: &[u8; 32],
+    ss_mlkem: &[u8; 32],
+) -> [u8; 32] {
+    let mut m = [0u8; 32 + 1568 + 32 + 32];
+    let mut o = 0;
+    m[o..o+32].copy_from_slice(eph_x25519_pk);   o += 32;
+    m[o..o+1568].copy_from_slice(mlkem_ct);       o += 1568;
+    m[o..o+32].copy_from_slice(ss_x25519);        o += 32;
+    m[o..o+32].copy_from_slice(ss_mlkem);
+    blake3::derive_key("Arsenic Hybrid KEM 1024", &m)
+}
+
 /// Wrap `dek` for one hybrid (X25519 + ML-KEM-768) recipient.
 ///
 /// Hybrid wrapping key binds both shared secrets and all public values:
@@ -297,13 +354,14 @@ pub(crate) fn wrap_dek_hybrid(
     })
 }
 
-/// Find which hybrid keyslot (by slot index) can be opened with `x25519_privkey`.
+/// Find which hybrid keyslot (by slot index) can be opened with this keypair.
 ///
 /// Returns the **slot position** in the file's keyslot array, or `None`.
-/// Does not require the symmetric password — authentication is purely via ECDH + ML-KEM.
+/// No symmetric password required — authentication is via ECDH + ML-KEM.
 pub fn find_slot_for_privkey<R: Read>(
     input: &mut R,
     x25519_privkey: &[u8; 32],
+    mlkem_seed: &[u8; 64],
 ) -> Result<Option<usize>, CoreErr> {
     let header_buf = read_header(input)?;
     let (pub_hdr, _, _, enc_env_region) = parse_header_bytes(&header_buf)?;
@@ -318,7 +376,7 @@ pub fn find_slot_for_privkey<R: Read>(
     for (slot_idx, slot) in envelope.hybrid_keyslots.iter().enumerate() {
         let eph_pk = X25519PublicKey::from(slot.ephemeral_x25519);
         let ss_x25519 = x25519_secret.diffie_hellman(&eph_pk);
-        let ss_mlkem = hybrid_kem::decaps(x25519_privkey, &slot.mlkem_ct);
+        let ss_mlkem = hybrid_kem::decaps_768(mlkem_seed, &slot.mlkem_ct);
         let wrapping_key = hybrid_wrapping_key(
             &slot.ephemeral_x25519, &slot.mlkem_ct, ss_x25519.as_bytes(), &ss_mlkem,
         );
@@ -328,36 +386,61 @@ pub fn find_slot_for_privkey<R: Read>(
             return Ok(Some(slot_idx));
         }
     }
+    // Also try 1024 keyslots (offset by 768 count so indices don't collide).
+    let offset = envelope.hybrid_keyslots.len();
+    for (slot_idx, slot) in envelope.hybrid_keyslots_1024.iter().enumerate() {
+        let eph_pk = X25519PublicKey::from(slot.ephemeral_x25519);
+        let ss_x25519 = x25519_secret.diffie_hellman(&eph_pk);
+        let ss_mlkem = hybrid_kem::decaps_1024(mlkem_seed, &slot.mlkem_ct);
+        let wrapping_key = hybrid_wrapping_key_1024(
+            &slot.ephemeral_x25519, &slot.mlkem_ct, ss_x25519.as_bytes(), &ss_mlkem,
+        );
+        if cipher_dispatch::envelope_decrypt(
+            hdr_cipher, &wrapping_key, &slot.kek_nonce, AAD_HYBRID_WRAPPED_DEK, &slot.wrapped_dek,
+        ).is_ok() {
+            return Ok(Some(offset + slot_idx));
+        }
+    }
     Ok(None)
 }
 
-/// Probe the file header to find which X25519 private key (if any) can open it.
+/// A hybrid private keypair: X25519 key + independent ML-KEM seed.
+pub struct HybridPrivKey<'a> {
+    pub x25519_sk:  &'a [u8; 32],
+    pub mlkem_seed: &'a [u8; 64],
+}
+
+/// Probe the header to find which keypair (if any) can open it.
+/// Returns the index into `keys` that matches a keyslot.
 pub fn find_decrypting_key<R: Read>(
     input: &mut R,
-    privkeys: &[[u8; 32]],
+    keys: &[HybridPrivKey<'_>],
 ) -> Result<Option<usize>, CoreErr> {
-    if privkeys.is_empty() {
+    if keys.is_empty() {
         return Ok(None);
     }
     let header_buf = read_header(input)?;
     let (pub_hdr, _, _, enc_env_region) = parse_header_bytes(&header_buf)?;
     let hdr_cipher = CipherId::from_byte(pub_hdr.hdr_cipher_id)?;
     let envelope = parse_envelope(&enc_env_region)?;
-    if envelope.hybrid_keyslots.is_empty() {
+    if envelope.hybrid_keyslots.is_empty() && envelope.hybrid_keyslots_1024.is_empty() {
         return Ok(None);
     }
-    for (i, privkey) in privkeys.iter().enumerate() {
-        if unwrap_dek_hybrid(hdr_cipher, privkey, &envelope.hybrid_keyslots).is_ok() {
+    for (i, key) in keys.iter().enumerate() {
+        if unwrap_dek_hybrid(hdr_cipher, key.x25519_sk, key.mlkem_seed, &envelope.hybrid_keyslots).is_ok()
+            || unwrap_dek_hybrid_1024(hdr_cipher, key.x25519_sk, key.mlkem_seed, &envelope.hybrid_keyslots_1024).is_ok()
+        {
             return Ok(Some(i));
         }
     }
     Ok(None)
 }
 
-/// Try each hybrid keyslot in turn with `x25519_privkey` until one yields the DEK.
+/// Try each hybrid keyslot (768 then 1024) with the given keypair until one yields the DEK.
 pub(crate) fn unwrap_dek_hybrid(
     hdr_cipher: CipherId,
     x25519_privkey: &[u8; 32],
+    mlkem_seed: &[u8; 64],
     hybrid_keyslots: &[HybridKeyslot],
 ) -> Result<[u8; 32], CoreErr> {
     let x25519_secret = X25519StaticSecret::from(*x25519_privkey);
@@ -365,12 +448,40 @@ pub(crate) fn unwrap_dek_hybrid(
     for slot in hybrid_keyslots {
         let eph_pk = X25519PublicKey::from(slot.ephemeral_x25519);
         let ss_x25519 = x25519_secret.diffie_hellman(&eph_pk);
-        let ss_mlkem = hybrid_kem::decaps(x25519_privkey, &slot.mlkem_ct);
-
+        let ss_mlkem = hybrid_kem::decaps_768(mlkem_seed, &slot.mlkem_ct);
         let wrapping_key = hybrid_wrapping_key(
             &slot.ephemeral_x25519, &slot.mlkem_ct, ss_x25519.as_bytes(), &ss_mlkem,
         );
+        match cipher_dispatch::envelope_decrypt(
+            hdr_cipher, &wrapping_key, &slot.kek_nonce, AAD_HYBRID_WRAPPED_DEK, &slot.wrapped_dek,
+        ) {
+            Ok(dek_vec) if dek_vec.len() == 32 => {
+                let mut dek = [0u8; 32];
+                dek.copy_from_slice(&dek_vec);
+                return Ok(dek);
+            }
+            _ => continue,
+        }
+    }
+    Err(CoreErr::NoAsymKeyFound)
+}
 
+/// Try each ML-KEM-1024 hybrid keyslot with the given keypair.
+pub(crate) fn unwrap_dek_hybrid_1024(
+    hdr_cipher: CipherId,
+    x25519_privkey: &[u8; 32],
+    mlkem_seed: &[u8; 64],
+    keyslots_1024: &[HybridKeyslot1024],
+) -> Result<[u8; 32], CoreErr> {
+    let x25519_secret = X25519StaticSecret::from(*x25519_privkey);
+
+    for slot in keyslots_1024 {
+        let eph_pk = X25519PublicKey::from(slot.ephemeral_x25519);
+        let ss_x25519 = x25519_secret.diffie_hellman(&eph_pk);
+        let ss_mlkem = hybrid_kem::decaps_1024(mlkem_seed, &slot.mlkem_ct);
+        let wrapping_key = hybrid_wrapping_key_1024(
+            &slot.ephemeral_x25519, &slot.mlkem_ct, ss_x25519.as_bytes(), &ss_mlkem,
+        );
         match cipher_dispatch::envelope_decrypt(
             hdr_cipher, &wrapping_key, &slot.kek_nonce, AAD_HYBRID_WRAPPED_DEK, &slot.wrapped_dek,
         ) {
@@ -467,11 +578,25 @@ where
     let meta = &params.metadata;
     let meta_pt_len = META_TLV_MANDATORY_PT_LEN + metadata_extra_pt_len(meta);
     let protected_meta_enc_len = meta_pt_len + GCM_TAG;
+
+    // Split recipients into 768 and 1024 depending on kem_level.
+    let (recipients_768, recipients_1024) = match params.kem_level {
+        KemLevel::L768  => (params.recipients.as_slice(), [].as_slice()),
+        KemLevel::L1024 => ([].as_slice(), params.recipients.as_slice()),
+    };
+
+    let sig_region_len = if params.signing_key.is_some() {
+        SIG_PRESENT_LEN + MLDSA_VERIFYING_KEY_LEN + MLDSA_SIGNATURE_LEN
+    } else {
+        SIG_PRESENT_LEN
+    };
+
     let header_total_size = PUB_HEADER_LEN
         + WRAPPED_DEK_LEN
-        + ASYM_COUNT_LEN
-        + params.recipients.len() * ASYM_KEYSLOT_LEN
-        + protected_meta_enc_len;
+        + ASYM_COUNT_LEN + recipients_768.len() * ASYM_KEYSLOT_LEN
+        + ASYM_1024_COUNT_LEN + recipients_1024.len() * ASYM_1024_KEYSLOT_LEN
+        + protected_meta_enc_len
+        + sig_region_len;
     if header_total_size > MAX_HEADER_TOTAL_SIZE as usize {
         return Err(CoreErr::EncryptFail("Header too large (too many recipients or metadata)".into()));
     }
@@ -549,17 +674,22 @@ where
     let mut wrapped_dek = [0u8; WRAPPED_DEK_LEN];
     wrapped_dek.copy_from_slice(&wrapped_dek_vec);
 
-    let mut hybrid_keyslots: Vec<HybridKeyslot> = Vec::with_capacity(params.recipients.len());
-    for recipient in &params.recipients {
+    // ML-KEM-768 keyslots
+    let mut hybrid_keyslots: Vec<HybridKeyslot> = Vec::with_capacity(recipients_768.len());
+    for recipient in recipients_768 {
         hybrid_keyslots.push(wrap_dek_hybrid(params.hdr_cipher, recipient, &dek)?);
+    }
+
+    // ML-KEM-1024 keyslots
+    let mut hybrid_keyslots_1024: Vec<HybridKeyslot1024> = Vec::with_capacity(recipients_1024.len());
+    for recipient in recipients_1024 {
+        hybrid_keyslots_1024.push(wrap_dek_hybrid_1024(params.hdr_cipher, recipient, &dek)?);
     }
 
     let meta_key = derive_meta_key(&dek);
     let meta_nonce = derive_meta_nonce(&dek);
     let protected_meta =
         cipher_dispatch::envelope_encrypt(params.hdr_cipher, &meta_key, &meta_nonce, AAD_PROTECTED_META, &meta_tlv)?;
-
-    let enc_envelope = build_envelope_region(&wrapped_dek, &hybrid_keyslots, &protected_meta);
 
     let pub_header = PublicHeader {
         header_total_size: header_total_size as u32,
@@ -574,6 +704,31 @@ where
     };
 
     let pre_mac_bytes = serialize_pre_mac(&pub_header);
+
+    // Optional ML-DSA-65 signature over the public header parameters.
+    let mldsa_sig = if let Some(seed) = params.signing_key {
+        let seed_common: MlDsaSeed = seed.into();
+        let sk = MlDsaSigningKey::<MlDsa65>::from_seed(&seed_common);
+        let vk = sk.verifying_key(); // via Keypair trait
+        let sig: ml_dsa::Signature<MlDsa65> = sk.sign(pre_mac_bytes.as_slice());
+        let vk_enc = vk.encode();
+        let sig_enc = sig.encode();
+        let mut vk_arr = [0u8; MLDSA_VERIFYING_KEY_LEN];
+        vk_arr.copy_from_slice(vk_enc.as_slice());
+        let mut sig_arr = [0u8; MLDSA_SIGNATURE_LEN];
+        sig_arr.copy_from_slice(sig_enc.as_slice());
+        Some(MlDsaSignature {
+            verifying_key: Box::new(vk_arr),
+            signature: Box::new(sig_arr),
+        })
+    } else {
+        None
+    };
+
+    let enc_envelope = build_envelope_region(
+        &wrapped_dek, &hybrid_keyslots, &hybrid_keyslots_1024, &protected_meta, mldsa_sig.as_ref(),
+    );
+
     let mac = compute_header_mac(kek.expose(), &pre_mac_bytes);
     let header_bytes = build_header_bytes(&pub_header, &mac, &enc_envelope);
 
@@ -638,6 +793,18 @@ where
     }
 
     let envelope = parse_envelope(&enc_env_region)?;
+
+    // Verify ML-DSA signature if present.
+    if let Some(ref mldsa) = envelope.mldsa_sig {
+        let vk_enc = ml_dsa::EncodedVerifyingKey::<MlDsa65>::try_from(mldsa.verifying_key.as_slice())
+            .map_err(|_| CoreErr::DecryptFail("Malformed ML-DSA verifying key".into()))?;
+        let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(&vk_enc);
+        let sig = ml_dsa::Signature::<MlDsa65>::try_from(mldsa.signature.as_slice())
+            .map_err(|_| CoreErr::DecryptFail("Malformed ML-DSA signature".into()))?;
+        vk.verify(pre_mac_bytes.as_slice(), &sig)
+            .map_err(|_| CoreErr::DecryptFail("ML-DSA signature verification failed — file may be forged".into()))?;
+    }
+
     let env =
         decrypt_envelope_symmetric(hdr_cipher, kek.expose(), &pub_hdr.kek_nonce, &envelope)?;
 
@@ -691,14 +858,15 @@ where
 
 // ── Public decrypt (asymmetric X25519 private key) ────────────────────────────
 
-/// Decrypt using an X25519 private key.  Tries every asymmetric keyslot in the
-/// header until one matches; returns `Err(NoAsymKeyFound)` if none does.
+/// Decrypt using a hybrid keypair (X25519 + independent ML-KEM seed).
 ///
+/// Tries every asymmetric keyslot; returns `Err(NoAsymKeyFound)` if none matches.
 /// Same two-pass streaming strategy as `decrypt_arsenic`.
 pub fn decrypt_arsenic_with_key<R, W>(
     input: &mut R,
     output: &mut W,
-    privkey: &Secret<[u8; 32]>,
+    x25519_privkey: &Secret<[u8; 32]>,
+    mlkem_seed: &[u8; 64],
     ui: &dyn Ui,
     filesize: u64,
 ) -> Result<EnvelopeMetadata, CoreErr>
@@ -720,11 +888,10 @@ where
         return Err(CoreErr::DecryptFail("Parameters exceed safety limits".into()));
     }
 
-    // No HeaderMAC pre-auth for asymmetric path: ECDH is fast (~µs) and there
-    // is no secret to brute-force via the MAC.  The AEAD on each keyslot
-    // provides the authentication.
     let envelope = parse_envelope(&enc_env_region)?;
-    let dek = unwrap_dek_hybrid(hdr_cipher, privkey.expose(), &envelope.hybrid_keyslots)?;
+    // Try 768 keyslots first, then 1024.
+    let dek = unwrap_dek_hybrid(hdr_cipher, x25519_privkey.expose(), mlkem_seed, &envelope.hybrid_keyslots)
+        .or_else(|_| unwrap_dek_hybrid_1024(hdr_cipher, x25519_privkey.expose(), mlkem_seed, &envelope.hybrid_keyslots_1024))?;
     let env = decrypt_protected_meta(hdr_cipher, dek, &envelope.protected_meta)?;
 
     let block_size = block_size_from_id(env.block_size_id)?;
@@ -846,7 +1013,7 @@ where
 
     // Preserve all asymmetric keyslots and ProtectedMetadata unchanged.
     let new_enc_envelope =
-        build_envelope_region(&new_wrapped_dek, &envelope.hybrid_keyslots, &envelope.protected_meta);
+        build_envelope_region(&new_wrapped_dek, &envelope.hybrid_keyslots, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.mldsa_sig.as_ref());
 
     let new_pub_hdr = PublicHeader {
 
@@ -942,7 +1109,7 @@ pub fn build_header_with_added_recipient<R: Read + Seek>(
     new_asym.push(new_slot);
 
     let new_enc_envelope =
-        build_envelope_region(&envelope.wrapped_dek, &new_asym, &envelope.protected_meta);
+        build_envelope_region(&envelope.wrapped_dek, &new_asym, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.mldsa_sig.as_ref());
     let new_header_size = PUB_HEADER_LEN + new_enc_envelope.len();
 
     if new_header_size > MAX_HEADER_TOTAL_SIZE as usize {
@@ -1011,7 +1178,7 @@ pub fn build_header_with_removed_recipient<R: Read + Seek>(
     new_asym.remove(index);
 
     let new_enc_envelope =
-        build_envelope_region(&envelope.wrapped_dek, &new_asym, &envelope.protected_meta);
+        build_envelope_region(&envelope.wrapped_dek, &new_asym, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.mldsa_sig.as_ref());
     let new_header_size = PUB_HEADER_LEN + new_enc_envelope.len();
 
     let new_pub_hdr = PublicHeader {

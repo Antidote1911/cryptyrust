@@ -2,13 +2,17 @@ use arsenic::{
     arsenic_add_recipient, arsenic_find_matching_key, arsenic_find_slot_for_key,
     arsenic_list_recipients, arsenic_main_routine, arsenic_main_routine_with_key,
     arsenic_rekey, arsenic_remove_recipient, is_arsenic_file,
-    keystore::{load_identity_file, load_keystore, resolve_recipient, keys_dir, save_key, KeyEntry, serialize_identity, parse_identity},
+    keystore::{
+        load_identity_file, load_keystore, resolve_recipient, keys_dir, save_key, KeyEntry,
+        serialize_identity, parse_identity,
+        load_signing_keystore, save_signing_key, resolve_signing_key, SigningKeyEntry,
+    },
     encode_pubkey,
-    ArsenicParams, Direction, Secret, Ui,
+    ArsenicParams, Direction, KemLevel, Secret, Ui,
     bench_cipher_combinations, best_combination, CipherId,
 };
 use clap::Parser;
-use crate::cli::{Cli, KeygenCli, RecipientsCli, RecipientsAction};
+use crate::cli::{Cli, KeygenCli, KemLevelArg, RecipientsCli, RecipientsAction};
 use std::{
     env,
     io::{self, BufRead, Write},
@@ -236,10 +240,22 @@ fn run_encrypt(
         get_password_for_encrypt(app)?
     };
 
+    // Optional ML-DSA-65 signing key seed.
+    let signing_key = if let Some(spec) = app.signing_key() {
+        match resolve_signing_key(spec) {
+            Some(entry) => Some(entry.seed),
+            None => return Err(anyhow!("Cannot find signing key '{spec}'")),
+        }
+    } else {
+        None
+    };
+
     let params = ArsenicParams {
         hdr_cipher: app.hdr_cipher(),
         pld_cipher: app.pld_cipher(),
         recipients,
+        kem_level: app.kem_level(),
+        signing_key,
         ..ArsenicParams::from(app.strength())
     };
 
@@ -271,31 +287,21 @@ fn run_decrypt(
         .collect();
 
     if !explicit_identities.is_empty() {
-        let privkeys: Vec<[u8; 32]> = explicit_identities.iter().map(|k| k.private_key).collect();
-        if let Some(idx) = arsenic_find_matching_key(path, &privkeys) {
+        if let Some(idx) = arsenic_find_matching_key(path, &explicit_identities) {
             eprintln!("Decrypting with identity: {}", explicit_identities[idx].name);
             return arsenic_main_routine_with_key(
-                Some(filename),
-                Some(out_str),
-                &Secret::new(privkeys[idx]),
-                ui,
-            )
-            .map_err(|e| anyhow!(e));
+                Some(filename), Some(out_str), &explicit_identities[idx], ui,
+            ).map_err(|e| anyhow!(e));
         }
         return Err(anyhow!("none of the provided identity files can decrypt this file"));
     } else {
         let keystore = load_keystore();
         if !keystore.is_empty() {
-            let privkeys: Vec<[u8; 32]> = keystore.iter().map(|k| k.private_key).collect();
-            if let Some(idx) = arsenic_find_matching_key(path, &privkeys) {
+            if let Some(idx) = arsenic_find_matching_key(path, &keystore) {
                 eprintln!("Decrypting with stored key: {}", keystore[idx].name);
                 return arsenic_main_routine_with_key(
-                    Some(filename),
-                    Some(out_str),
-                    &Secret::new(privkeys[idx]),
-                    ui,
-                )
-                .map_err(|e| anyhow!(e));
+                    Some(filename), Some(out_str), &keystore[idx], ui,
+                ).map_err(|e| anyhow!(e));
             }
         }
     }
@@ -480,13 +486,48 @@ fn cipher_arg(c: CipherId) -> &'static str {
 // ── Key management ────────────────────────────────────────────────────────────
 
 fn run_keygen(cli: KeygenCli) -> Result<()> {
-    if cli.list {
-        return keygen_list();
-    }
-    if !cli.to_public.is_empty() {
-        return keygen_to_public(&cli.to_public);
-    }
+    if cli.list { return keygen_list(); }
+    if cli.list_sign { return keygen_list_sign(); }
+    if !cli.to_public.is_empty() { return keygen_to_public(&cli.to_public); }
+    if cli.sign { return keygen_generate_sign(cli); }
     keygen_generate(cli)
+}
+
+fn keygen_list_sign() -> Result<()> {
+    let keys = load_signing_keystore();
+    if keys.is_empty() {
+        println!("No ML-DSA-65 signing keys found.");
+        return Ok(());
+    }
+    println!("{:<20} {}", "Name", "File");
+    println!("{}", "─".repeat(60));
+    for k in &keys {
+        let path = k.file_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
+        println!("{:<20} {}", k.name, path);
+    }
+    Ok(())
+}
+
+fn keygen_generate_sign(cli: KeygenCli) -> Result<()> {
+    if cli.store && cli.name.is_empty() {
+        return Err(anyhow!("--name is required when using --store"));
+    }
+    let mut entry = SigningKeyEntry::generate(cli.name.clone());
+    if cli.store {
+        save_signing_key(&mut entry).map_err(|e| anyhow!(e))?;
+        let path = entry.file_path.as_ref().unwrap();
+        eprintln!("ML-DSA-65 signing key written to: {}", path.display());
+    } else if let Some(path) = &cli.output {
+        use arsenic::keystore::serialize_signing_identity;
+        let content = serialize_signing_identity(&entry);
+        write_identity_file(path, &content)
+            .with_context(|| format!("cannot write to {}", path.display()))?;
+        eprintln!("ML-DSA-65 signing key written to: {}", path.display());
+    } else {
+        use arsenic::keystore::serialize_signing_identity;
+        print!("{}", serialize_signing_identity(&entry));
+    }
+    Ok(())
 }
 
 fn keygen_list() -> Result<()> {
@@ -585,7 +626,7 @@ fn recipients_list(file: &str, extra_identities: &[String]) -> Result<()> {
 
     // Probe keystore keys first
     for entry in load_keystore() {
-        if let Some(slot_idx) = arsenic_find_slot_for_key(path, &entry.private_key) {
+        if let Some(slot_idx) = arsenic_find_slot_for_key(path, &entry) {
             if slot_names[slot_idx].is_none() {
                 slot_names[slot_idx] = Some(entry.name.clone());
             }
@@ -595,7 +636,7 @@ fn recipients_list(file: &str, extra_identities: &[String]) -> Result<()> {
     // Probe extra identity files supplied via -i
     for id_path in extra_identities {
         if let Some(entry) = load_identity_file(Path::new(id_path)) {
-            if let Some(slot_idx) = arsenic_find_slot_for_key(path, &entry.private_key) {
+            if let Some(slot_idx) = arsenic_find_slot_for_key(path, &entry) {
                 if slot_names[slot_idx].is_none() {
                     let label = if entry.name.is_empty() { id_path.clone() } else { entry.name };
                     slot_names[slot_idx] = Some(label);
@@ -669,7 +710,7 @@ fn recipients_remove(
         (Some(id_path), _) => {
             let entry = load_identity_file(Path::new(id_path))
                 .ok_or_else(|| anyhow!("Cannot read identity file: {id_path}"))?;
-            arsenic_find_slot_for_key(path, &entry.private_key)
+            arsenic_find_slot_for_key(path, &entry)
                 .ok_or_else(|| anyhow!("No keyslot in '{file}' matches '{id_path}'"))?
         }
         (None, Some(n)) => n,

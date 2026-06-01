@@ -45,41 +45,51 @@ pub const GCM_TAG: usize = 16;
 /// Only this section changes on a password rekey.
 pub const WRAPPED_DEK_LEN: usize = 32 + GCM_TAG; // 48
 
-/// Hybrid keyslot (X25519 + ML-KEM-768):
-///   ephemeral_x25519_pk[32] + mlkem_ciphertext[1088] + kek_nonce[12] + wrapped_dek[48]
-///   = 1180 bytes
+// ── ML-KEM-768 keyslot (existing) ────────────────────────────────────────────
 pub const ASYM_KEYSLOT_EPHEMERAL_X25519_LEN: usize = 32;
 pub const ASYM_KEYSLOT_MLKEM_CT_LEN: usize = 1088;
 pub const ASYM_KEYSLOT_KEK_NONCE_LEN: usize = 12;
+/// ML-KEM-768 keyslot = 32 + 1088 + 12 + 48 = 1180 bytes.
 pub const ASYM_KEYSLOT_LEN: usize =
-    ASYM_KEYSLOT_EPHEMERAL_X25519_LEN   // 32
-    + ASYM_KEYSLOT_MLKEM_CT_LEN        // 1088
-    + ASYM_KEYSLOT_KEK_NONCE_LEN       // 12
-    + WRAPPED_DEK_LEN;                  // 48  → total 1180
+    ASYM_KEYSLOT_EPHEMERAL_X25519_LEN + ASYM_KEYSLOT_MLKEM_CT_LEN
+    + ASYM_KEYSLOT_KEK_NONCE_LEN + WRAPPED_DEK_LEN;
 
-/// Number of asymmetric keyslots is stored as a u32 LE.
+/// Number of ML-KEM-768 keyslots field (u32 LE).
 pub const ASYM_COUNT_LEN: usize = 4;
 
-/// Hard limit on the number of hybrid keyslots accepted during parsing.
-///
-/// 1 keyslot = 1180 bytes.  256 keyslots × 1180 ≈ 295 KiB — well within
-/// MAX_HEADER_TOTAL_SIZE (64 MiB).  For a DoS attacker: 256 × (ECDH + ML-KEM
-/// decaps) ≈ 256 × ~100 µs = ~25 ms per private key.  Realistic maximum for
-/// any organisation use case is in the tens.
+// ── ML-KEM-1024 keyslot (NIST Level 5) ───────────────────────────────────────
+pub const ASYM_1024_KEYSLOT_MLKEM_CT_LEN: usize = 1568;
+/// ML-KEM-1024 keyslot = 32 + 1568 + 12 + 48 = 1660 bytes.
+pub const ASYM_1024_KEYSLOT_LEN: usize =
+    ASYM_KEYSLOT_EPHEMERAL_X25519_LEN + ASYM_1024_KEYSLOT_MLKEM_CT_LEN
+    + ASYM_KEYSLOT_KEK_NONCE_LEN + WRAPPED_DEK_LEN;
+
+/// Number of ML-KEM-1024 keyslots field (u32 LE).
+pub const ASYM_1024_COUNT_LEN: usize = 4;
+
+// ── ML-DSA-65 signature region (optional, at end of header) ──────────────────
+/// Byte marker: 0x00 = no signature, 0x01 = ML-DSA-65 signature present.
+pub const SIG_PRESENT_LEN: usize = 1;
+/// ML-DSA-65 verifying key size.
+pub const MLDSA_VERIFYING_KEY_LEN: usize = 1952;
+/// ML-DSA-65 signature size (NIST FIPS 204).
+pub const MLDSA_SIGNATURE_LEN: usize = 3309;
+
 pub const MAX_ASYM_KEYSLOTS: usize = 256;
 
 pub const MERKLE_V1: u8 = 0x01;
+pub const SIG_PRESENT_NONE: u8 = 0x00;
+pub const SIG_PRESENT_MLDSA65: u8 = 0x01;
 
-/// Mandatory TLV plaintext length (50 bytes):
-///   MerkleRoot(34) + OriginalSize(10) + BlockSizeId(3) + MerkleAlgoId(3)
-///   (CompressedSize removed — it always equalled OriginalSize.)
 pub const META_TLV_MANDATORY_PT_LEN: usize = 50;
 
-/// Minimum total header size (0 asymmetric keyslots, no optional metadata):
+/// Minimum total header size (0 keyslots of any kind, no signature, no optional metadata):
 ///   PUB_HEADER_LEN(109) + WRAPPED_DEK_LEN(48) + ASYM_COUNT_LEN(4)
-///   + META_TLV_MANDATORY_PT_LEN(50) + GCM_TAG(16) = 227
+///   + ASYM_1024_COUNT_LEN(4) + SIG_PRESENT_LEN(1)
+///   + META_TLV_MANDATORY_PT_LEN(50) + GCM_TAG(16) = 232
 pub const MIN_HEADER_TOTAL_SIZE: usize =
-    PUB_HEADER_LEN + WRAPPED_DEK_LEN + ASYM_COUNT_LEN + META_TLV_MANDATORY_PT_LEN + GCM_TAG;
+    PUB_HEADER_LEN + WRAPPED_DEK_LEN + ASYM_COUNT_LEN + ASYM_1024_COUNT_LEN
+    + META_TLV_MANDATORY_PT_LEN + GCM_TAG + SIG_PRESENT_LEN;
 
 // ── TLV tag identifiers ───────────────────────────────────────────────────────
 
@@ -179,13 +189,58 @@ impl EnvelopeContent {
     }
 }
 
+/// One hybrid (X25519 + ML-KEM-1024) keyslot — 1660 bytes on disk.
+/// Same structure as `HybridKeyslot` but with a 1568-byte ML-KEM-1024 ciphertext.
+#[derive(Clone)]
+pub struct HybridKeyslot1024 {
+    pub ephemeral_x25519: [u8; 32],
+    pub mlkem_ct: [u8; ASYM_1024_KEYSLOT_MLKEM_CT_LEN],
+    pub kek_nonce: [u8; 12],
+    pub wrapped_dek: [u8; WRAPPED_DEK_LEN],
+}
+
+impl HybridKeyslot1024 {
+    pub fn to_bytes(&self) -> [u8; ASYM_1024_KEYSLOT_LEN] {
+        let mut buf = [0u8; ASYM_1024_KEYSLOT_LEN];
+        let mut off = 0;
+        buf[off..off+32].copy_from_slice(&self.ephemeral_x25519); off += 32;
+        buf[off..off+ASYM_1024_KEYSLOT_MLKEM_CT_LEN].copy_from_slice(&self.mlkem_ct); off += ASYM_1024_KEYSLOT_MLKEM_CT_LEN;
+        buf[off..off+12].copy_from_slice(&self.kek_nonce); off += 12;
+        buf[off..off+WRAPPED_DEK_LEN].copy_from_slice(&self.wrapped_dek);
+        buf
+    }
+
+    pub fn from_bytes(bytes: &[u8; ASYM_1024_KEYSLOT_LEN]) -> Self {
+        let mut off = 0;
+        let ephemeral_x25519: [u8; 32] = bytes[off..off+32].try_into().unwrap(); off += 32;
+        let mlkem_ct: [u8; ASYM_1024_KEYSLOT_MLKEM_CT_LEN] = bytes[off..off+ASYM_1024_KEYSLOT_MLKEM_CT_LEN].try_into().unwrap(); off += ASYM_1024_KEYSLOT_MLKEM_CT_LEN;
+        let kek_nonce: [u8; 12] = bytes[off..off+12].try_into().unwrap(); off += 12;
+        let wrapped_dek: [u8; WRAPPED_DEK_LEN] = bytes[off..off+WRAPPED_DEK_LEN].try_into().unwrap();
+        Self { ephemeral_x25519, mlkem_ct, kek_nonce, wrapped_dek }
+    }
+}
+
+/// Optional ML-DSA-65 signature attached at the end of the header.
+/// `sig_msg` = pre_mac[77] (authenticated header parameters).
+#[derive(Clone)]
+pub struct MlDsaSignature {
+    /// ML-DSA-65 verifying (public) key — 1952 bytes.
+    pub verifying_key: Box<[u8; MLDSA_VERIFYING_KEY_LEN]>,
+    /// ML-DSA-65 signature — 3293 bytes.
+    pub signature: Box<[u8; MLDSA_SIGNATURE_LEN]>,
+}
+
 /// Parsed envelope region (post-MAC).
 ///
-/// Layout:  sym_wrapped_dek(48) | asym_count(4) | keyslots(1180×N) | protected_meta(var)
+/// Layout:  sym_wrapped_dek(48) | asym_768_count(4) | keyslots_768(1180×N)
+///        | asym_1024_count(4)  | keyslots_1024(1660×M)
+///        | protected_meta(var) | sig_present(1) | [sig_region]
 pub struct ParsedEnvelope {
     pub wrapped_dek: [u8; WRAPPED_DEK_LEN],
     pub hybrid_keyslots: Vec<HybridKeyslot>,
+    pub hybrid_keyslots_1024: Vec<HybridKeyslot1024>,
     pub protected_meta: Vec<u8>,
+    pub mldsa_sig: Option<MlDsaSignature>,
 }
 
 // ── TLV helpers ───────────────────────────────────────────────────────────────
@@ -295,68 +350,131 @@ pub fn deserialize_meta_tlv(buf: &[u8], dek: [u8; 32]) -> Result<EnvelopeContent
 
 // ── Envelope region helpers ───────────────────────────────────────────────────
 
-/// Parse the envelope region (post-MAC) into its three components:
-///   sym_wrapped_dek(48) || asym_count(4) || keyslots(1180×N) || protected_meta
+/// Parse the envelope region (post-MAC).
+///
+/// Layout: wrapped_dek(48) | count_768(4) | keyslots_768(1180×N)
+///        | count_1024(4)  | keyslots_1024(1660×M)
+///        | protected_meta(var) | sig_present(1) | [mldsa_vk(1952) | mldsa_sig(3293)]
 pub fn parse_envelope(enc_region: &[u8]) -> Result<ParsedEnvelope, CoreErr> {
-    let min = WRAPPED_DEK_LEN + ASYM_COUNT_LEN;
+    let min = WRAPPED_DEK_LEN + ASYM_COUNT_LEN + ASYM_1024_COUNT_LEN + SIG_PRESENT_LEN;
     if enc_region.len() < min {
         return Err(CoreErr::DecryptFail("Envelope region too short".into()));
     }
 
-    let wrapped_dek: [u8; WRAPPED_DEK_LEN] =
-        enc_region[..WRAPPED_DEK_LEN].try_into().unwrap();
+    let wrapped_dek: [u8; WRAPPED_DEK_LEN] = enc_region[..WRAPPED_DEK_LEN].try_into().unwrap();
+    let mut pos = WRAPPED_DEK_LEN;
 
-    let asym_count = u32::from_le_bytes(
-        enc_region[WRAPPED_DEK_LEN..WRAPPED_DEK_LEN + 4].try_into().unwrap(),
-    ) as usize;
+    // ML-KEM-768 keyslots
+    let count_768 = u32::from_le_bytes(enc_region[pos..pos+4].try_into().unwrap()) as usize;
+    pos += 4;
+    if count_768 > MAX_ASYM_KEYSLOTS {
+        return Err(CoreErr::DecryptFail(format!("too many 768 keyslots: {count_768}")));
+    }
+    let end_768 = pos.checked_add(count_768 * ASYM_KEYSLOT_LEN)
+        .ok_or_else(|| CoreErr::DecryptFail("768 keyslot overflow".into()))?;
+    if enc_region.len() < end_768 {
+        return Err(CoreErr::DecryptFail("Envelope too short for 768 keyslots".into()));
+    }
+    let mut hybrid_keyslots = Vec::with_capacity(count_768);
+    for i in 0..count_768 {
+        let s = pos + i * ASYM_KEYSLOT_LEN;
+        hybrid_keyslots.push(HybridKeyslot::from_bytes(enc_region[s..s+ASYM_KEYSLOT_LEN].try_into().unwrap()));
+    }
+    pos = end_768;
 
-    if asym_count > MAX_ASYM_KEYSLOTS {
-        return Err(CoreErr::DecryptFail(format!(
-            "too many hybrid keyslots: {asym_count} (max {MAX_ASYM_KEYSLOTS})"
-        )));
+    // ML-KEM-1024 keyslots
+    let count_1024 = u32::from_le_bytes(enc_region[pos..pos+4].try_into().unwrap()) as usize;
+    pos += 4;
+    if count_1024 > MAX_ASYM_KEYSLOTS {
+        return Err(CoreErr::DecryptFail(format!("too many 1024 keyslots: {count_1024}")));
+    }
+    let end_1024 = pos.checked_add(count_1024 * ASYM_1024_KEYSLOT_LEN)
+        .ok_or_else(|| CoreErr::DecryptFail("1024 keyslot overflow".into()))?;
+    if enc_region.len() < end_1024 {
+        return Err(CoreErr::DecryptFail("Envelope too short for 1024 keyslots".into()));
+    }
+    let mut hybrid_keyslots_1024 = Vec::with_capacity(count_1024);
+    for i in 0..count_1024 {
+        let s = pos + i * ASYM_1024_KEYSLOT_LEN;
+        hybrid_keyslots_1024.push(HybridKeyslot1024::from_bytes(enc_region[s..s+ASYM_1024_KEYSLOT_LEN].try_into().unwrap()));
+    }
+    pos = end_1024;
+
+    // protected_meta ends SIG_PRESENT_LEN bytes before the end (or at sig_region start)
+    // We locate the sig_present byte by counting backward from the end of the
+    // region, after protected_meta. The sig_present is at the end of the region
+    // (last 1 byte, or last 1+1952+3293 bytes if signed).
+    // We scan forward: everything until the last SIG_PRESENT_LEN byte(s) is protected_meta.
+    // The sig_present byte is always the LAST byte of the non-protected-meta section.
+    // But we need to know where protected_meta ends. Since the caller gives us the full
+    // enc_region (from PUB_HEADER_LEN to header_total_size), we determine sig length
+    // from the sig_present byte located appropriately.
+
+    // Remaining bytes after 1024 keyslots
+    let remaining = &enc_region[pos..];
+
+    // The sig_present byte comes AFTER protected_meta, before the optional sig data.
+    // We don't know protected_meta length. Scan for it:
+    // If signed: last 1+1952+3293 = 5246 bytes
+    // If not:    last 1 byte
+    let mldsa_sig;
+    let protected_meta_slice;
+    let sig_total = SIG_PRESENT_LEN + MLDSA_VERIFYING_KEY_LEN + MLDSA_SIGNATURE_LEN;
+    if remaining.len() >= sig_total && remaining[remaining.len() - sig_total] == SIG_PRESENT_MLDSA65 {
+        let sig_start = remaining.len() - sig_total;
+        protected_meta_slice = &remaining[..sig_start];
+        let vk_start = sig_start + SIG_PRESENT_LEN;
+        let s_start = vk_start + MLDSA_VERIFYING_KEY_LEN;
+        let vk: Box<[u8; MLDSA_VERIFYING_KEY_LEN]> =
+            Box::new(remaining[vk_start..vk_start+MLDSA_VERIFYING_KEY_LEN].try_into().unwrap());
+        let sig: Box<[u8; MLDSA_SIGNATURE_LEN]> =
+            Box::new(remaining[s_start..s_start+MLDSA_SIGNATURE_LEN].try_into().unwrap());
+        mldsa_sig = Some(MlDsaSignature { verifying_key: vk, signature: sig });
+    } else {
+        // No signature: last byte should be SIG_PRESENT_NONE
+        if remaining.is_empty() {
+            return Err(CoreErr::DecryptFail("Envelope missing sig_present byte".into()));
+        }
+        protected_meta_slice = &remaining[..remaining.len() - SIG_PRESENT_LEN];
+        mldsa_sig = None;
     }
 
-    let keyslots_start = WRAPPED_DEK_LEN + ASYM_COUNT_LEN;
-    let keyslots_end = keyslots_start
-        .checked_add(asym_count * ASYM_KEYSLOT_LEN)
-        .ok_or_else(|| CoreErr::DecryptFail("Hybrid keyslot count overflow".into()))?;
-
-    if enc_region.len() < keyslots_end {
-        return Err(CoreErr::DecryptFail(
-            "Envelope too short for declared hybrid keyslots".into(),
-        ));
-    }
-
-    let mut hybrid_keyslots = Vec::with_capacity(asym_count);
-    for i in 0..asym_count {
-        let start = keyslots_start + i * ASYM_KEYSLOT_LEN;
-        let slot: &[u8; ASYM_KEYSLOT_LEN] =
-            enc_region[start..start + ASYM_KEYSLOT_LEN].try_into().unwrap();
-        hybrid_keyslots.push(HybridKeyslot::from_bytes(slot));
-    }
-
-    let protected_meta = enc_region[keyslots_end..].to_vec();
-
-    Ok(ParsedEnvelope { wrapped_dek, hybrid_keyslots, protected_meta })
+    Ok(ParsedEnvelope {
+        wrapped_dek,
+        hybrid_keyslots,
+        hybrid_keyslots_1024,
+        protected_meta: protected_meta_slice.to_vec(),
+        mldsa_sig,
+    })
 }
 
-/// Serialize the envelope region from its three components.
+/// Serialize the envelope region.
 pub fn build_envelope_region(
     wrapped_dek: &[u8; WRAPPED_DEK_LEN],
     hybrid_keyslots: &[HybridKeyslot],
+    hybrid_keyslots_1024: &[HybridKeyslot1024],
     protected_meta: &[u8],
+    mldsa_sig: Option<&MlDsaSignature>,
 ) -> Vec<u8> {
+    let sig_len = mldsa_sig.map_or(SIG_PRESENT_LEN, |_| SIG_PRESENT_LEN + MLDSA_VERIFYING_KEY_LEN + MLDSA_SIGNATURE_LEN);
     let mut buf = Vec::with_capacity(
-        WRAPPED_DEK_LEN + ASYM_COUNT_LEN
-        + hybrid_keyslots.len() * ASYM_KEYSLOT_LEN
-        + protected_meta.len(),
+        WRAPPED_DEK_LEN + ASYM_COUNT_LEN + hybrid_keyslots.len() * ASYM_KEYSLOT_LEN
+        + ASYM_1024_COUNT_LEN + hybrid_keyslots_1024.len() * ASYM_1024_KEYSLOT_LEN
+        + protected_meta.len() + sig_len,
     );
     buf.extend_from_slice(wrapped_dek);
     buf.extend_from_slice(&(hybrid_keyslots.len() as u32).to_le_bytes());
-    for slot in hybrid_keyslots {
-        buf.extend_from_slice(&slot.to_bytes());
-    }
+    for slot in hybrid_keyslots { buf.extend_from_slice(&slot.to_bytes()); }
+    buf.extend_from_slice(&(hybrid_keyslots_1024.len() as u32).to_le_bytes());
+    for slot in hybrid_keyslots_1024 { buf.extend_from_slice(&slot.to_bytes()); }
     buf.extend_from_slice(protected_meta);
+    if let Some(sig) = mldsa_sig {
+        buf.push(SIG_PRESENT_MLDSA65);
+        buf.extend_from_slice(sig.verifying_key.as_slice());
+        buf.extend_from_slice(sig.signature.as_slice());
+    } else {
+        buf.push(SIG_PRESENT_NONE);
+    }
     buf
 }
 

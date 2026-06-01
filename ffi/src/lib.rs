@@ -29,13 +29,14 @@ use std::path::Path;
 use std::sync::OnceLock;
 
 use arsenic::{
-    arsenic_add_recipient, arsenic_find_matching_key, arsenic_find_slot_for_key,
+    arsenic_add_recipient, arsenic_find_matching_key, arsenic_find_slot_for_privkey_legacy,
     arsenic_list_recipients,
     arsenic_main_routine, arsenic_main_routine_with_key, arsenic_rekey,
     arsenic_remove_recipient, decrypt_arsenic, decrypt_arsenic_with_key,
     encode_privkey, encode_pubkey, decode_privkey, decode_pubkey,
     encode_mlkem_pubkey, decode_mlkem_pubkey,
     encrypt_arsenic, generate_x25519_keypair, hybrid_encapsulation_key,
+    mlkem_seed_from_x25519, mlkem_encapsulation_key_768,
     is_arsenic_file, pubkey_from_privkey,
     bench_cipher_combinations,
     ArsenicParams, ArsenicStrength, CipherId, CoreErr, Direction, Secret, Ui,
@@ -436,7 +437,8 @@ pub unsafe extern "C" fn arsenic_decrypt_with_key(
     let mut output = Cursor::new(Vec::new());
     let ui = FfiUi { cb: progress_fn, user_data };
 
-    match decrypt_arsenic_with_key(&mut input, &mut output, &Secret::new(pk), &ui, ciphertext_len as u64) {
+    let mlkem_seed = mlkem_seed_from_x25519(&pk);
+    match decrypt_arsenic_with_key(&mut input, &mut output, &Secret::new(pk), &mlkem_seed, &ui, ciphertext_len as u64) {
         Ok(_) => { unsafe { *out = ArsBuffer::from_vec(output.into_inner()) }; ARSENIC_OK }
         Err(e) => { set_last_error(&e); core_err_code(&e) }
     }
@@ -542,7 +544,17 @@ pub unsafe extern "C" fn arsenic_decrypt_file_with_key(
         .try_into().expect("32 bytes");
     let ui = Box::new(FfiUi { cb: progress_fn, user_data });
 
-    match arsenic_main_routine_with_key(Some(&in_s), Some(&out_s), &Secret::new(pk), ui) {
+    let mlkem_seed = mlkem_seed_from_x25519(&pk);
+    let key = arsenic::keystore::KeyEntry {
+
+        name: String::new(),
+        private_key: pk,
+        mlkem_seed,
+        public_key: pubkey_from_privkey(&pk),
+        mlkem_public_key: Box::new(mlkem_encapsulation_key_768(&mlkem_seed)),
+        file_path: None,
+    };
+    match arsenic_main_routine_with_key(Some(&in_s), Some(&out_s), &key, ui) {
         Ok(_)  => ARSENIC_OK,
         Err(e) => { set_last_error(&e); core_err_code(&e) }
     }
@@ -684,9 +696,22 @@ pub unsafe extern "C" fn arsenic_find_matching_key_file(
     let Ok(path_s) = (unsafe { cstr_to_string(path, "path") }) else { return -1 };
     if privkeys.is_null() { return -1; }
     let flat = unsafe { std::slice::from_raw_parts(privkeys, n_keys * 32) };
-    let privkeys_parsed: Vec<[u8; 32]> = flat.chunks_exact(32)
-        .map(|c| c.try_into().unwrap()).collect();
-    match arsenic_find_matching_key(Path::new(&path_s), &privkeys_parsed) {
+    let keys: Vec<arsenic::keystore::KeyEntry> = flat.chunks_exact(32)
+        .map(|c| {
+            let pk: [u8; 32] = c.try_into().unwrap();
+            let mlkem_seed = mlkem_seed_from_x25519(&pk);
+            arsenic::keystore::KeyEntry {
+
+                name: String::new(),
+                private_key: pk,
+                mlkem_seed,
+                public_key: pubkey_from_privkey(&pk),
+                mlkem_public_key: Box::new(mlkem_encapsulation_key_768(&mlkem_seed)),
+                file_path: None,
+            }
+        })
+        .collect();
+    match arsenic_find_matching_key(Path::new(&path_s), &keys) {
         Some(idx) => idx as i32,
         None      => -1,
     }
@@ -713,7 +738,7 @@ pub unsafe extern "C" fn arsenic_find_slot_for_key_file(
     let Ok(path_s) = (unsafe { cstr_to_string(path, "path") }) else { return -1 };
     let pk: [u8; 32] = unsafe { std::slice::from_raw_parts(privkey, 32) }
         .try_into().expect("32 bytes");
-    match arsenic_find_slot_for_key(Path::new(&path_s), &pk) {
+    match arsenic_find_slot_for_privkey_legacy(Path::new(&path_s), &pk) {
         Some(idx) => idx as i32,
         None      => -1,
     }
@@ -767,7 +792,8 @@ pub unsafe extern "C" fn arsenic_hybrid_pubkey(privkey: *const u8, hybrid_out: *
     if privkey.is_null() || hybrid_out.is_null() { return; }
     let pk: [u8; 32] = unsafe { std::slice::from_raw_parts(privkey, 32) }.try_into().expect("32 bytes");
     let x25519_pub = pubkey_from_privkey(&pk);
-    let mlkem_ek = hybrid_encapsulation_key(&pk);
+    let mlkem_seed = mlkem_seed_from_x25519(&pk);
+    let mlkem_ek = hybrid_encapsulation_key(&mlkem_seed);
     unsafe {
         std::ptr::copy_nonoverlapping(x25519_pub.as_ptr(), hybrid_out, 32);
         std::ptr::copy_nonoverlapping(mlkem_ek.as_ptr(), hybrid_out.add(32), 1184);

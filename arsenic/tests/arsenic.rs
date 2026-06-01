@@ -1,6 +1,6 @@
 use arsenic::{
     decrypt_arsenic, decrypt_arsenic_with_key, encrypt_arsenic, ArsenicParams, ArsenicStrength,
-    CipherId, EnvelopeMetadata, HybridRecipient, BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE,
+    CipherId, EnvelopeMetadata, HybridRecipient, KemLevel, BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE,
     arsenic_add_recipient, arsenic_list_recipients, arsenic_rekey,
     arsenic_remove_recipient, hybrid_recipient_from_privkey, is_arsenic_file, CoreErr, Secret, Ui,
 };
@@ -28,6 +28,8 @@ fn fast_params_with(hdr: CipherId, pld: CipherId) -> ArsenicParams {
         pld_cipher: pld,
         metadata: EnvelopeMetadata::default(),
         recipients: vec![],
+        kem_level: arsenic::KemLevel::L768,
+        signing_key: None,
     }
 }
 
@@ -40,6 +42,8 @@ fn fast_params_with_metadata(meta: EnvelopeMetadata) -> ArsenicParams {
         pld_cipher: CipherId::XChaCha20Poly1305,
         metadata: meta,
         recipients: vec![],
+        kem_level: arsenic::KemLevel::L768,
+        signing_key: None,
     }
 }
 
@@ -95,12 +99,14 @@ fn do_decrypt_with_meta(
 }
 
 fn do_decrypt_with_privkey(ct: &[u8], privkey: &[u8; 32]) -> Result<Vec<u8>, CoreErr> {
+    let mlkem_seed = arsenic::mlkem_seed_from_x25519(privkey);
     let mut input = Cursor::new(ct);
     let mut output = Cursor::new(Vec::new());
     decrypt_arsenic_with_key(
         &mut input,
         &mut output,
         &Secret::new(*privkey),
+        &mlkem_seed,
         &NoUi,
         ct.len() as u64,
     )?;

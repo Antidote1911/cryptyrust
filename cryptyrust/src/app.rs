@@ -231,9 +231,7 @@ impl CryptyApp {
     pub fn open_popup_or_auto_decrypt(&mut self, ctx: &egui::Context) {
         if self.mode == Mode::Decrypt && !self.keys.is_empty() {
             if let Some(path) = self.files.first().cloned() {
-                let privkeys: Vec<[u8; 32]> =
-                    self.keys.iter().map(|k| k.private_key).collect();
-                if let Some(idx) = arsenic::arsenic_find_matching_key(&path, &privkeys) {
+                if let Some(idx) = arsenic::arsenic_find_matching_key(&path, &self.keys) {
                     self.decrypt_key_index = Some(idx);
                     self.popup = PasswordPopup::Closed;
                     self.start_job(ctx.clone(), String::new());
@@ -447,11 +445,11 @@ impl CryptyApp {
             )
             .collect();
 
-        // For decrypt mode: retrieve the selected private key (if any).
+        // For decrypt mode: retrieve the selected keypair (if any).
         let privkey = self
             .decrypt_key_index
             .and_then(|i| self.keys.get(i))
-            .map(|k| k.private_key);
+            .cloned();
 
         let params = ArsenicParams {
             hdr_cipher: self.hdr_cipher,

@@ -9,6 +9,7 @@ use std::thread;
 use arsenic::{
     arsenic_main_routine, arsenic_main_routine_with_key, arsenic_rekey, ArsenicParams, CoreErr,
     Direction, Secret, Ui,
+    keystore::KeyEntry,
 };
 
 use crate::file_utils::{create_unique_output_file, Mode};
@@ -79,7 +80,7 @@ impl JobState {
         mode: Mode,
         params: ArsenicParams,
         password: String,
-        privkey: Option<[u8; 32]>,
+        privkey: Option<KeyEntry>,
         ctx: eframe::egui::Context,
     ) {
         let (tx, rx) = mpsc::channel::<(usize, i32)>();
@@ -126,6 +127,7 @@ impl JobState {
                     let cancel_all = cancel_all_clone.clone();
                     let params = params.clone();
                     let password = password.clone();
+                    let privkey = privkey.clone();
                     let ctx = ctx.clone();
 
                     s.spawn(move |_| {
@@ -195,11 +197,11 @@ impl JobState {
                                             cancel_flag: cancel_flag.clone(),
                                             cancel_all: cancel_all.clone(),
                                         });
-                                        let result = if let Some(pk) = privkey {
+                                        let result = if let Some(ref key) = privkey {
                                             arsenic_main_routine_with_key(
                                                 Some(&in_path),
                                                 Some(&out_path),
-                                                &Secret::new(pk),
+                                                key,
                                                 ui,
                                             )
                                         } else {

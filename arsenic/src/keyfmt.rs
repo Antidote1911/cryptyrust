@@ -27,6 +27,9 @@ const fn build_rev() -> [u8; 128] {
 }
 const REV: [u8; 128] = build_rev();
 
+pub fn bech32_encode_upper(data: &[u8]) -> String { bech32_encode(data).to_uppercase() }
+pub fn bech32_decode_lower(s: &str) -> Option<Vec<u8>> { bech32_decode(s) }
+
 fn bech32_encode(data: &[u8]) -> String {
     let mut acc: u32 = 0;
     let mut bits: u32 = 0;
@@ -92,6 +95,21 @@ pub fn encode_privkey(bytes: &[u8; 32]) -> String {
 pub fn decode_privkey(s: &str) -> Option<[u8; 32]> {
     let upper = s.to_uppercase();
     let inner = upper.strip_prefix(PRIVKEY_HRP)?;
+    bech32_decode(&inner.to_lowercase())?.try_into().ok()
+}
+
+/// Human-readable part for the 64-byte ML-KEM seed (uppercase signals secrecy).
+pub const MLKEM_SEED_HRP: &str = "ARSENIC-MLKEM-SEED-1";
+
+/// Encode a 64-byte ML-KEM seed → `ARSENIC-MLKEM-SEED-1{BECH32}` (~123 chars).
+pub fn encode_mlkem_seed(bytes: &[u8; 64]) -> String {
+    format!("{}{}", MLKEM_SEED_HRP, bech32_encode(bytes).to_uppercase())
+}
+
+/// Decode an `ARSENIC-MLKEM-SEED-1…` string → 64 bytes, or `None` if malformed.
+pub fn decode_mlkem_seed(s: &str) -> Option<[u8; 64]> {
+    let upper = s.to_uppercase();
+    let inner = upper.strip_prefix(MLKEM_SEED_HRP)?;
     bech32_decode(&inner.to_lowercase())?.try_into().ok()
 }
 

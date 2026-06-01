@@ -1,26 +1,25 @@
 use clap::{ArgGroup, Parser};
-use arsenic::{ArsenicStrength, CipherId};
+use arsenic::{ArsenicStrength, CipherId, KemLevel};
 use std::path::PathBuf;
 
 const ABOUT: &str = "
 Arsenic file encryption — encrypts, decrypts, and manages keys.
 
 Key management:
-  cryptyrust keygen -n alice --store       Generate a keypair and save to keystore
-  cryptyrust keygen --list                 List all stored keypairs
-  cryptyrust keygen -y alice.key           Show public key of a .key file
-
-Recipient management:
-  cryptyrust recipients list FILE          List keyslots with identity names
-  cryptyrust recipients add FILE -R alice  Add a recipient to an existing file
-  cryptyrust recipients remove FILE -i KEY_FILE -p PASSWORD
-  cryptyrust recipients remove FILE --slot N     -p PASSWORD
+  cryptyrust keygen -n alice --store               Generate keypair (ML-KEM-768, default)
+  cryptyrust keygen -n alice --store --kem-level 1024  Generate keypair (ML-KEM-1024)
+  cryptyrust keygen sign -n alice --store          Generate ML-DSA-65 signing key
+  cryptyrust keygen --list                         List stored keypairs
+  cryptyrust keygen --list-sign                    List stored signing keys
 
 Encryption / decryption:
-  cryptyrust -e FILE                       Encrypt
-  cryptyrust -d FILE                       Decrypt
-  cryptyrust --rekey FILE                  Change password
-  cryptyrust --bench                       Benchmark ciphers
+  cryptyrust -e FILE                               Encrypt (password)
+  cryptyrust -e FILE -R alice                      Encrypt for recipient
+  cryptyrust -e FILE -S alice                      Encrypt + sign with ML-DSA-65 key
+  cryptyrust -e FILE --kem-level 1024              Encrypt using ML-KEM-1024 keyslots
+  cryptyrust -d FILE                               Decrypt
+  cryptyrust --rekey FILE                          Change password
+  cryptyrust --bench                               Benchmark ciphers
 
 Author : Fabrice Corraire <antidote1911@gmail.com>
 Github : https://github.com/Antidote1911/
@@ -82,10 +81,26 @@ pub struct Cli {
     /// Payload cipher (encryption only).
     #[clap(long = "pld-cipher", value_enum, value_name = "CIPHER", default_value = "xchacha20")]
     pld_cipher: CipherArg,
+
+    /// ML-KEM security level for recipient keyslots (encryption only).
+    #[clap(long = "kem-level", value_enum, value_name = "LEVEL", default_value = "768")]
+    kem_level: KemLevelArg,
+
+    /// Sign the file with this ML-DSA-65 signing key (name or path to .sigkey file).
+    #[clap(short = 'S', long = "sign", value_name = "SIGN_KEY")]
+    signing_key: Option<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum StrengthArg { Interactive, Sensitive }
+
+#[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
+pub enum KemLevelArg {
+    #[clap(name = "768")]
+    L768,
+    #[clap(name = "1024")]
+    L1024,
+}
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum CipherArg {
@@ -124,6 +139,18 @@ pub struct KeygenCli {
     /// Pass `-` to read from stdin.
     #[clap(short = 'y', long = "to-public", value_name = "IDENTITY", num_args = 1..)]
     pub to_public: Vec<String>,
+
+    /// Generate an ML-DSA-65 signing key instead of an encryption keypair.
+    #[clap(long)]
+    pub sign: bool,
+
+    /// ML-KEM security level for new encryption keypairs (ignored with --sign).
+    #[clap(long = "kem-level", value_enum, value_name = "LEVEL", default_value = "768")]
+    pub kem_level: KemLevelArg,
+
+    /// List stored ML-DSA-65 signing keys and exit.
+    #[clap(long = "list-sign")]
+    pub list_sign: bool,
 }
 
 // ── Recipient management sub-command ─────────────────────────────────────────
@@ -235,4 +262,11 @@ impl Cli {
             CipherArg::AesGcmSiv => CipherId::Aes256GcmSiv,
         }
     }
+    pub fn kem_level(&self) -> KemLevel {
+        match self.kem_level {
+            KemLevelArg::L768  => KemLevel::L768,
+            KemLevelArg::L1024 => KemLevel::L1024,
+        }
+    }
+    pub fn signing_key(&self) -> Option<&str> { self.signing_key.as_deref() }
 }
