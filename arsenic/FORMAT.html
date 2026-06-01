@@ -96,8 +96,10 @@
   <a href="#headermac">4. HeaderMAC</a>
   <a href="#envelope">5. Envelope region</a>
   <a href="#wrappeddek" class="sub">5.1 WrappedDEK</a>
-  <a href="#hybridslot" class="sub">5.2-3 Hybrid keyslot</a>
-  <a href="#protectedmeta" class="sub">5.4 ProtectedMetadata</a>
+  <a href="#hybridslot768" class="sub">5.3 ML-KEM-768 keyslot</a>
+  <a href="#hybridslot1024" class="sub">5.4 ML-KEM-1024 keyslot</a>
+  <a href="#protectedmeta" class="sub">5.5 ProtectedMetadata</a>
+  <a href="#sigregin" class="sub">5.6 Signature region</a>
   <a href="#headersize">6. Header size</a>
   <a href="#kdf">7. KEK derivation</a>
   <a href="#payload">8. Payload</a>
@@ -122,7 +124,7 @@
     <div class="pill">Magic <span>41 52 53 4E</span></div>
     <div class="pill">Version <span>00 01</span></div>
     <div class="pill">Extension <span>.arsn</span></div>
-    <div class="pill">Min. header <span>227 bytes</span></div>
+    <div class="pill">Min. header <span>232 bytes</span></div>
     <div class="pill">Hybrid keyslot <span>1 180 bytes</span></div>
     <div class="pill">Post-quantum <span class="badge-pq">ML-KEM-768</span></div>
   </div>
@@ -181,55 +183,69 @@
 <pre><span class="d">┌─────────────────────────────────────────────────────────────┐</span>
 <span class="d">│</span>  <span class="k">Symmetric WrappedDEK</span>       <span class="n">48 bytes</span>  <span class="d">(offset 0x6D)</span>        <span class="d">│</span>
 <span class="d">├─────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span>  <span class="k">hybrid_count</span>  (u32 LE)      <span class="n">4 bytes</span>  <span class="d">(offset 0x9D)</span>        <span class="d">│</span>
+<span class="d">│</span>  <span class="k">hybrid_768_count</span>  (u32 LE)  <span class="n">4 bytes</span>  <span class="d">(offset 0x9D)</span>        <span class="d">│</span>
 <span class="d">├─────────────────────────────────────────────────────────────┤</span>
-<span class="d">│</span>  <span class="k">Hybrid keyslot #0</span>       <span class="n">1 180 bytes</span>  <span class="d">┐</span>                    <span class="d">│</span>
-<span class="d">│</span>  <span class="k">Hybrid keyslot #1</span>       <span class="n">1 180 bytes</span>  <span class="d">│  × N</span>               <span class="d">│</span>
-<span class="d">│</span>  <span class="d">…                                      ┘</span>                    <span class="d">│</span>
+<span class="d">│</span>  <span class="k">ML-KEM-768 keyslot #0</span>   <span class="n">1 180 bytes</span>  <span class="d">┐  × N</span>              <span class="d">│</span>
+<span class="d">├─────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span>  <span class="k">hybrid_1024_count</span> (u32 LE)  <span class="n">4 bytes</span>                       <span class="d">│</span>
+<span class="d">├─────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span>  <span class="k">ML-KEM-1024 keyslot #0</span>  <span class="n">1 660 bytes</span>  <span class="d">┐  × M</span>              <span class="d">│</span>
 <span class="d">├─────────────────────────────────────────────────────────────┤</span>
 <span class="d">│</span>  <span class="k">ProtectedMetadata</span>           <span class="n">variable</span>   <span class="d">(TLV_len + 16)</span>      <span class="d">│</span>
+<span class="d">├─────────────────────────────────────────────────────────────┤</span>
+<span class="d">│</span>  <span class="k">sig_present</span>                  <span class="n">1 byte</span>   <span class="d">0x00 or 0x01</span>        <span class="d">│</span>
+<span class="d">│</span>  <span class="d">[</span><span class="k">ML-DSA-65 verifying key</span>  <span class="n">1 952 bytes</span>  <span class="d">┐ if sig=0x01]</span>    <span class="d">│</span>
+<span class="d">│</span>  <span class="d">[</span><span class="k">ML-DSA-65 signature</span>      <span class="n">3 309 bytes</span>  <span class="d">┘             ]</span>    <span class="d">│</span>
 <span class="d">└─────────────────────────────────────────────────────────────┘</span></pre>
+<p>The sender selects one KEM level per file (all keyslots either ML-KEM-768 or ML-KEM-1024).</p>
 
 <h3 id="wrappeddek">5.1 — Symmetric WrappedDEK (48 bytes)</h3>
-<pre><span class="c">WrappedDEK</span> = <span class="k">AEAD_hdr</span>( <span class="c">KEK</span>[<span class="n">32</span>], <span class="c">nonce_env</span>(<span class="s">kek_nonce</span>), <span class="d">[]</span>, <span class="r">DEK</span>[<span class="n">32</span>] )
+<pre><span class="c">WrappedDEK</span> = <span class="k">AEAD_hdr</span>( <span class="c">KEK</span>[<span class="n">32</span>], <span class="c">nonce_env</span>(<span class="s">kek_nonce</span>), <span class="h">"arsenic-v1-wrapped-dek"</span>, <span class="r">DEK</span>[<span class="n">32</span>] )
            = ciphertext[<span class="n">32</span>] ‖ tag[<span class="n">16</span>]</pre>
 
-<h3 id="hybridslot">5.2-3 — Hybrid Keyslot <span class="badge-pq">X25519 + ML-KEM-768</span> (1 180 bytes)</h3>
-<p>Each keyslot allows a recipient to decrypt the file <strong>without knowing the password</strong>.</p>
+<h3>5.2 — Counters</h3>
+<p><code>hybrid_768_count</code> (u32 LE): number N of ML-KEM-768 keyslots.<br>
+<code>hybrid_1024_count</code> (u32 LE): number M of ML-KEM-1024 keyslots. Both 0 if no asymmetric recipients.</p>
+
+<h3 id="hybridslot768">5.3 — ML-KEM-768 Hybrid Keyslot <span class="badge-pq">X25519 + ML-KEM-768</span> (1 180 bytes)</h3>
 <div class="table-wrap"><table>
   <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Description</th></tr></thead>
   <tbody>
     <tr><td><span class="off">0</span></td><td><span class="sz">32</span></td><td><span class="fn">ephemeral_x25519</span></td><td>Ephemeral X25519 public key</td></tr>
     <tr><td><span class="off">32</span></td><td><span class="sz">1088</span></td><td><span class="fn">mlkem_ciphertext</span></td><td>ML-KEM-768 ciphertext</td></tr>
     <tr><td><span class="off">1120</span></td><td><span class="sz">12</span></td><td><span class="fn">kek_nonce</span></td><td>AEAD nonce</td></tr>
-    <tr><td><span class="off">1132</span></td><td><span class="sz">48</span></td><td><span class="fn">wrapped_dek</span></td><td>AEAD(wrapping_key, kek_nonce, [], DEK)</td></tr>
+    <tr><td><span class="off">1132</span></td><td><span class="sz">48</span></td><td><span class="fn">wrapped_dek</span></td><td>AEAD(wrapping_key, kek_nonce, aad, DEK)</td></tr>
   </tbody>
 </table></div>
-
-<h4>Hybrid wrapping key computation</h4>
 <pre><span class="d">// Encryption</span>
-<span class="r">eph_x25519_sk</span>        ← random
+<span class="r">eph_x25519_sk</span>        ← OS random
 <span class="s">eph_x25519_pk</span>        ← X25519Public(<span class="r">eph_x25519_sk</span>)
-<span class="c">ss_x25519</span>            ← X25519_ECDH(<span class="r">eph_x25519_sk</span>, <span class="s">recipient.x25519</span>)
-
-<span class="r">m</span>[<span class="n">32</span>]                ← random
-(<span class="s">mlkem_ct</span>, <span class="c">ss_mlkem</span>) ← ML-KEM-768.Encaps(<span class="s">recipient.mlkem_ek</span>, <span class="r">m</span>)
-
-<span class="c">wrapping_key</span>[<span class="n">32</span>]     ← BLAKE3_derive_key(<span class="h">"Arsenic Hybrid KEM"</span>,
-                          <span class="s">eph_x25519_pk</span>[<span class="n">32</span>] ‖ <span class="s">mlkem_ct</span>[<span class="n">1088</span>]
-                          ‖ <span class="c">ss_x25519</span>[<span class="n">32</span>] ‖ <span class="c">ss_mlkem</span>[<span class="n">32</span>])
-
+<span class="c">ss_x25519</span>            ← X25519_ECDH(<span class="r">eph_x25519_sk</span>, <span class="s">recipient.x25519_pk</span>)
+<span class="r">m</span>[<span class="n">32</span>]                ← OS random
+(<span class="s">mlkem_ct</span>, <span class="c">ss_mlkem</span>) ← ML-KEM-768.Encaps(<span class="s">recipient.mlkem_768_ek</span>, <span class="r">m</span>)
+<span class="c">wrapping_key</span>         ← BLAKE3_derive_key(<span class="h">"Arsenic Hybrid KEM"</span>,
+                          <span class="s">eph_x25519_pk</span>[<span class="n">32</span>] ‖ <span class="s">mlkem_ct</span>[<span class="n">1088</span>] ‖ <span class="c">ss_x25519</span>[<span class="n">32</span>] ‖ <span class="c">ss_mlkem</span>[<span class="n">32</span>])
 <span class="c">wrapped_dek</span>           ← AEAD_hdr(<span class="c">wrapping_key</span>, <span class="s">kek_nonce</span>, <span class="h">"arsenic-v1-hybrid-wrapped-dek"</span>, <span class="r">DEK</span>)
-
-<span class="d">// Decryption (recipient)</span>
+<span class="d">// Decryption</span>
 <span class="c">ss_x25519</span>            ← X25519_ECDH(<span class="r">recipient_x25519_sk</span>, <span class="s">eph_x25519_pk</span>)
-<span class="c">ss_mlkem</span>             ← ML-KEM-768.Decaps(<span class="r">recipient_x25519_sk_seed</span>, <span class="s">mlkem_ct</span>)
-<span class="c">wrapping_key</span>         ← same BLAKE3
+<span class="c">ss_mlkem</span>             ← ML-KEM-768.Decaps(<span class="r">recipient_mlkem_768_seed</span>, <span class="s">mlkem_ct</span>)
 <span class="r">DEK</span>                  ← AEAD_hdr_decrypt(<span class="c">wrapping_key</span>, <span class="s">kek_nonce</span>, <span class="h">"arsenic-v1-hybrid-wrapped-dek"</span>, <span class="c">wrapped_dek</span>)</pre>
+<div class="box info"><strong>Independent seeds (since v1.5.0):</strong> X25519 and ML-KEM seeds are generated independently from the OS CSPRNG and stored separately in the <code>.key</code> file. Legacy files derive the ML-KEM seed via BLAKE3 for backward compat.</div>
 
-<div class="box warn">The ML-KEM-768 key is <strong>deterministically derived</strong> from the X25519 private key via two BLAKE3_derive_key calls ("Arsenic ML-KEM d" and "Arsenic ML-KEM z"). A single 32-byte <code>.key</code> file is sufficient for the entire hybrid keypair.</div>
+<h3 id="hybridslot1024">5.4 — ML-KEM-1024 Hybrid Keyslot <span class="badge-pq">X25519 + ML-KEM-1024</span> (1 660 bytes)</h3>
+<p>NIST Level 5, ~256-bit quantum security. Same structure as §5.3 with a 1568-byte ML-KEM-1024 ciphertext and a distinct BLAKE3 context.</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Offset</th><th>Size</th><th>Field</th><th>Description</th></tr></thead>
+  <tbody>
+    <tr><td><span class="off">0</span></td><td><span class="sz">32</span></td><td><span class="fn">ephemeral_x25519</span></td><td>Ephemeral X25519 public key</td></tr>
+    <tr><td><span class="off">32</span></td><td><span class="sz">1568</span></td><td><span class="fn">mlkem_ciphertext</span></td><td>ML-KEM-1024 ciphertext</td></tr>
+    <tr><td><span class="off">1600</span></td><td><span class="sz">12</span></td><td><span class="fn">kek_nonce</span></td><td>AEAD nonce</td></tr>
+    <tr><td><span class="off">1612</span></td><td><span class="sz">48</span></td><td><span class="fn">wrapped_dek</span></td><td>AEAD(wrapping_key, kek_nonce, aad, DEK)</td></tr>
+  </tbody>
+</table></div>
+<p>BLAKE3 context: <code>"Arsenic Hybrid KEM 1024"</code> (instead of <code>"Arsenic Hybrid KEM"</code>).</p>
 
-<h3 id="protectedmeta">5.4 — ProtectedMetadata</h3>
+<h3 id="protectedmeta">5.5 — ProtectedMetadata</h3>
 <pre><span class="c">MetaKey</span>[<span class="n">32</span>]   ← BLAKE3_derive_key(<span class="h">"Arsenic V1 Metadata Key"</span>, <span class="r">DEK</span>)
 <span class="c">MetaNonce</span>[<span class="n">12</span>] ← BLAKE3_derive_key(<span class="h">"Arsenic V1 Meta Nonce"</span>,   <span class="r">DEK</span>)[<span class="n">0..12</span>]
 ProtectedMetadata = AEAD_hdr(<span class="c">MetaKey</span>, <span class="c">nonce_env</span>(<span class="c">MetaNonce</span>), <span class="h">"arsenic-v1-protected-meta"</span>, <span class="s">meta_tlv</span>)</pre>
@@ -245,19 +261,35 @@ ProtectedMetadata = AEAD_hdr(<span class="c">MetaKey</span>, <span class="c">non
 </table></div>
 <div class="box info">Tag <code>0x04</code> (CompressedSize) was removed — it always equalled OriginalSize.</div>
 
+<h3 id="sigregin">5.6 — Signature Region</h3>
+<p>The last bytes of the envelope encode an optional ML-DSA-65 signature (NIST FIPS 204, ~192-bit quantum security).</p>
+<div class="table-wrap"><table>
+  <thead><tr><th>Value of sig_present</th><th>Meaning</th></tr></thead>
+  <tbody>
+    <tr><td><span class="tg">0x00</span></td><td>No signature — end of header</td></tr>
+    <tr><td><span class="tg">0x01</span></td><td>ML-DSA-65 signature follows: verifying_key[1952] ‖ signature[3309]</td></tr>
+  </tbody>
+</table></div>
+<p>Signed message = <code>pre_mac[77]</code> (all KDF params, cipher IDs, nonces). Verification is automatic on decryption; a mismatch is a hard error. Signers use a separate <code>.sigkey</code> file (32-byte ML-DSA seed).</p>
+
 <!-- ── 6 ── -->
 <h2 id="headersize"><span class="num">6</span> Header Size</h2>
 <pre><span class="s">header_total_size</span> = <span class="n">109</span>   <span class="d">(PUB_HEADER_LEN)</span>
                   + <span class="n">48</span>    <span class="d">(WrappedDEK)</span>
-                  + <span class="n">4</span>     <span class="d">(hybrid_count)</span>
-                  + N × <span class="n">1180</span>  <span class="d">(N hybrid keyslots)</span>
-                  + len(<span class="s">meta_tlv</span>) + <span class="n">16</span></pre>
+                  + <span class="n">4</span>     <span class="d">(hybrid_768_count)</span> + N × <span class="n">1180</span>
+                  + <span class="n">4</span>     <span class="d">(hybrid_1024_count)</span> + M × <span class="n">1660</span>
+                  + len(<span class="s">meta_tlv</span>) + <span class="n">16</span>
+                  + <span class="n">1</span>     <span class="d">(sig_present)</span>
+                  <span class="d">[+ 1952 + 3309  if ML-DSA-65 signed]</span></pre>
 <div class="table-wrap"><table>
   <thead><tr><th>Configuration</th><th>Size</th></tr></thead>
   <tbody>
-    <tr><td>Minimum (0 keyslots)</td><td><strong>227 bytes</strong></td></tr>
-    <tr><td>1 hybrid recipient</td><td>1 407 bytes</td></tr>
-    <tr><td>N recipients</td><td>227 + N × 1 180 bytes</td></tr>
+    <tr><td>Minimum (0 keyslots, no signature)</td><td><strong>232 bytes</strong></td></tr>
+    <tr><td>1 ML-KEM-768 recipient</td><td>1 412 bytes</td></tr>
+    <tr><td>N ML-KEM-768 recipients</td><td>232 + N × 1 180 bytes</td></tr>
+    <tr><td>1 ML-KEM-1024 recipient</td><td>1 892 bytes</td></tr>
+    <tr><td>M ML-KEM-1024 recipients</td><td>232 + M × 1 660 bytes</td></tr>
+    <tr><td>+ ML-DSA-65 signature</td><td>+ 5 261 bytes</td></tr>
     <tr><td>Maximum (256 keyslots)</td><td>~303 KiB</td></tr>
   </tbody>
 </table></div>
@@ -320,19 +352,24 @@ where  block_i = AEAD_pld(<span class="c">block_key_i</span>, <span class="c">bl
         ├── <span class="k">BLAKE3_keyed_hash</span>(<span class="c">KEK</span>, <span class="s">pre_mac</span>[<span class="n">77</span>])  → <span class="c">HeaderMAC</span>[<span class="n">32</span>]
         └── AEAD_hdr(<span class="c">KEK</span>, <span class="d">...</span>, <span class="h">"arsenic-v1-wrapped-dek"</span>, <span class="r">DEK</span>) → <span class="c">WrappedDEK</span>[<span class="n">48</span>]
 
-random → <span class="r">DEK</span>[<span class="n">32</span>]
+OS random → <span class="r">DEK</span>[<span class="n">32</span>]
   ├── BLAKE3_derive_key(<span class="h">"Arsenic V1 Metadata Key"</span>, <span class="r">DEK</span>)  → <span class="c">MetaKey</span>
   ├── BLAKE3_derive_key(<span class="h">"Arsenic V1 Meta Nonce"</span>,   <span class="r">DEK</span>)[<span class="n">0..12</span>]  → <span class="c">MetaNonce</span>
   ├── For block <span class="s">i</span>:
   │     BLAKE3_keyed_hash(<span class="r">DEK</span>, <span class="s">i</span>.to_le_bytes())  → <span class="c">block_key_i</span>
   │     BLAKE3_derive_key(<span class="h">"Arsenic V1 Block Nonce"</span>, <span class="s">file_base_nonce</span>‖<span class="s">i</span>)[<span class="n">0..24</span>]  → <span class="c">block_nonce_i</span>
-  └── For hybrid keyslot <span class="s">j</span>:
-        <span class="r">eph_x25519_sk</span>← random  →  <span class="s">eph_x25519_pk</span>
-        X25519_ECDH(<span class="r">eph_x25519_sk</span>, <span class="s">recipient.x25519</span>)  → <span class="c">ss_x25519</span>
-        ML-KEM-768.Encaps(<span class="s">recipient.mlkem_ek</span>, <span class="r">m_random</span>)  → (<span class="s">mlkem_ct</span>, <span class="c">ss_mlkem</span>)
-        BLAKE3_derive_key(<span class="h">"Arsenic Hybrid KEM"</span>,
-          <span class="s">eph_x25519_pk</span>‖<span class="s">mlkem_ct</span>‖<span class="c">ss_x25519</span>‖<span class="c">ss_mlkem</span>)  → <span class="c">wrapping_key_j</span>
-        AEAD_hdr(<span class="c">wrapping_key_j</span>, <span class="d">...</span>, <span class="h">"arsenic-v1-hybrid-wrapped-dek"</span>, <span class="r">DEK</span>)  → <span class="c">wrapped_dek_j</span>
+  ├── For ML-KEM-768 keyslot <span class="s">j</span>:
+  │     OS random → <span class="r">eph_x25519_sk</span>  →  <span class="s">eph_x25519_pk</span>
+  │     X25519_ECDH(<span class="r">eph_x25519_sk</span>, <span class="s">recipient.x25519_pk</span>)  → <span class="c">ss_x25519</span>
+  │     ML-KEM-768.Encaps(<span class="s">recipient.mlkem_768_ek</span>, OS random)  → (<span class="s">mlkem_ct</span>, <span class="c">ss_mlkem</span>)
+  │     BLAKE3_derive_key(<span class="h">"Arsenic Hybrid KEM"</span>, <span class="s">eph_pk</span>‖<span class="s">ct</span>‖<span class="c">ss_x25519</span>‖<span class="c">ss_mlkem</span>)  → <span class="c">wrapping_key_j</span>
+  │     AEAD_hdr(<span class="c">wrapping_key_j</span>, <span class="d">...</span>, <span class="h">"arsenic-v1-hybrid-wrapped-dek"</span>, <span class="r">DEK</span>)  → <span class="c">wrapped_dek_j</span>
+  └── For ML-KEM-1024 keyslot <span class="s">k</span>:
+        (same — ML-KEM-1024, <span class="s">mlkem_ct[1568]</span>, context <span class="h">"Arsenic Hybrid KEM 1024"</span>)
+
+<span class="d">[optional — if signing_key set]</span>
+  ML-DSA-65.Sign(<span class="r">signing_key_seed</span>[<span class="n">32</span>], <span class="s">pre_mac</span>[<span class="n">77</span>])  → <span class="c">signature</span>[<span class="n">3309</span>]
+  + <span class="c">verifying_key</span>[<span class="n">1952</span>] appended to header
 </div>
 
 <!-- ── 12 ── -->
@@ -345,7 +382,7 @@ random → <span class="r">DEK</span>[<span class="n">32</span>]
   <div class="mem-row"><div class="mc off">0x000006</div><div class="mc sz">1</div><div class="mc"><span style="color:#f1d060">kdf_id</span> : <span style="color:var(--grn);font-family:monospace">01</span></div></div>
   <div class="mem-row"><div class="mc off">0x000007</div><div class="mc sz">1</div><div class="mc"><span style="color:#f1d060">hdr_cipher_id</span> : <span style="color:var(--grn);font-family:monospace">02</span></div></div>
   <div class="mem-row"><div class="mc off">0x000008</div><div class="mc sz">1</div><div class="mc"><span style="color:#f1d060">pld_cipher_id</span> : <span style="color:var(--grn);font-family:monospace">03</span></div></div>
-  <div class="mem-row"><div class="mc off">0x000009</div><div class="mc sz">4</div><div class="mc"><span style="color:#f1d060">header_total_size</span> : <span style="color:var(--grn);font-family:monospace">E3 00 00 00</span>  (227, u32 LE)</div></div>
+  <div class="mem-row"><div class="mc off">0x000009</div><div class="mc sz">4</div><div class="mc"><span style="color:#f1d060">header_total_size</span> : <span style="color:var(--grn);font-family:monospace">E8 00 00 00</span>  (232, u32 LE)</div></div>
   <div class="mem-row"><div class="mc off">0x00000D</div><div class="mc sz">16</div><div class="mc"><span style="color:#f1d060">salt</span> : <span style="color:var(--red);font-family:monospace">[16 random bytes]</span></div></div>
   <div class="mem-row"><div class="mc off">0x00001D</div><div class="mc sz">4</div><div class="mc"><span style="color:#f1d060">t_cost</span> : <span style="color:var(--grn);font-family:monospace">04 00 00 00</span></div></div>
   <div class="mem-row"><div class="mc off">0x000021</div><div class="mc sz">4</div><div class="mc"><span style="color:#f1d060">m_cost</span> : <span style="color:var(--grn);font-family:monospace">00 00 04 00</span>  (262 144 KiB)</div></div>
@@ -356,10 +393,12 @@ random → <span class="r">DEK</span>[<span class="n">32</span>]
   <div class="mem-row"><div class="mc off">0x00004D</div><div class="mc sz">32</div><div class="mc"><span style="color:var(--pur)">HeaderMAC</span> = BLAKE3_keyed_hash(KEK, pre_mac[77])</div></div>
   <div class="mem-row sep"><div class="mc sep-label">── end public header: 109 bytes ─────────────────────────────────────────</div></div>
   <div class="mem-row"><div class="mc off">0x00006D</div><div class="mc sz">48</div><div class="mc"><span style="color:var(--org)">WrappedDEK</span> = AEAD_hdr(KEK, ..., DEK) → ciphertext[32] ‖ tag[16]</div></div>
-  <div class="mem-row"><div class="mc off">0x00009D</div><div class="mc sz">4</div><div class="mc"><span style="color:#f1d060">hybrid_count</span> : <span style="color:var(--grn);font-family:monospace">00 00 00 00</span></div></div>
-  <div class="mem-row"><div class="mc off">0x0000A1</div><div class="mc sz">66</div><div class="mc"><span style="color:var(--org)">ProtectedMetadata</span> = AEAD_hdr(MetaKey, ..., TLV[50]) ‖ tag[16]</div></div>
-  <div class="mem-row sep"><div class="mc sep-label">── end header: 227 bytes (0x0000E3) ─────────────────────────────────────</div></div>
-  <div class="mem-row"><div class="mc off">0x0000E3</div><div class="mc sz">∞</div><div class="mc"><span style="color:var(--acc)">Payload</span> — consecutive blocks AEAD_pld(block_key_i, nonce_i, aad_i, plaintext_i)</div></div>
+  <div class="mem-row"><div class="mc off">0x00009D</div><div class="mc sz">4</div><div class="mc"><span style="color:#f1d060">hybrid_768_count</span> : <span style="color:var(--grn);font-family:monospace">00 00 00 00</span></div></div>
+  <div class="mem-row"><div class="mc off">0x0000A1</div><div class="mc sz">4</div><div class="mc"><span style="color:#f1d060">hybrid_1024_count</span> : <span style="color:var(--grn);font-family:monospace">00 00 00 00</span></div></div>
+  <div class="mem-row"><div class="mc off">0x0000A5</div><div class="mc sz">66</div><div class="mc"><span style="color:var(--org)">ProtectedMetadata</span> = AEAD_hdr(MetaKey, ..., TLV[50]) ‖ tag[16]</div></div>
+  <div class="mem-row"><div class="mc off">0x0000E7</div><div class="mc sz">1</div><div class="mc"><span style="color:#f1d060">sig_present</span> : <span style="color:var(--grn);font-family:monospace">00</span>  (no signature)</div></div>
+  <div class="mem-row sep"><div class="mc sep-label">── end header: 232 bytes (0x0000E8) ─────────────────────────────────────</div></div>
+  <div class="mem-row"><div class="mc off">0x0000E8</div><div class="mc sz">∞</div><div class="mc"><span style="color:var(--acc)">Payload</span> — consecutive blocks AEAD_pld(block_key_i, nonce_i, aad_i, plaintext_i)</div></div>
 </div>
 
 <!-- ── 13 ── -->
@@ -369,14 +408,27 @@ random → <span class="r">DEK</span>[<span class="n">32</span>]
 
 <!-- ── 14 ── -->
 <h2 id="identities"><span class="num">14</span> User Identities</h2>
+<h4>Encryption keypair (<code>.key</code> file)</h4>
 <div class="table-wrap"><table>
   <thead><tr><th>Component</th><th>Size</th><th>Storage</th></tr></thead>
   <tbody>
-    <tr><td>X25519 private key</td><td>32 bytes</td><td><code>.key</code> file (seed)</td></tr>
-    <tr><td>X25519 public key</td><td>32 bytes</td><td>Derived on load</td></tr>
-    <tr><td>ML-KEM-768 seed</td><td>64 bytes</td><td>Derived from X25519 sk</td></tr>
-    <tr><td>ML-KEM encapsulation key (EK)</td><td>1 184 bytes</td><td>Derived, cached</td></tr>
-    <tr><td>ML-KEM decapsulation key (DK)</td><td>2 400 bytes</td><td>RAM only</td></tr>
+    <tr><td>X25519 private key seed</td><td>32 bytes</td><td><code>ARSENIC-SECRET-KEY-1{bech32}</code></td></tr>
+    <tr><td>ML-KEM seed (d‖z)</td><td>64 bytes</td><td><code># mlkem-seed: ARSENIC-MLKEM-SEED-1{bech32}</code></td></tr>
+    <tr><td>X25519 public key</td><td>32 bytes</td><td>Derived, cached</td></tr>
+    <tr><td>ML-KEM-768 encapsulation key</td><td>1 184 bytes</td><td>Derived from ML-KEM seed</td></tr>
+    <tr><td>ML-KEM-768 decapsulation key</td><td>2 400 bytes</td><td>RAM only</td></tr>
+    <tr><td>ML-KEM-1024 encapsulation key</td><td>1 568 bytes</td><td>Derived from same ML-KEM seed</td></tr>
+    <tr><td>ML-KEM-1024 decapsulation key</td><td>3 168 bytes</td><td>RAM only</td></tr>
+  </tbody>
+</table></div>
+<div class="box info">Seeds are <strong>independent</strong> since v1.5.0 — X25519 and ML-KEM entropy come from separate OS CSPRNG calls.</div>
+<h4>Signing keypair (<code>.sigkey</code> file)</h4>
+<div class="table-wrap"><table>
+  <thead><tr><th>Component</th><th>Size</th><th>Storage</th></tr></thead>
+  <tbody>
+    <tr><td>ML-DSA-65 seed</td><td>32 bytes</td><td><code>ARSENIC-SIGN-SEED-1{bech32}</code></td></tr>
+    <tr><td>ML-DSA-65 verifying key</td><td>1 952 bytes</td><td><code># verifying-key: ARSENIC-SIGN-PUB-1{bech32}</code></td></tr>
+    <tr><td>ML-DSA-65 signing key</td><td>4 032 bytes</td><td>Reconstructed from seed, never stored</td></tr>
   </tbody>
 </table></div>
 
@@ -393,9 +445,12 @@ random → <span class="r">DEK</span>[<span class="n">32</span>]
     <tr><td>Header integrity</td><td>BLAKE3_keyed_hash(KEK, 77 public bytes)</td></tr>
     <tr><td>DoS resistance (KDF params)</td><td>Params validated against bounds before any Argon2id</td></tr>
     <tr><td><strong>Quantum resistance — payload</strong></td><td>Symmetric 256 bits: Grover requires 2¹²⁸ — already post-quantum</td></tr>
-    <tr><td><strong>Quantum resistance — keyslots</strong></td><td>ML-KEM-768 (NIST FIPS 203, level 3) resists Shor</td></tr>
-    <tr><td><strong>Defence in depth</strong></td><td>Hybrid X25519+ML-KEM-768: a flaw in one does not compromise the other</td></tr>
-    <tr><td><strong>Harvest-now-decrypt-later</strong></td><td>Files encrypted today protected against future quantum computers</td></tr>
+    <tr><td><strong>Quantum resistance — keyslots L3</strong></td><td>ML-KEM-768 (NIST level 3, ~180-bit quantum) resists Shor</td></tr>
+    <tr><td><strong>Quantum resistance — keyslots L5</strong></td><td>ML-KEM-1024 (NIST level 5, ~256-bit quantum) resists Shor</td></tr>
+    <tr><td><strong>Defence in depth</strong></td><td>Hybrid X25519+ML-KEM: a flaw in one does not compromise the other</td></tr>
+    <tr><td><strong>Harvest-now-decrypt-later</strong></td><td>ML-KEM protects files encrypted today against future quantum computers</td></tr>
+    <tr><td>Sender authentication</td><td>Optional ML-DSA-65 signature over pre_mac (NIST FIPS 204)</td></tr>
+    <tr><td>Independent key entropy</td><td>X25519 and ML-KEM seeds generated independently from OS CSPRNG</td></tr>
     <tr><td>Recipient anonymity</td><td>Keyslots do not reveal the recipient's public key</td></tr>
     <tr><td>Memory erasure</td><td><code>Secret&lt;T&gt;</code> + <code>zeroize</code> on drop</td></tr>
   </tbody>
