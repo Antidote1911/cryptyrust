@@ -12,10 +12,11 @@ pub use crypto::{
 
 use crate::arsenic::hybrid_kem::EK_LEN as MLKEM_EK_LEN;
 pub use header::{HybridKeyslot, EnvelopeMetadata, MIN_HEADER_TOTAL_SIZE, WRAPPED_DEK_LEN};
+pub use header::{MAX_T_COST, MAX_P_COST};
 
-// Safety limits (DoS protection).
+// Safety limits (DoS protection before running any KDF).
 // u32 header_total_size allows headers up to 64 MiB, supporting ~700 000 recipients.
-pub const MAX_ARGON2_RAM_KB: u32 = 8 * 1024 * 1024; // 8 GB
+pub const MAX_ARGON2_RAM_KB: u32 = 4 * 1024 * 1024; // 4 GiB
 pub const MAX_HEADER_TOTAL_SIZE: u32 = 64 * 1024 * 1024; // 64 MiB
 
 // Block size constants

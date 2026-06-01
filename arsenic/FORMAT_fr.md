@@ -67,11 +67,19 @@ Offset  Taille  Champ                Description
 ## 4. HeaderMAC (octets 0x4D – 0x6C, 32 octets)
 
 ```
-PreKey    = Argon2id(password, salt, t=1, m=8 192 Kio, p=1)  → 32 oct.
-HeaderMAC = HMAC-SHA256( PreKey[32], pré_mac[77] )            → 32 oct.
+KEK       = Argon2id(password, salt, t_cost, m_cost, p_cost)  → 32 oct.
+HeaderMAC = HMAC-SHA256( KEK[32], pré_mac[77] )               → 32 oct.
 ```
 
-Le `PreKey` utilise des paramètres **fixes** indépendants des paramètres KDF du fichier. Il permet de rejeter un mauvais mot de passe en ~2 ms, avant d'engager la dérivation coûteuse du KEK.
+Le HeaderMAC est chiffré avec le KEK complet, donc chaque tentative de mot
+de passe coûte la dérivation Argon2id entière. Un mauvais mot de passe produit
+un KEK incorrect dont le HMAC ne correspond pas — la non-concordance est
+détectée avant toute tentative de déchiffrement AEAD.
+
+**Protection DoS :** avant d'invoquer Argon2id, l'implémentation valide que les
+paramètres KDF déclarés sont dans des bornes sûres
+(`t_cost ≤ 64`, `m_cost ≤ 4 Gio`, `p_cost ≤ 16`). Un fichier falsifié avec des
+paramètres absurdes est rejeté immédiatement sans aucun coût.
 
 **Fin de l'en-tête public : 109 octets** (`PUB_HEADER_LEN = 0x6D`).
 

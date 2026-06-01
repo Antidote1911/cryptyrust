@@ -67,11 +67,19 @@ Offset  Size  Field                Description
 ## 4. HeaderMAC (bytes 0x4D – 0x6C, 32 bytes)
 
 ```
-PreKey    = Argon2id(password, salt, t=1, m=8 192 KiB, p=1)  → 32 bytes
-HeaderMAC = HMAC-SHA256( PreKey[32], pre_mac[77] )            → 32 bytes
+KEK       = Argon2id(password, salt, t_cost, m_cost, p_cost)  → 32 bytes
+HeaderMAC = HMAC-SHA256( KEK[32], pre_mac[77] )               → 32 bytes
 ```
 
-The `PreKey` uses **fixed** parameters independent of the file's KDF parameters. It allows rejecting a wrong password in ~2 ms, before engaging the expensive KEK derivation.
+The HeaderMAC is keyed with the full KEK, so every password attempt
+costs the full Argon2id derivation. A wrong password produces a wrong KEK
+whose HMAC does not match — the mismatch is detected before any AEAD
+decryption is attempted.
+
+**DoS protection:** before invoking Argon2id the implementation validates
+that the declared KDF parameters are within safe bounds
+(`t_cost ≤ 64`, `m_cost ≤ 4 GiB`, `p_cost ≤ 16`). A tampered file
+with absurd parameters is rejected immediately at zero cost.
 
 **End of public header: 109 bytes** (`PUB_HEADER_LEN = 0x6D`).
 

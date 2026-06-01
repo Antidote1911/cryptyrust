@@ -7,7 +7,8 @@ pub mod keystore;
 mod secret;
 
 pub use crate::arsenic::bench::{bench_cipher_combinations, best_combination, CipherBenchResult};
-pub use crate::arsenic::header::{MAX_ASYM_KEYSLOTS, PREKEY_M_COST_KB, PREKEY_P_COST, PREKEY_T_COST};
+pub use crate::arsenic::header::{MAX_ASYM_KEYSLOTS, MAX_T_COST, MAX_P_COST};
+pub use crate::arsenic::MAX_ARGON2_RAM_KB;
 pub use crate::arsenic::{
     ArsenicParams, ArsenicStrength, CipherId, EnvelopeMetadata, HybridKeyslot, HybridRecipient,
     decrypt_arsenic, decrypt_arsenic_with_key, encrypt_arsenic,

@@ -99,10 +99,10 @@ outils de vérification externes.
 **Construction :**
 
 ```
-PreKey = Argon2id(password, salt, t=1, m=8192Ko, p=1) → 32 octets
+KEK = Argon2id(password, salt, t_cost, m_cost, p_cost) → 32 octets
 
 HeaderMAC = HMAC-SHA256(
-    key  = PreKey[32],
+    key  = KEK[32],
     msg  = section_pré_mac[77 octets]   ← tout l'en-tête public sauf le MAC lui-même
 )
 ```
@@ -114,8 +114,18 @@ HeaderMAC = HMAC-SHA256(
 - Sel Argon2id et paramètres KDF (`t`, `m`, `p`)
 - `file_base_nonce` et `kek_nonce`
 
-Toute manipulation de ces champs est détectée avant de lancer la dérivation
-Argon2id coûteuse (protection contre les attaques DoS par paramètres forgés).
+**Propriété de sécurité :** la clé du HeaderMAC est le KEK complet dérivé avec
+les paramètres Argon2id configurés (Interactive : 256 Mio / Sensitive : 1 Gio).
+Un attaquant hors-ligne doit payer le coût KDF complet par tentative de mot de
+passe — il n'existe aucun oracle plus rapide. Un mauvais mot de passe produit
+un KEK incorrect qui échoue au contrôle HMAC avant toute tentative de
+déchiffrement AEAD.
+
+**Protection DoS contre les paramètres forgés :** avant de lancer Argon2id,
+l'implémentation valide que les paramètres KDF déclarés sont dans des bornes
+sûres (`t_cost ≤ 64`, `m_cost ≤ 4 Gio`, `p_cost ≤ 16`). Un fichier falsifié
+avec des paramètres absurdes (ex. t=1000, m=10 Gio) est rejeté immédiatement
+sans invoquer Argon2id.
 
 **Résistance post-quantique :** HMAC-SHA256 offre 128 bits de sécurité
 post-quantique (Grover sur SHA-256 → 2¹²⁸ opérations), ce qui est suffisant.

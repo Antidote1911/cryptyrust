@@ -11,7 +11,7 @@ use crate::Ui;
 
 use super::cipher_dispatch;
 use super::header::{
-    build_envelope_region, build_header_bytes, compute_header_mac, compute_prekey,
+    build_envelope_region, build_header_bytes, compute_header_mac,
     deserialize_meta_tlv, parse_envelope, parse_header_bytes, serialize_meta_tlv,
     serialize_pre_mac, verify_header_mac, HybridKeyslot, EnvelopeContent, EnvelopeMetadata,
     ParsedEnvelope, PublicHeader, ASYM_COUNT_LEN, ASYM_KEYSLOT_LEN, GCM_TAG,
@@ -20,8 +20,34 @@ use super::header::{
 use super::hybrid_kem;
 use super::{
     CipherId, HybridRecipient, BLOCK_ID_32MB, BLOCK_ID_4MB, BLOCK_SIZE_32MB, BLOCK_SIZE_4MB,
-    LARGE_FILE_THRESHOLD, MAX_ARGON2_RAM_KB, MAX_HEADER_TOTAL_SIZE,
+    LARGE_FILE_THRESHOLD, MAX_ARGON2_RAM_KB, MAX_HEADER_TOTAL_SIZE, MAX_T_COST, MAX_P_COST,
 };
+
+// ── KDF parameter validation ──────────────────────────────────────────────────
+
+/// Reject headers with KDF parameters outside safe bounds **before** running Argon2id.
+///
+/// This prevents a reverse-DoS where a tampered file declares absurdly expensive
+/// parameters (e.g. t=1000, m=10 GiB) to waste the decryptor's resources.
+/// The check is free (no KDF invocation) and rejects tampered files immediately.
+fn validate_kdf_params(t_cost: u32, m_cost: u32, p_cost: u32) -> Result<(), CoreErr> {
+    if t_cost == 0 || t_cost > MAX_T_COST {
+        return Err(CoreErr::DecryptFail(format!(
+            "t_cost {t_cost} out of range [1, {MAX_T_COST}]"
+        )));
+    }
+    if m_cost < 8 || m_cost > MAX_ARGON2_RAM_KB {
+        return Err(CoreErr::DecryptFail(format!(
+            "m_cost {m_cost} KiB out of range [8, {MAX_ARGON2_RAM_KB}]"
+        )));
+    }
+    if p_cost == 0 || p_cost > MAX_P_COST {
+        return Err(CoreErr::DecryptFail(format!(
+            "p_cost {p_cost} out of range [1, {MAX_P_COST}]"
+        )));
+    }
+    Ok(())
+}
 
 // ── Key / nonce derivation ────────────────────────────────────────────────────
 
@@ -496,9 +522,8 @@ where
         pld_cipher_id: params.pld_cipher.to_byte(),
     };
 
-    let prekey = compute_prekey(password.expose().as_bytes(), &salt)?;
     let pre_mac_bytes = serialize_pre_mac(&pub_header);
-    let mac = compute_header_mac(&prekey, &pre_mac_bytes);
+    let mac = compute_header_mac(kek.expose(), &pre_mac_bytes);
     let header_bytes = build_header_bytes(&pub_header, &mac, &enc_envelope);
 
     output.seek(SeekFrom::Start(0))?;
@@ -545,14 +570,10 @@ where
     let hdr_cipher = CipherId::from_byte(pub_hdr.hdr_cipher_id)?;
     let pld_cipher = CipherId::from_byte(pub_hdr.pld_cipher_id)?;
 
-    if pub_hdr.m_cost > MAX_ARGON2_RAM_KB || pub_hdr.header_total_size > MAX_HEADER_TOTAL_SIZE {
-        return Err(CoreErr::DecryptFail("Parameters exceed safety limits".into()));
+    if pub_hdr.header_total_size > MAX_HEADER_TOTAL_SIZE {
+        return Err(CoreErr::DecryptFail("Header size exceeds limit".into()));
     }
-
-    let prekey = compute_prekey(password.expose().as_bytes(), &pub_hdr.salt)?;
-    if !verify_header_mac(&prekey, &pre_mac_bytes, &stored_mac) {
-        return Err(CoreErr::DecryptionError);
-    }
+    validate_kdf_params(pub_hdr.t_cost, pub_hdr.m_cost, pub_hdr.p_cost)?;
 
     let kek = derive_kek(
         password.expose().as_bytes(),
@@ -561,6 +582,9 @@ where
         pub_hdr.m_cost,
         pub_hdr.p_cost,
     )?;
+    if !verify_header_mac(kek.expose(), &pre_mac_bytes, &stored_mac) {
+        return Err(CoreErr::DecryptionError);
+    }
 
     let envelope = parse_envelope(&enc_env_region)?;
     let env =
@@ -720,14 +744,10 @@ where
     let (pub_hdr, pre_mac_bytes, stored_mac, enc_env_region) = parse_header_bytes(&header_buf)?;
     let hdr_cipher = CipherId::from_byte(pub_hdr.hdr_cipher_id)?;
 
-    if pub_hdr.m_cost > MAX_ARGON2_RAM_KB || pub_hdr.header_total_size > MAX_HEADER_TOTAL_SIZE {
-        return Err(CoreErr::DecryptFail("Parameters exceed safety limits".into()));
+    if pub_hdr.header_total_size > MAX_HEADER_TOTAL_SIZE {
+        return Err(CoreErr::DecryptFail("Header size exceeds limit".into()));
     }
-
-    let prekey_old = compute_prekey(old_password.expose().as_bytes(), &pub_hdr.salt)?;
-    if !verify_header_mac(&prekey_old, &pre_mac_bytes, &stored_mac) {
-        return Err(CoreErr::DecryptionError);
-    }
+    validate_kdf_params(pub_hdr.t_cost, pub_hdr.m_cost, pub_hdr.p_cost)?;
 
     let kek_old = derive_kek(
         old_password.expose().as_bytes(),
@@ -736,6 +756,9 @@ where
         pub_hdr.m_cost,
         pub_hdr.p_cost,
     )?;
+    if !verify_header_mac(kek_old.expose(), &pre_mac_bytes, &stored_mac) {
+        return Err(CoreErr::DecryptionError);
+    }
 
     let new_salt: [u8; 16] = random();
     let new_kek_nonce: [u8; 12] = random();
@@ -786,9 +809,8 @@ where
         hdr_cipher_id: pub_hdr.hdr_cipher_id,
         pld_cipher_id: pub_hdr.pld_cipher_id,
     };
-    let prekey_new = compute_prekey(new_password.expose().as_bytes(), &new_salt)?;
     let new_pre_mac = serialize_pre_mac(&new_pub_hdr);
-    let new_mac = compute_header_mac(&prekey_new, &new_pre_mac);
+    let new_mac = compute_header_mac(kek_new.expose(), &new_pre_mac);
     let new_header = build_header_bytes(&new_pub_hdr, &new_mac, &new_enc_envelope);
 
     file.seek(SeekFrom::Start(0))?;
@@ -830,14 +852,10 @@ pub fn build_header_with_added_recipient<R: Read + Seek>(
 
     let (pub_hdr, pre_mac_bytes, stored_mac, enc_env_region) = parse_header_bytes(&header_buf)?;
 
-    if pub_hdr.m_cost > MAX_ARGON2_RAM_KB || pub_hdr.header_total_size > MAX_HEADER_TOTAL_SIZE {
-        return Err(CoreErr::DecryptFail("Parameters exceed safety limits".into()));
+    if pub_hdr.header_total_size > MAX_HEADER_TOTAL_SIZE {
+        return Err(CoreErr::DecryptFail("Header size exceeds limit".into()));
     }
-
-    let prekey = compute_prekey(password.expose().as_bytes(), &pub_hdr.salt)?;
-    if !verify_header_mac(&prekey, &pre_mac_bytes, &stored_mac) {
-        return Err(CoreErr::DecryptionError);
-    }
+    validate_kdf_params(pub_hdr.t_cost, pub_hdr.m_cost, pub_hdr.p_cost)?;
 
     let kek = derive_kek(
         password.expose().as_bytes(),
@@ -846,6 +864,9 @@ pub fn build_header_with_added_recipient<R: Read + Seek>(
         pub_hdr.m_cost,
         pub_hdr.p_cost,
     )?;
+    if !verify_header_mac(kek.expose(), &pre_mac_bytes, &stored_mac) {
+        return Err(CoreErr::DecryptionError);
+    }
 
     let envelope = parse_envelope(&enc_env_region)?;
 
@@ -888,9 +909,9 @@ pub fn build_header_with_added_recipient<R: Read + Seek>(
         hdr_cipher_id: pub_hdr.hdr_cipher_id,
         pld_cipher_id: pub_hdr.pld_cipher_id,
     };
-    // Recompute MAC: header_total_size changed.
+    // Recompute MAC with KEK: header_total_size changed.
     let new_pre_mac = serialize_pre_mac(&new_pub_hdr);
-    let new_mac = compute_header_mac(&prekey, &new_pre_mac);
+    let new_mac = compute_header_mac(kek.expose(), &new_pre_mac);
     let new_header = build_header_bytes(&new_pub_hdr, &new_mac, &new_enc_envelope);
 
     Ok((new_header, old_header_size))
@@ -910,12 +931,19 @@ pub fn build_header_with_removed_recipient<R: Read + Seek>(
 
     let (pub_hdr, pre_mac_bytes, stored_mac, enc_env_region) = parse_header_bytes(&header_buf)?;
 
-    if pub_hdr.m_cost > MAX_ARGON2_RAM_KB || pub_hdr.header_total_size > MAX_HEADER_TOTAL_SIZE {
-        return Err(CoreErr::DecryptFail("Parameters exceed safety limits".into()));
+    if pub_hdr.header_total_size > MAX_HEADER_TOTAL_SIZE {
+        return Err(CoreErr::DecryptFail("Header size exceeds limit".into()));
     }
+    validate_kdf_params(pub_hdr.t_cost, pub_hdr.m_cost, pub_hdr.p_cost)?;
 
-    let prekey = compute_prekey(password.expose().as_bytes(), &pub_hdr.salt)?;
-    if !verify_header_mac(&prekey, &pre_mac_bytes, &stored_mac) {
+    let kek = derive_kek(
+        password.expose().as_bytes(),
+        &pub_hdr.salt,
+        pub_hdr.t_cost,
+        pub_hdr.m_cost,
+        pub_hdr.p_cost,
+    )?;
+    if !verify_header_mac(kek.expose(), &pre_mac_bytes, &stored_mac) {
         return Err(CoreErr::DecryptionError);
     }
 
@@ -947,7 +975,7 @@ pub fn build_header_with_removed_recipient<R: Read + Seek>(
         pld_cipher_id: pub_hdr.pld_cipher_id,
     };
     let new_pre_mac = serialize_pre_mac(&new_pub_hdr);
-    let new_mac = compute_header_mac(&prekey, &new_pre_mac);
+    let new_mac = compute_header_mac(kek.expose(), &new_pre_mac);
     let new_header = build_header_bytes(&new_pub_hdr, &new_mac, &new_enc_envelope);
 
     Ok((new_header, old_header_size))

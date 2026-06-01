@@ -1,4 +1,3 @@
-use argon2::{Algorithm, Argon2, Params, Version};
 use hmac::{Hmac, KeyInit, Mac};
 use sha2::Sha256;
 
@@ -17,9 +16,10 @@ pub const PLD_CIPHER_XCHACHA20: u8 = 0x03;
 #[allow(dead_code)]
 pub const CIPHER_AES256_GCM_SIV: u8 = 0x04;
 
-pub const PREKEY_T_COST: u32 = 1;
-pub const PREKEY_M_COST_KB: u32 = 8 * 1024; // 8 MB
-pub const PREKEY_P_COST: u32 = 1;
+/// Hard upper bounds on Argon2id parameters accepted during decryption.
+/// Reject headers with forged extreme values before running any KDF.
+pub const MAX_T_COST: u32 = 64;
+pub const MAX_P_COST: u32 = 16;
 
 // ── Header layout ─────────────────────────────────────────────────────────────
 //
@@ -389,29 +389,18 @@ pub fn serialize_pre_mac(hdr: &PublicHeader) -> [u8; PRE_MAC_LEN] {
     buf
 }
 
-pub fn compute_prekey(password: &[u8], salt: &[u8; 16]) -> Result<[u8; 32], CoreErr> {
-    let params = Params::new(PREKEY_M_COST_KB, PREKEY_T_COST, PREKEY_P_COST, Some(32))
-        .map_err(|_| CoreErr::Argon2Params)?;
-    let argon2 = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
-    let mut key = [0u8; 32];
-    argon2
-        .hash_password_into(password, salt, &mut key)
-        .map_err(|_| CoreErr::Argon2Hash)?;
-    Ok(key)
-}
-
-pub fn compute_header_mac(prekey: &[u8; 32], pre_mac_bytes: &[u8; PRE_MAC_LEN]) -> [u8; 32] {
-    let mut mac = HmacSha256::new_from_slice(prekey).expect("HMAC accepts any key length");
+pub fn compute_header_mac(kek: &[u8; 32], pre_mac_bytes: &[u8; PRE_MAC_LEN]) -> [u8; 32] {
+    let mut mac = HmacSha256::new_from_slice(kek).expect("HMAC accepts any key length");
     mac.update(pre_mac_bytes);
     mac.finalize().into_bytes().into()
 }
 
 pub fn verify_header_mac(
-    prekey: &[u8; 32],
+    kek: &[u8; 32],
     pre_mac_bytes: &[u8; PRE_MAC_LEN],
     expected_mac: &[u8; 32],
 ) -> bool {
-    let mut mac = HmacSha256::new_from_slice(prekey).expect("HMAC accepts any key length");
+    let mut mac = HmacSha256::new_from_slice(kek).expect("HMAC accepts any key length");
     mac.update(pre_mac_bytes);
     mac.verify_slice(expected_mac).is_ok()
 }
