@@ -8,11 +8,11 @@ use arsenic::{
         load_signing_keystore, save_signing_key, resolve_signing_key, SigningKeyEntry,
     },
     encode_pubkey,
-    ArsenicParams, Direction, KemLevel, Secret, Ui,
+    ArsenicParams, Direction, Secret, Ui,
     bench_cipher_combinations, best_combination, CipherId,
 };
 use clap::Parser;
-use crate::cli::{Cli, KeygenCli, KemLevelArg, RecipientsCli, RecipientsAction};
+use crate::cli::{Cli, KeygenCli, RecipientsCli, RecipientsAction};
 use std::{
     env,
     io::{self, BufRead, Write},

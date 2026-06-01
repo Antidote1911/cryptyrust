@@ -269,7 +269,7 @@ pub(crate) fn wrap_dek_hybrid_1024(
     recipient: &HybridRecipient,
     dek: &[u8; 32],
 ) -> Result<HybridKeyslot1024, CoreErr> {
-    use hybrid_kem::{EK_LEN_1024, CT_LEN_1024};
+    use hybrid_kem::EK_LEN_1024;
     let ephemeral_bytes: [u8; 32] = random_array();
     let ephemeral_secret = X25519StaticSecret::from(ephemeral_bytes);
     let ephemeral_pk_x25519 = X25519PublicKey::from(&ephemeral_secret);
@@ -334,7 +334,7 @@ pub(crate) fn wrap_dek_hybrid(
 
     // ML-KEM-768 half
     let m: [u8; 32] = random_array();
-    let (mlkem_ct, ss_mlkem) = hybrid_kem::encaps(&recipient.mlkem, &m);
+    let (mlkem_ct, ss_mlkem) = hybrid_kem::encaps_768(&recipient.mlkem, &m);
 
     // Hybrid wrapping key
     let wrapping_key = hybrid_wrapping_key(

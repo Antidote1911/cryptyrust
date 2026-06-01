@@ -435,7 +435,7 @@ pub fn signing_keys_dir() -> Option<PathBuf> {
 }
 
 pub fn serialize_signing_identity(entry: &SigningKeyEntry) -> String {
-    use crate::keyfmt::{MLKEM_SEED_HRP, MLKEM_SEED_HRP as _};
+    
     let ts = utc_timestamp();
     // Encode seed as ARSENIC-SIGN-SEED-1{BECH32}
     let seed_enc = format!("ARSENIC-SIGN-SEED-1{}", crate::keyfmt::bech32_encode_upper(&entry.seed));

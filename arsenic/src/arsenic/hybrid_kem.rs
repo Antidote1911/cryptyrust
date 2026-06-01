@@ -25,9 +25,8 @@ pub const EK_LEN_768: usize = 1184;
 /// Byte length of an ML-KEM-768 ciphertext.
 pub const CT_LEN_768: usize = 1088;
 
-// Keep old names as aliases for compatibility within this crate.
+/// Backward-compat alias for ML-KEM-768 encapsulation key length.
 pub const EK_LEN: usize = EK_LEN_768;
-pub const CT_LEN: usize = CT_LEN_768;
 
 // ── ML-KEM-1024 ───────────────────────────────────────────────────────────────
 
@@ -89,10 +88,6 @@ pub fn decaps_768(mlkem_seed: &[u8; 64], ct_bytes: &[u8; CT_LEN_768]) -> [u8; 32
     out
 }
 
-// Backward-compat aliases that kept the old names.
-pub fn encapsulation_key(mlkem_seed: &[u8; 64]) -> [u8; EK_LEN_768] { encapsulation_key_768(mlkem_seed) }
-pub fn encaps(ek: &[u8; EK_LEN_768], m: &[u8; 32]) -> ([u8; CT_LEN_768], [u8; 32]) { encaps_768(ek, m) }
-pub fn decaps(mlkem_seed: &[u8; 64], ct: &[u8; CT_LEN_768]) -> [u8; 32] { decaps_768(mlkem_seed, ct) }
 
 // ── ML-KEM-1024 public API ────────────────────────────────────────────────────
 
