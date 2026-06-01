@@ -172,7 +172,7 @@ arsenic_rekey(
 | `Interactive` *(default)* | 4 | 262 144 | 4 | 256 MiB | ~1–3 s |
 | `Sensitive` | 12 | 1 048 576 | 4 | 1 GiB | ~10–30 s |
 
-Pre-auth uses t=1, m=8 192 KB, p=1 → ~2 ms to reject wrong passwords fast.
+The HeaderMAC is keyed with the full KEK, so every password attempt costs the full Argon2id derivation. There is no cheaper pre-authentication oracle.
 
 ### Cipher IDs (header byte)
 
@@ -194,12 +194,56 @@ Both keys are derived from the same 32-byte seed stored in the `.key` file.
 
 ---
 
+## Known design trade-offs
+
+These are acknowledged limitations, not bugs. They match the behaviour of
+comparable tools (LUKS 2, age, Sequoia).
+
+### Plaintext metadata
+
+The following fields are readable by any party in possession of the file:
+
+- **`hybrid_count` and `header_total_size`** — reveal the exact number of
+  asymmetric recipients. Hiding this without a fixed-size header or
+  trial-decryption strategy would require a fundamental format redesign.
+- **`t_cost` / `m_cost` / `p_cost`** — KDF parameters must be in plaintext
+  because they are required to derive the KEK before any decryption can
+  occur. There is no practical alternative given the format's constraints.
+
+These fields are covered by the HeaderMAC and cannot be silently tampered
+with, but their values are always observable.
+
+### Correlated X25519 and ML-KEM entropy
+
+The ML-KEM-768 key pair is deterministically derived from the same 32-byte
+X25519 seed via BLAKE3 (`"Arsenic ML-KEM d"` / `"Arsenic ML-KEM z"`).
+This means both the classical and post-quantum components share a single
+root secret rather than independent entropy sources.
+
+Security properties:
+- The derivation is sound: BLAKE3 with domain separation is modelled as
+  a PRF; given a uniformly random 32-byte seed, both derived keys are
+  indistinguishable from independent uniform random keys.
+- The design relies on the OS CSPRNG (`rand::random()` → `getrandom`) to
+  produce that initial seed. Any weakness in the seed weakens both
+  components simultaneously rather than independently.
+- NIST FIPS 203 recommends independent `d` and `z` random values for
+  ML-KEM key generation. Arsenic derives them via BLAKE3 instead, which is
+  secure under the PRF assumption but constitutes an additional hypothesis
+  beyond the bare FIPS 203 model.
+
+**Trade-off accepted for usability:** a single 32-byte `.key` file managing
+the full hybrid keypair is substantially simpler than a 64-byte or two-file
+approach. The risk is acceptable given a trustworthy OS RNG.
+
+---
+
 ## Format summary
 
 ```
 ┌──────────────────────────────────────────────┐  ← offset 0x00
 │  Section pré-MAC   77 bytes  (pre-MAC)        │  plaintext, integrity-protected
-│  HeaderMAC         32 bytes                   │  HMAC-SHA256(PreKey, pre-MAC)
+│  HeaderMAC         32 bytes                   │  HMAC-SHA256(KEK, pre-MAC)
 │  WrappedDEK        48 bytes                   │  AEAD-encrypted DEK (symmetric keyslot)
 │  hybrid_count       4 bytes                   │  number of hybrid keyslots
 │  Keyslot_0       1180 bytes  ┐               │  X25519+ML-KEM-768 wrapped DEK

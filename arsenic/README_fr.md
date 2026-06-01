@@ -15,7 +15,7 @@ Utilisée par [`cryptyrust_cli`](../cli), la GUI [`cryptyrust`](../gui), la couc
   - `Deoxys-II-256` — AEAD à blocs tweakables *(chiffrement d'en-tête par défaut)*
   - `XChaCha20-Poly1305` — nonce 192 bits, performant en logiciel *(chiffrement payload par défaut)*
   - `AES-256-GCM-SIV` — résistant au mésusage de nonce
-- **Dérivation de clé Argon2id** avec deux préréglages (`Interactive` 256 Mio / `Sensitive` 1 Gio) et une passe de pré-authentification rapide (~2 ms) pour rejeter les mauvais mots de passe avant le KDF complet
+- **Dérivation de clé Argon2id** avec deux préréglages (`Interactive` 256 Mio / `Sensitive` 1 Gio). Le HeaderMAC est chiffré avec le KEK complet — chaque tentative de mot de passe coûte la dérivation Argon2id entière, sans oracle rapide
 - **Keyslot style LUKS** — le changement de mot de passe réécrit uniquement les 48 octets du wrapper DEK ; le payload n'est jamais re-chiffré
 - **Arbre de Merkle BLAKE3** — intégrité à séparation de domaines sur tous les blocs chiffrés ; vérification complète avant toute écriture du plaintext
 - **Traitement en blocs en streaming** — mémoire O(taille_bloc + N_blocs × 32) quelle que soit la taille du fichier
@@ -172,7 +172,7 @@ arsenic_rekey(
 | `Interactive` *(défaut)* | 4 | 262 144 | 4 | 256 Mio | ~1–3 s |
 | `Sensitive` | 12 | 1 048 576 | 4 | 1 Gio | ~10–30 s |
 
-La pré-authentification utilise t=1, m=8 192 Ko, p=1 → ~2 ms pour rejeter rapidement les mauvais mots de passe.
+Le HeaderMAC est chiffré avec le KEK complet — chaque tentative de mot de passe coûte la dérivation Argon2id entière. Il n'existe aucun oracle moins coûteux.
 
 ### IDs de chiffrements (octet d'en-tête)
 
@@ -199,7 +199,7 @@ Les deux clés sont dérivées de la même graine de 32 octets stockée dans le 
 ```
 ┌──────────────────────────────────────────────┐  ← offset 0x00
 │  Section pré-MAC   77 octets  (pre-MAC)       │  plaintext, protégé par intégrité
-│  HeaderMAC         32 octets                  │  HMAC-SHA256(PreKey, pre-MAC)
+│  HeaderMAC         32 octets                  │  HMAC-SHA256(KEK, pre-MAC)
 │  WrappedDEK        48 octets                  │  DEK chiffré AEAD (keyslot symétrique)
 │  hybrid_count       4 octets                  │  nombre de keyslots hybrides
 │  Keyslot_0       1180 octets  ┐               │  DEK wrappé X25519+ML-KEM-768
