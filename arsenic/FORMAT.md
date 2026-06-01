@@ -359,7 +359,26 @@ Offset     Size  Content
 
 ## 12. Password Change (rekey)
 
-Only the `WrappedDEK` (48 bytes) is re-encrypted. The payload, ProtectedMetadata and hybrid keyslots do not change. Atomicity guaranteed by a fsynced `.bak` before any in-place write.
+The following fields change; everything else is preserved unchanged:
+
+| Field | Change |
+|---|---|
+| `salt` | New 16-byte random value |
+| `kek_nonce` | New 12-byte random value |
+| `HeaderMAC` | Recomputed with new KEK = Argon2id(new\_password, new\_salt) |
+| `WrappedDEK` | Re-encrypted under new KEK |
+| Hybrid keyslots | **Unchanged** |
+| `ProtectedMetadata` | **Unchanged** |
+| Payload blocks | **Unchanged** |
+
+Because the KEK depends on both the password and the salt, and both change,
+the entire 109-byte public header is rewritten together with the WrappedDEK.
+The payload is never touched regardless of file size — rekey is O(1).
+
+**Atomicity:** the full current header is written to `<file>.bak` and
+fsynced (including the parent directory entry on POSIX) before any in-place
+write. On success the backup is deleted. On crash, the original header is
+restored from the backup on next open.
 
 ---
 

@@ -359,7 +359,26 @@ Offset     Taille  Contenu
 
 ## 12. Changement de mot de passe (rekey)
 
-Seul le `WrappedDEK` (48 octets) est re-chiffré. Le payload, la ProtectedMetadata et les keyslots hybrides ne changent pas. Atomicité garantie par un `.bak` fsynced avant l'écriture en place.
+Les champs suivants changent ; tout le reste est préservé à l'identique :
+
+| Champ | Modification |
+|---|---|
+| `salt` | Nouvelle valeur aléatoire de 16 octets |
+| `kek_nonce` | Nouvelle valeur aléatoire de 12 octets |
+| `HeaderMAC` | Recalculé avec le nouveau KEK = Argon2id(nouveau\_mot\_de\_passe, nouveau\_salt) |
+| `WrappedDEK` | Re-chiffré sous le nouveau KEK |
+| Keyslots hybrides | **Inchangés** |
+| `ProtectedMetadata` | **Inchangée** |
+| Blocs payload | **Inchangés** |
+
+Comme le KEK dépend à la fois du mot de passe et du sel, et que les deux changent,
+la totalité de l'en-tête public (109 octets) est réécrite avec le WrappedDEK.
+Le payload n'est jamais touché quelle que soit la taille du fichier — le rekey est O(1).
+
+**Atomicité :** l'en-tête complet actuel est écrit dans `<fichier>.bak` et
+fsynced (y compris l'entrée du répertoire parent sur POSIX) avant toute écriture
+en place. En cas de succès, la sauvegarde est supprimée. En cas de crash,
+l'en-tête original est restauré depuis la sauvegarde à la prochaine ouverture.
 
 ---
 
