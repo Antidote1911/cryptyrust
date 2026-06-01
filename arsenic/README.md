@@ -213,6 +213,28 @@ The following fields are readable by any party in possession of the file:
 These fields are covered by the HeaderMAC and cannot be silently tampered
 with, but their values are always observable.
 
+### Recipient revocation
+
+`arsenic_remove_recipient(path, password, index)` removes a keyslot in
+O(header\_size) — the payload is streamed unchanged and the DEK is not
+rotated. This is sufficient to prevent future decryption of the **modified**
+file by the removed party.
+
+**Cryptographic limit:** removing a keyslot does not revoke access for a
+recipient who already holds a copy of the file with their keyslot intact.
+The DEK is unchanged; anyone who has decapsulated it can still decrypt any
+copy they possess. True revocation (guaranteeing a past recipient loses
+access) always requires re-encrypting the payload with a new DEK.
+This is a fundamental property of any multi-recipient symmetric encryption
+scheme — LUKS, age, and Sequoia share the same constraint.
+
+**UX limitation:** `arsenic_list_recipients` returns the *ephemeral* X25519
+public keys of each keyslot, not the recipients' own public keys (which are
+not stored, for anonymity). To identify which slot belongs to a given
+contact, the caller must attempt decapsulation with the contact's private key
+(`arsenic_find_matching_key`). A future improvement would let the key manager
+map contact names to slot indices directly.
+
 ### Correlated X25519 and ML-KEM entropy
 
 The ML-KEM-768 key pair is deterministically derived from the same 32-byte
