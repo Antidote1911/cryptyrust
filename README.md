@@ -16,10 +16,11 @@ Pre-built binaries for Linux, macOS (universal) and Windows are available on the
 ## Features
 
 - **Arsenic V1** format (`.arsn`) — fully documented in [`arsenic/FORMAT.md`](arsenic/FORMAT.md)
-- **Post-quantum hybrid encryption** — X25519 + ML-KEM-768 (NIST FIPS 203) for asymmetric recipients. Resistant to future quantum computers (harvest-now-decrypt-later)
+- **Post-quantum hybrid encryption** — X25519 + ML-KEM-768 or ML-KEM-1024 (NIST FIPS 203). Resistant to future quantum computers (harvest-now-decrypt-later)
+- **ML-DSA-65 signatures** (NIST FIPS 204) — optionally sign files during encryption; signature verified automatically on decryption
 - **Drag-and-drop GUI** — drop files to encrypt or decrypt; mode auto-detected
 - **CLI** for scripting and automation
-- **Integrated key management**: generate hybrid keypairs, add contacts, encrypt for multiple recipients
+- **Integrated key management**: encryption keypairs (X25519 + ML-KEM) and signing keys (ML-DSA-65)
 - Three independently selectable **AEAD ciphers** for header and payload
 - **Argon2id** key derivation (Interactive 256 MiB / Sensitive 1 GiB)
 - **Password change** without re-encrypting the payload
@@ -68,11 +69,17 @@ The `cryptyrust` binary acts as a CLI when called with arguments, or opens the G
 # Encrypt with password
 cryptyrust -e document.pdf -p "my secret passphrase"
 
-# Decrypt (auto-tries stored keys, then prompts for password)
-cryptyrust -d document.pdf.arsn
-
-# Encrypt for recipients (passwordless)
+# Encrypt for recipients (ML-KEM-768, default)
 cryptyrust -e document.pdf -R alice -R bob
+
+# Encrypt with ML-KEM-1024 (NIST Level 5, ~256-bit quantum security)
+cryptyrust -e document.pdf -R alice --kem-level 1024
+
+# Encrypt + sign with ML-DSA-65
+cryptyrust -e document.pdf -p "passphrase" -S alice
+
+# Decrypt (auto-tries stored keys, verifies signature if present)
+cryptyrust -d document.pdf.arsn
 
 # Decrypt with a specific key file
 cryptyrust -d document.pdf.arsn -i ~/.config/cryptyrust/keys/alice.key
@@ -89,20 +96,26 @@ cryptyrust --bench
 ## Key Management
 
 ```bash
-# Generate a keypair and display it (stdout)
-cryptyrust keygen -n alice
+# Encryption keypairs (X25519 + ML-KEM-768/1024)
+cryptyrust keygen -n alice --store           # generate and save to keystore
+cryptyrust keygen -n alice -o alice.key      # generate to file
+cryptyrust keygen --list                     # list stored keypairs
+cryptyrust keygen -y alice.key               # show public key of a .key file
 
-# Save directly to the shared keystore (~/.config/cryptyrust/keys/)
-cryptyrust keygen -n alice --store
-
-# List stored keys
-cryptyrust keygen --list
-
-# Extract the public key from a .key file
-cryptyrust keygen -y alice.key
+# ML-DSA-65 signing keys
+cryptyrust keygen --sign -n alice --store    # generate signing key → keystore
+cryptyrust keygen --sign -n alice -o alice.sigkey
+cryptyrust keygen --list-sign                # list stored signing keys
 ```
 
 The keystore is shared between the GUI and CLI — a key generated in one mode is immediately available in the other.
+
+## Signing
+
+```bash
+cryptyrust -e document.pdf -S alice -p "passphrase"   # encrypt + sign
+cryptyrust -d document.pdf.arsn -p "passphrase"       # decrypt (auto-verifies signature)
+```
 
 ---
 

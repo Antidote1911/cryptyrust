@@ -62,22 +62,29 @@ Settings are persisted between sessions via eframe storage.
 ## CLI Usage
 
 ```bash
-cryptyrust -e file.txt -p "passphrase"       # encrypt
-cryptyrust -d file.txt.arsn                  # decrypt (auto-tries keystore)
-cryptyrust -e file.txt -R alice -R bob        # encrypt for recipients
-cryptyrust --rekey file.txt.arsn              # change password
-cryptyrust --bench                            # benchmark ciphers
-cryptyrust --help                             # full option list
+cryptyrust -e file.txt -p "passphrase"             # encrypt (password)
+cryptyrust -d file.txt.arsn                        # decrypt (auto-tries keystore)
+cryptyrust -e file.txt -R alice -R bob             # encrypt for recipients (ML-KEM-768)
+cryptyrust -e file.txt -R alice --kem-level 1024   # encrypt with ML-KEM-1024 (NIST Level 5)
+cryptyrust -e file.txt -S alice                    # encrypt + sign with ML-DSA-65 key
+cryptyrust --rekey file.txt.arsn                   # change password
+cryptyrust --bench                                 # benchmark ciphers
+cryptyrust --help                                  # full option list
 ```
 
 ## Key Management
 
 ```bash
+# Encryption keypairs (X25519 + ML-KEM)
 cryptyrust keygen -n alice --store           # generate keypair → shared keystore
 cryptyrust keygen -n alice -o alice.key      # generate keypair → specific file
 cryptyrust keygen --list                     # list all stored keypairs
 cryptyrust keygen -y alice.key               # show public key of a .key file
-cryptyrust keygen --help                     # full keygen option list
+
+# ML-DSA-65 signing keys
+cryptyrust keygen --sign -n alice --store    # generate signing key → shared store
+cryptyrust keygen --sign -n alice -o alice.sigkey  # generate → specific file
+cryptyrust keygen --list-sign                # list stored signing keys
 ```
 
 ## Building

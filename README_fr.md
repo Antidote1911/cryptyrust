@@ -16,10 +16,11 @@ Binaires pré-compilés pour Linux, macOS (universal) et Windows disponibles sur
 ## Fonctionnalités
 
 - Format **Arsenic V1** (`.arsn`) — entièrement documenté dans [`arsenic/FORMAT.md`](arsenic/FORMAT.md)
-- **Chiffrement hybride post-quantique** — X25519 + ML-KEM-768 (NIST FIPS 203) pour les destinataires asymétriques. Résiste aux ordinateurs quantiques futurs (harvest-now-decrypt-later)
+- **Chiffrement hybride post-quantique** — X25519 + ML-KEM-768 ou ML-KEM-1024 (NIST FIPS 203). Résiste aux ordinateurs quantiques futurs (harvest-now-decrypt-later)
+- **Signatures ML-DSA-65** (NIST FIPS 204) — signature optionnelle lors du chiffrement ; vérification automatique au déchiffrement
 - **GUI drag-and-drop** — déposer des fichiers pour chiffrer ou déchiffrer ; mode auto-détecté
 - **CLI** pour le scripting et l'automatisation
-- **Gestion de clés** intégrée : générer des paires de clés hybrides, ajouter des contacts, chiffrer pour plusieurs destinataires
+- **Gestion de clés** intégrée : keypairs de chiffrement (X25519 + ML-KEM) et clés de signature (ML-DSA-65)
 - Trois **chiffrements AEAD** sélectionnables indépendamment pour l'en-tête et le payload
 - **Argon2id** pour la dérivation de clé (Interactive 256 MiB / Sensitive 1 GiB)
 - **Changement de mot de passe** sans re-chiffrer le payload
@@ -68,11 +69,17 @@ Le binaire `cryptyrust` fonctionne en CLI quand on lui passe des arguments, et o
 # Chiffrer avec mot de passe
 cryptyrust -e document.pdf -p "ma phrase secrète"
 
-# Déchiffrer (essai auto des clés stockées, puis demande le mot de passe)
-cryptyrust -d document.pdf.arsn
-
-# Chiffrer pour des destinataires (sans mot de passe)
+# Chiffrer pour des destinataires (ML-KEM-768, défaut)
 cryptyrust -e document.pdf -R alice -R bob
+
+# Chiffrer avec ML-KEM-1024 (niveau NIST 5, ~256 bits quantiques)
+cryptyrust -e document.pdf -R alice --kem-level 1024
+
+# Chiffrer + signer avec ML-DSA-65
+cryptyrust -e document.pdf -p "phrase" -S alice
+
+# Déchiffrer (essai auto des clés, vérifie la signature si présente)
+cryptyrust -d document.pdf.arsn
 
 # Déchiffrer avec un fichier de clé spécifique
 cryptyrust -d document.pdf.arsn -i ~/.config/cryptyrust/keys/alice.key
@@ -89,20 +96,26 @@ cryptyrust --bench
 ## Gestion des clés
 
 ```bash
-# Générer un keypair et l'afficher (stdout)
-cryptyrust keygen -n alice
+# Keypairs de chiffrement (X25519 + ML-KEM)
+cryptyrust keygen -n alice --store           # générer et sauvegarder dans le keystore
+cryptyrust keygen -n alice -o alice.key      # générer vers un fichier
+cryptyrust keygen --list                     # lister les keypairs stockés
+cryptyrust keygen -y alice.key               # afficher la clé publique d'un .key
 
-# Sauvegarder directement dans le keystore partagé (~/.config/cryptyrust/keys/)
-cryptyrust keygen -n alice --store
-
-# Lister les clés stockées
-cryptyrust keygen --list
-
-# Extraire la clé publique d'un fichier .key
-cryptyrust keygen -y alice.key
+# Clés de signature ML-DSA-65
+cryptyrust keygen --sign -n alice --store    # générer une clé de signature → keystore
+cryptyrust keygen --sign -n alice -o alice.sigkey
+cryptyrust keygen --list-sign                # lister les clés de signature stockées
 ```
 
 Le keystore est partagé entre la GUI et le CLI — une clé générée dans un mode est immédiatement disponible dans l'autre.
+
+## Signature
+
+```bash
+cryptyrust -e document.pdf -S alice -p "phrase"       # chiffrement + signature
+cryptyrust -d document.pdf.arsn -p "phrase"           # déchiffrement (vérifie la signature)
+```
 
 ---
 

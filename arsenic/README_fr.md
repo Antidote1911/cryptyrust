@@ -10,7 +10,8 @@ Utilisée par le binaire [`cryptyrust`](../cryptyrust) (GUI + CLI + gestion de c
 
 ## Fonctionnalités
 
-- **Chiffrement asymétrique hybride post-quantique** — X25519 + ML-KEM-768 (NIST FIPS 203). Chaque destinataire dispose d'un keyslot indépendant ; les fichiers restent déchiffrables par ordinateurs quantiques *et* classiques
+- **Chiffrement asymétrique hybride post-quantique** — X25519 + ML-KEM-768 ou ML-KEM-1024 (NIST FIPS 203). Chaque destinataire dispose d'un keyslot indépendant ; les fichiers restent déchiffrables par ordinateurs quantiques *et* classiques
+- **Signatures ML-DSA-65 optionnelles** (NIST FIPS 204) — les fichiers peuvent être signés lors du chiffrement ; la signature est vérifiée automatiquement au déchiffrement
 - **Trois chiffrements AEAD sélectionnables**, configurables indépendamment pour l'en-tête et le payload :
   - `Deoxys-II-256` — AEAD à blocs tweakables *(chiffrement d'en-tête par défaut)*
   - `XChaCha20-Poly1305` — nonce 192 bits, performant en logiciel *(chiffrement payload par défaut)*
@@ -184,13 +185,22 @@ Le HeaderMAC est chiffré avec le KEK complet — chaque tentative de mot de pas
 
 ### KEM hybride
 
-| Composant | Algorithme | Taille de clé | Sécurité |
-|---|---|---|---|
-| Classique | X25519 ECDH | 32 octets | 128 bits classique |
-| Post-quantique | ML-KEM-768 (NIST FIPS 203) | EK : 1184 o, CT : 1088 o | Niveau NIST 3 |
-| Combiné | Binding hybride via BLAKE3 | — | Sécurisé si l'un des deux tient |
+Deux niveaux de sécurité disponibles, choisis par fichier au chiffrement :
 
-Les deux clés sont dérivées de la même graine de 32 octets stockée dans le fichier `.key`.
+| Niveau | ML-KEM | EK | CT | Sécurité quantique |
+|---|---|---|---|---|
+| **L768** *(défaut)* | ML-KEM-768 (niveau NIST 3) | 1184 o | 1088 o | ~180 bits |
+| **L1024** | ML-KEM-1024 (niveau NIST 5) | 1568 o | 1568 o | ~256 bits |
+
+X25519 + ML-KEM sont combinés via BLAKE3 hybrid KEM binding — le hybride est sécurisé si l'un des deux composants tient.
+
+**Entropie indépendante (depuis v1.5.0) :** les seeds X25519 et ML-KEM sont générés indépendamment depuis le CSPRNG de l'OS. Le fichier `.key` stocke une graine X25519 (32 octets) et une graine ML-KEM séparée de 64 octets (`d||z`) sur la ligne `# mlkem-seed:`. Les anciens fichiers sans cette ligne dérivent le seed ML-KEM via BLAKE3 (compat).
+
+### Signatures ML-DSA-65
+
+Les fichiers peuvent être signés optionnellement avec une clé ML-DSA-65 (NIST FIPS 204, ~192 bits quantiques). La signature couvre les paramètres d'en-tête publics (`pre_mac[77]`). La vérification est automatique et obligatoire au déchiffrement si une signature est présente.
+
+Les clés de signature sont stockées séparément dans des fichiers `.sigkey`.
 
 ---
 
@@ -201,11 +211,14 @@ Les deux clés sont dérivées de la même graine de 32 octets stockée dans le 
 │  Section pré-MAC   77 octets  (pre-MAC)       │  plaintext, protégé par intégrité
 │  HeaderMAC         32 octets                  │  BLAKE3_keyed_hash(KEK, pre-MAC)
 │  WrappedDEK        48 octets                  │  DEK chiffré AEAD (keyslot symétrique)
-│  hybrid_count       4 octets                  │  nombre de keyslots hybrides
-│  Keyslot_0       1180 octets  ┐               │  DEK wrappé X25519+ML-KEM-768
-│  Keyslot_1       1180 octets  │ × N           │
-│  ProtectedMeta    ≥66 octets  ┘               │  TLV AEAD chiffré (racine Merkle, taille…)
-└──────────────────────────────────────────────┘  ← offset = header_total_size (≥227 octets)
+│  hybrid_768_count   4 octets                  │  nombre de keyslots ML-KEM-768
+│  Keyslot_768_0   1180 octets  ┐               │  DEK wrappé X25519+ML-KEM-768 × N
+│  hybrid_1024_count  4 octets  │               │  nombre de keyslots ML-KEM-1024
+│  Keyslot_1024_0  1660 octets  │               │  DEK wrappé X25519+ML-KEM-1024 × M
+│  ProtectedMeta    ≥66 octets  │               │  TLV AEAD chiffré (racine Merkle, taille…)
+│  sig_present        1 octet   ┘               │  0x00=aucune / 0x01=ML-DSA-65
+│  [clé+signature   5261 octets]                │  Clé vérif. + signature ML-DSA-65
+└──────────────────────────────────────────────┘  ← offset = header_total_size (≥232 octets)
 ┌──────────────────────────────────────────────┐
 │  Bloc 0 : ciphertext + tag AEAD 16 octets     │
 │  Bloc 1 : ciphertext + tag AEAD 16 octets     │  blocs traités séquentiellement,

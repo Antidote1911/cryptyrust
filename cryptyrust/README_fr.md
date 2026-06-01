@@ -62,22 +62,29 @@ Les paramètres sont persistés entre sessions via le stockage eframe.
 ## Utilisation CLI
 
 ```bash
-cryptyrust -e fichier.txt -p "phrase"        # chiffrement
-cryptyrust -d fichier.txt.arsn               # déchiffrement (essai auto keystore)
-cryptyrust -e fichier.txt -R alice -R bob    # chiffrement pour des destinataires
-cryptyrust --rekey fichier.txt.arsn          # changement de mot de passe
-cryptyrust --bench                           # benchmark des chiffrements
-cryptyrust --help                            # liste complète des options
+cryptyrust -e fichier.txt -p "phrase"              # chiffrement (mot de passe)
+cryptyrust -d fichier.txt.arsn                     # déchiffrement (essai auto keystore)
+cryptyrust -e fichier.txt -R alice -R bob          # chiffrement pour destinataires (ML-KEM-768)
+cryptyrust -e fichier.txt -R alice --kem-level 1024  # ML-KEM-1024 (niveau NIST 5)
+cryptyrust -e fichier.txt -S alice                 # chiffrement + signature ML-DSA-65
+cryptyrust --rekey fichier.txt.arsn                # changement de mot de passe
+cryptyrust --bench                                 # benchmark des chiffrements
+cryptyrust --help                                  # liste complète des options
 ```
 
 ## Gestion des clés
 
 ```bash
+# Keypairs de chiffrement (X25519 + ML-KEM)
 cryptyrust keygen -n alice --store           # générer un keypair → keystore partagé
 cryptyrust keygen -n alice -o alice.key      # générer un keypair → fichier spécifique
 cryptyrust keygen --list                     # lister tous les keypairs stockés
 cryptyrust keygen -y alice.key               # afficher la clé publique d'un fichier .key
-cryptyrust keygen --help                     # liste complète des options keygen
+
+# Clés de signature ML-DSA-65
+cryptyrust keygen --sign -n alice --store    # générer une clé de signature → keystore
+cryptyrust keygen --sign -n alice -o alice.sigkey  # générer → fichier spécifique
+cryptyrust keygen --list-sign                # lister les clés de signature stockées
 ```
 
 ## Compilation

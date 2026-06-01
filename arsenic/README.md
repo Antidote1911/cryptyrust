@@ -10,7 +10,8 @@ Used by the [`cryptyrust`](../cryptyrust) binary (GUI + CLI + key management) an
 
 ## Features
 
-- **Hybrid post-quantum asymmetric encryption** — X25519 + ML-KEM-768 (NIST FIPS 203). Each recipient gets an independent keyslot; files stay decryptable by quantum computers *and* classical ones
+- **Hybrid post-quantum asymmetric encryption** — X25519 + ML-KEM-768 or ML-KEM-1024 (NIST FIPS 203). Each recipient gets an independent keyslot; files stay decryptable by quantum computers *and* classical ones
+- **Optional ML-DSA-65 signatures** (NIST FIPS 204) — files can be signed during encryption; signature verified automatically on decryption
 - **Three selectable AEAD ciphers**, independently configurable for header and payload:
   - `Deoxys-II-256` — tweakable block cipher AEAD *(default header cipher)*
   - `XChaCha20-Poly1305` — 192-bit nonce, software-friendly *(default payload cipher)*
@@ -184,13 +185,22 @@ The HeaderMAC is keyed with the full KEK, so every password attempt costs the fu
 
 ### Hybrid KEM
 
-| Component | Algorithm | Key size | Security |
-|---|---|---|---|
-| Classical | X25519 ECDH | 32 bytes | 128-bit classical |
-| Post-quantum | ML-KEM-768 (NIST FIPS 203) | EK: 1184 B, CT: 1088 B | NIST level 3 |
-| Combined | Hybrid binding via BLAKE3 | — | Secure if either holds |
+Two security levels are supported, selected per-file at encryption time:
 
-Both keys are derived from the same 32-byte seed stored in the `.key` file.
+| Level | ML-KEM variant | EK size | CT size | Quantum security |
+|---|---|---|---|---|
+| **L768** *(default)* | ML-KEM-768 (NIST level 3) | 1184 B | 1088 B | ~180 bits |
+| **L1024** | ML-KEM-1024 (NIST level 5) | 1568 B | 1568 B | ~256 bits |
+
+X25519 + ML-KEM are combined via BLAKE3 hybrid KEM binding — the hybrid is secure if either component holds.
+
+**Independent entropy:** since v1.5.0, the X25519 and ML-KEM seeds are generated independently from the OS CSPRNG. The `.key` file stores a 32-byte X25519 seed and a separate 64-byte ML-KEM seed (`d||z`). Old key files that only stored 32 bytes derive the ML-KEM seed via BLAKE3 (backward compat).
+
+### ML-DSA-65 signatures
+
+Files can optionally be signed with an ML-DSA-65 key (NIST FIPS 204, ~192-bit quantum security). The signature covers the public header parameters (`pre_mac[77]`). Verification is automatic and mandatory during decryption if a signature is present.
+
+Signing keys are stored separately as `.sigkey` files.
 
 ---
 
@@ -260,28 +270,19 @@ contact, the caller must attempt decapsulation with the contact's private key
 (`arsenic_find_matching_key`). A future improvement would let the key manager
 map contact names to slot indices directly.
 
-### Correlated X25519 and ML-KEM entropy
+### X25519 and ML-KEM entropy
 
-The ML-KEM-768 key pair is deterministically derived from the same 32-byte
-X25519 seed via BLAKE3 (`"Arsenic ML-KEM d"` / `"Arsenic ML-KEM z"`).
-This means both the classical and post-quantum components share a single
-root secret rather than independent entropy sources.
+Since v1.5.0, X25519 and ML-KEM seeds are generated **independently** from
+the OS CSPRNG (`getrandom`). Each `.key` file stores:
+- A 32-byte X25519 private key seed
+- A separate 64-byte ML-KEM seed (`d[32] || z[32]`) in a `# mlkem-seed:` line
 
-Security properties:
-- The derivation is sound: BLAKE3 with domain separation is modelled as
-  a PRF; given a uniformly random 32-byte seed, both derived keys are
-  indistinguishable from independent uniform random keys.
-- The design relies on the OS CSPRNG (`rand::random()` → `getrandom`) to
-  produce that initial seed. Any weakness in the seed weakens both
-  components simultaneously rather than independently.
-- NIST FIPS 203 recommends independent `d` and `z` random values for
-  ML-KEM key generation. Arsenic derives them via BLAKE3 instead, which is
-  secure under the PRF assumption but constitutes an additional hypothesis
-  beyond the bare FIPS 203 model.
+This eliminates the shared root of trust that previously existed (ML-KEM
+derived from X25519 via BLAKE3). The two components now have fully independent
+entropy — a weakness in one cannot compromise the other.
 
-**Trade-off accepted for usability:** a single 32-byte `.key` file managing
-the full hybrid keypair is substantially simpler than a 64-byte or two-file
-approach. The risk is acceptable given a trustworthy OS RNG.
+Legacy key files (without `# mlkem-seed:`) still derive the ML-KEM seed via
+BLAKE3 for backward compatibility.
 
 ---
 
@@ -292,11 +293,14 @@ approach. The risk is acceptable given a trustworthy OS RNG.
 │  Section pré-MAC   77 bytes  (pre-MAC)        │  plaintext, integrity-protected
 │  HeaderMAC         32 bytes                   │  BLAKE3_keyed_hash(KEK, pre-MAC)
 │  WrappedDEK        48 bytes                   │  AEAD-encrypted DEK (symmetric keyslot)
-│  hybrid_count       4 bytes                   │  number of hybrid keyslots
-│  Keyslot_0       1180 bytes  ┐               │  X25519+ML-KEM-768 wrapped DEK
-│  Keyslot_1       1180 bytes  │ × N           │
-│  ProtectedMeta    ≥66 bytes  ┘               │  AEAD-encrypted TLV (Merkle root, size…)
-└──────────────────────────────────────────────┘  ← offset = header_total_size (≥227 bytes)
+│  hybrid_768_count   4 bytes                   │  number of ML-KEM-768 keyslots
+│  Keyslot_768_0   1180 bytes  ┐               │  X25519+ML-KEM-768 wrapped DEK × N
+│  hybrid_1024_count  4 bytes  │               │  number of ML-KEM-1024 keyslots
+│  Keyslot_1024_0  1660 bytes  │               │  X25519+ML-KEM-1024 wrapped DEK × M
+│  ProtectedMeta    ≥66 bytes  │               │  AEAD-encrypted TLV (Merkle root, size…)
+│  sig_present        1 byte   ┘               │  0x00=none / 0x01=ML-DSA-65
+│  [verif_key+sig  5261 bytes]                 │  ML-DSA-65 verifying key + signature
+└──────────────────────────────────────────────┘  ← offset = header_total_size (≥232 bytes)
 ┌──────────────────────────────────────────────┐
 │  Block 0: ciphertext + 16-byte AEAD tag       │
 │  Block 1: ciphertext + 16-byte AEAD tag       │  blocks processed sequentially,
