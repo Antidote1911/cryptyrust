@@ -1,5 +1,6 @@
 use arsenic::{
-    bench_cipher_combinations, ArsenicParams, ArsenicStrength, CipherBenchResult, CipherId, Ui,
+    bench_cipher_combinations, ArsenicParams, ArsenicStrength, CipherBenchResult, CipherId,
+    KemLevel, Ui,
 };
 use eframe::egui;
 use std::path::PathBuf;
@@ -38,6 +39,12 @@ pub struct CryptyApp {
     pub arsenic_strength: ArsenicStrength,
     pub hdr_cipher: CipherId,
     pub pld_cipher: CipherId,
+    /// ML-KEM security level for asymmetric keyslots (L768 default / L1024).
+    pub kem_level: KemLevel,
+    /// Index into `signing_keys` of the active signing key (None = no signature).
+    pub signing_key_index: Option<usize>,
+    /// Loaded ML-DSA-65 signing keys from the signing-keys keystore.
+    pub signing_keys: Vec<arsenic::keystore::SigningKeyEntry>,
     pub show_about: bool,
     pub dark_mode: bool,
     // Cipher benchmark state
@@ -101,6 +108,14 @@ impl CryptyApp {
             .and_then(|s| cipher_from_key(&s))
             .unwrap_or(CipherId::XChaCha20Poly1305);
 
+        let kem_level = storage
+            .and_then(|s| s.get_string("kem_level"))
+            .and_then(|s| match s.as_str() {
+                "1024" => Some(KemLevel::L1024),
+                _      => Some(KemLevel::L768),
+            })
+            .unwrap_or(KemLevel::L768);
+
         Self {
             files: vec![],
             mode: Mode::Encrypt,
@@ -118,6 +133,9 @@ impl CryptyApp {
             arsenic_strength,
             hdr_cipher,
             pld_cipher,
+            kem_level,
+            signing_key_index: None,
+            signing_keys: arsenic::keystore::load_signing_keystore(),
             show_about: false,
             dark_mode,
             bench_running: false,
@@ -498,10 +516,17 @@ impl CryptyApp {
             .and_then(|i| self.keys.get(i))
             .cloned();
 
+        // Optional ML-DSA-65 signing key seed.
+        let signing_key = self.signing_key_index
+            .and_then(|i| self.signing_keys.get(i))
+            .map(|sk| sk.seed);
+
         let params = ArsenicParams {
             hdr_cipher: self.hdr_cipher,
             pld_cipher: self.pld_cipher,
             recipients,
+            kem_level: self.kem_level,
+            signing_key,
             ..ArsenicParams::from(self.arsenic_strength)
         };
         self.job
@@ -522,6 +547,10 @@ impl eframe::App for CryptyApp {
         );
         storage.set_string("hdr_cipher", cipher_to_key(self.hdr_cipher).to_string());
         storage.set_string("pld_cipher", cipher_to_key(self.pld_cipher).to_string());
+        storage.set_string("kem_level", match self.kem_level {
+            KemLevel::L768  => "768",
+            KemLevel::L1024 => "1024",
+        }.to_string());
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {

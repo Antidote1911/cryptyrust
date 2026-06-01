@@ -13,7 +13,7 @@ use crate::file_utils::{
 use crate::job::PasswordPopup;
 use arsenic::{encode_privkey, encode_pubkey};
 use crate::keystore::{contacts_path, keys_dir, pubkey_short};
-use arsenic::{best_combination, ArsenicStrength, CipherId};
+use arsenic::{best_combination, ArsenicStrength, CipherId, KemLevel};
 
 pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool) {
     ui.menu_button("Config", |ui| {
@@ -66,6 +66,45 @@ pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bo
                 CipherId::XChaCha20Poly1305,
             ] {
                 ui.selectable_value(&mut app.pld_cipher, cipher, cipher_label(cipher));
+            }
+
+            ui.add_space(6.0);
+
+            // ── ML-KEM level ──────────────────────────────────────────
+            ui.label(egui::RichText::new("ML-KEM level").strong());
+            ui.label(
+                egui::RichText::new("asymmetric keyslots — encryption only")
+                    .small()
+                    .weak(),
+            );
+            ui.separator();
+            ui.selectable_value(&mut app.kem_level, KemLevel::L768,
+                "ML-KEM-768  (NIST level 3, ~180-bit quantum)");
+            ui.selectable_value(&mut app.kem_level, KemLevel::L1024,
+                "ML-KEM-1024  (NIST level 5, ~256-bit quantum)");
+
+            ui.add_space(6.0);
+
+            // ── ML-DSA-65 signing key ─────────────────────────────────
+            ui.label(egui::RichText::new("Signing key  (ML-DSA-65)").strong());
+            ui.label(
+                egui::RichText::new("optional — signs encrypted files")
+                    .small()
+                    .weak(),
+            );
+            ui.separator();
+            ui.selectable_value(&mut app.signing_key_index, None, "— None —");
+            let n = app.signing_keys.len();
+            for i in 0..n {
+                let name = app.signing_keys[i].name.clone();
+                ui.selectable_value(&mut app.signing_key_index, Some(i),
+                    format!("✍ {name}"));
+            }
+            if n == 0 {
+                ui.label(
+                    egui::RichText::new("No signing keys — generate one in Key Manager")
+                        .small().weak().italics()
+                );
             }
 
             ui.add_space(6.0);
