@@ -4,7 +4,7 @@
 
 Bibliothèque cryptographique pure Rust implémentant le format de chiffrement de fichiers **Arsenic V1** (`.arsn`).
 
-Utilisée par [`cryptyrust_cli`](../cli), la GUI [`cryptyrust`](../gui), la couche FFI C [`arsenic_ffi`](../ffi) et [`crypty-keygen`](../crypty-keygen).
+Utilisée par le binaire [`cryptyrust`](../cryptyrust) (GUI + CLI + gestion de clés) et la couche FFI C [`arsenic_ffi`](../ffi).
 
 ---
 
