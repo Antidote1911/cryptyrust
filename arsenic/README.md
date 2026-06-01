@@ -199,6 +199,31 @@ Both keys are derived from the same 32-byte seed stored in the `.key` file.
 These are acknowledged limitations, not bugs. They match the behaviour of
 comparable tools (LUKS 2, age, Sequoia).
 
+### No streaming decryption from non-seekable sources
+
+`decrypt_arsenic` and `decrypt_arsenic_with_key` require `R: Read + Seek`.
+Decryption from stdin, network sockets, or pipes is not supported.
+
+**Why:** the two-pass design is intentional. Pass 1 reads all encrypted
+blocks and verifies the BLAKE3 Merkle root stored in `ProtectedMetadata`.
+Only if the root matches does Pass 2 decrypt and write plaintext.
+This guarantees that **no plaintext byte is ever written for a tampered,
+truncated, or corrupted file**.
+
+An AEAD-on-the-fly (single-pass) alternative would authenticate each block
+individually (AEAD tag + block-index AAD prevents reordering), but it cannot
+prevent a truncation attack: an adversary who silently drops the last N
+complete blocks causes N × block_size bytes of plaintext to be emitted before
+the decryptor notices the shortfall against `CompressedSize`. The two-pass
+Merkle approach closes this gap at near-zero memory cost
+(N_blocks × 32 bytes ≈ 20 KiB for a 10 GiB file) and low I/O cost (Pass 1
+is pure BLAKE3 hashing; the second read is served from OS cache on local
+files).
+
+A future `--stream` mode offering AEAD-on-the-fly with an explicit
+opt-in warning (weaker guarantee accepted) would make pipe-based workflows
+possible. This is tracked as a known limitation, not a security flaw.
+
 ### Plaintext metadata
 
 The following fields are readable by any party in possession of the file:
