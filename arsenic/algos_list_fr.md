@@ -18,7 +18,7 @@ Ce document liste et explique chaque algorithme cryptographique utilisé dans la
    - 4c. AES-256-GCM-SIV
 5. [KEM hybride post-quantique](#5-kem-hybride-post-quantique)
    - 5a. X25519 (ECDH)
-   - 5b. ML-KEM-768 (CRYSTALS-Kyber, NIST FIPS 203)
+   - 5b. ML-KEM-768 / ML-KEM-1024 (CRYSTALS-Kyber, NIST FIPS 203)
 6. [Arbre de Merkle](#6-arbre-de-merkle)
 7. [Encodage des clés — Bech32](#7-bech32)
 8. [Effacement sécurisé en mémoire — Zeroize](#8-zeroize)
@@ -284,9 +284,16 @@ métadonnées. Pour les blocs, `block_nonce_i[0..12]` est utilisé.
 ## 5. KEM hybride post-quantique
 
 Le chiffrement asymétrique dans Arsenic utilise un **KEM hybride** combinant
-X25519 (classique) et ML-KEM-768 (post-quantique). L'hybridation garantit
+X25519 (classique) et ML-KEM-768 ou ML-KEM-1024 (post-quantique). L'hybridation garantit
 que la sécurité est maintenue tant qu'**au moins un** des deux composants
 n'est pas compromis.
+
+Deux niveaux de sécurité sont disponibles par fichier :
+
+| Niveau | Variante ML-KEM | Niveau NIST | Sécurité quantique |
+|---|---|---|---|
+| **L768** *(défaut)* | ML-KEM-768 | 3 | ~180 bits |
+| **L1024** | ML-KEM-1024 | 5 | ~256 bits |
 
 ### 5a. X25519 (ECDH)
 
@@ -361,25 +368,28 @@ ML-KEM-768 (KEM) :
   → ss identique des deux côtés
 ```
 
-**Dérivation déterministe depuis la clé X25519 :**
-Pour simplifier la gestion des clés, la graine ML-KEM est dérivée de la
-clé privée X25519, évitant de stocker un second secret :
+**Seeds indépendants (depuis v1.5.0) :**
+
+La graine ML-KEM est générée indépendamment de la clé privée X25519 —
+chacune est produite séparément par le CSPRNG de l'OS. Le fichier `.key` stocke les deux :
 
 ```
-seed[64] = BLAKE3_derive_key("Arsenic ML-KEM d", x25519_sk)[32]
-         || BLAKE3_derive_key("Arsenic ML-KEM z", x25519_sk)[32]
+x25519_sk[32]   ← CSPRNG OS  (encodé en ARSENIC-SECRET-KEY-1…)
+mlkem_seed[64]  ← CSPRNG OS  (encodé en ARSENIC-MLKEM-SEED-1…, d[32]||z[32])
 
-(dk_mlkem, ek_mlkem) ← ML-KEM-768.KeyGen_internal(d=seed[0..32], z=seed[32..64])
+(dk_mlkem_768, ek_mlkem_768)   ← ML-KEM-768.KeyGen_internal(mlkem_seed)
+(dk_mlkem_1024, ek_mlkem_1024) ← ML-KEM-1024.KeyGen_internal(mlkem_seed)
 ```
 
-Un seul fichier `.key` de 32 octets suffit pour gérer l'intégralité du
-keypair hybride.
+Les deux niveaux ML-KEM partagent le même seed 64 octets. Ce seed est indépendant
+du seed X25519 — une faiblesse dans l'un ne peut pas se propager à l'autre.
+
+Les anciens fichiers `.key` (sans `# mlkem-seed:`) dérivent le seed ML-KEM
+depuis X25519 via BLAKE3 pour la compatibilité.
 
 **Encapsulation déterministe :**
-Pour éviter toute dépendance vis-à-vis d'une version spécifique du générateur
-de nombres aléatoires (`rand_core`), Arsenic utilise
-`encapsulate_deterministic(m)` avec `m ← rand::random::<[u8; 32]>()`.
-La randomisation est fournie par l'appelant.
+`m ← CSPRNG OS [32]` est fourni par l'appelant ; Arsenic utilise
+`encapsulate_deterministic(m)` en interne.
 
 ---
 
@@ -526,8 +536,8 @@ Mot de passe ──► Argon2id ──► KEK[32] ──► AEAD ──► Wrapp
                   │
                   └──► (pour chaque destinataire)
                          X25519_ECDH ──┐
-                         ML-KEM-768 ──┼──► BLAKE3 "Arsenic Hybrid KEM" ──► wrapping_key
-                                      └──► AEAD ──► wrapped_dek dans HybridKeyslot
+                         ML-KEM-768   ─┼──► BLAKE3 "Arsenic Hybrid KEM"      ──► wrapping_key → AEAD → wrapped_dek
+                         ou ML-KEM-1024┘──► BLAKE3 "Arsenic Hybrid KEM 1024" ──► wrapping_key → AEAD → wrapped_dek
 
 ┌──────────────────────────────────────────────────────────┐
 │ BLAKE3 Merkle tree  (sur tous les blocs chiffrés)         │
@@ -548,10 +558,12 @@ En-tête protégé par : BLAKE3_keyed_hash(KEK, en-tête_public[77 octets])
 | Header MAC | BLAKE3_keyed_hash | ✓ | Symétrique, Grover → 128 bits |
 | Dérivation interne | BLAKE3 | ✓ | Symétrique |
 | Keyslot X25519 | X25519 | ✗ | Shor casse ECDH |
-| Keyslot ML-KEM-768 | ML-KEM-768 | ✓ | FIPS 203, résiste à Shor |
-| **Keyslot hybride** | **X25519 + ML-KEM-768** | **✓** | Sécurisé si l'un des deux tient |
+| Keyslot ML-KEM-768 | ML-KEM-768 (NIST niveau 3) | ✓ | FIPS 203, ~180 bits quantiques |
+| Keyslot ML-KEM-1024 | ML-KEM-1024 (NIST niveau 5) | ✓ | FIPS 203, ~256 bits quantiques |
+| **Keyslot hybride** | **X25519 + ML-KEM-768/1024** | **✓** | Sécurisé si l'un des deux tient |
+| Signature ML-DSA-65 | ML-DSA-65 (NIST FIPS 204) | ✓ | ~192 bits quantiques, auth expéditeur |
 
 Le seul composant classiquement vulnérable est X25519, et il est **toujours
-accompagné de ML-KEM-768** dans le keyslot hybride. Si un ordinateur
+accompagné de ML-KEM** dans le keyslot hybride. Si un ordinateur
 quantique suffisamment puissant venait à exister, il casserait X25519 mais
-pas ML-KEM-768, laissant le DEK (et donc les données) protégé.
+pas ML-KEM, laissant le DEK (et donc les données) protégé.

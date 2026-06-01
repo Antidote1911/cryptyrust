@@ -61,13 +61,19 @@ typedef struct { ArsBenchResult *results; size_t count; } ArsBenchArray;
 
 ### Recipients hybrides
 
-Chaque destinataire est représenté par **1 216 octets** : `x25519_pk[32] || mlkem_ek[1184]`.
+Chaque destinataire est représenté par **1 216 octets** : `x25519_pk[32] || mlkem_768_ek[1184]`.
+Ce format est utilisé pour les keyslots ML-KEM-768 et ML-KEM-1024 ; le champ `kem_level`
+de `ArsParams` sélectionne le niveau au chiffrement.
+
+> **Note :** Les fonctions FFI acceptent une clé privée de 32 octets et dérivent
+> la graine ML-KEM via BLAKE3 en interne (comportement legacy). Les nouvelles
+> applications doivent utiliser `arsenic_generate_keypair` et stocker les 32 octets.
 
 Générer la clé publique hybride depuis une clé privée :
 ```c
-uint8_t priv[32];  // clé privée 32 octets
+uint8_t priv[32];  // clé privée 32 octets (seed)
 uint8_t hybrid_pub[1216];
-arsenic_hybrid_pubkey(priv, hybrid_pub);
+arsenic_hybrid_pubkey(priv, hybrid_pub);  // x25519_pk[32] || mlkem_768_ek[1184]
 ```
 
 ### Chiffrement / Déchiffrement mémoire

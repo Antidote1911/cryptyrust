@@ -91,30 +91,45 @@ paramètres absurdes est rejeté immédiatement sans aucun coût.
 ┌──────────────────────────────────────────────────────────────┐
 │  WrappedDEK symétrique          48 octets  (offset 0x6D)     │
 ├──────────────────────────────────────────────────────────────┤
-│  hybrid_count  (u32 LE)          4 octets  (offset 0x9D)     │
+│  hybrid_768_count  (u32 LE)      4 octets  (offset 0x9D)     │
 ├──────────────────────────────────────────────────────────────┤
-│  Keyslot hybride #0           1 180 octets  ┐                │
-│  Keyslot hybride #1           1 180 octets  │  × N           │
-│  …                                          ┘                │
+│  Keyslot ML-KEM-768 #0        1 180 octets  ┐               │
+│  Keyslot ML-KEM-768 #1        1 180 octets  │  × N          │
+│  …                                          ┘               │
+├──────────────────────────────────────────────────────────────┤
+│  hybrid_1024_count (u32 LE)      4 octets                    │
+├──────────────────────────────────────────────────────────────┤
+│  Keyslot ML-KEM-1024 #0       1 660 octets  ┐               │
+│  Keyslot ML-KEM-1024 #1       1 660 octets  │  × M          │
+│  …                                          ┘               │
 ├──────────────────────────────────────────────────────────────┤
 │  ProtectedMetadata              variable   (TLV_len + 16)    │
+├──────────────────────────────────────────────────────────────┤
+│  sig_present                      1 octet  0x00 ou 0x01      │
+│  [clé de vérif. ML-DSA-65]     1 952 octets  ┐ présents     │
+│  [signature ML-DSA-65]          3 309 octets  ┘ si sig=0x01  │
 └──────────────────────────────────────────────────────────────┘
 ```
+
+L'expéditeur choisit **un seul** niveau KEM par fichier : soit tous les keyslots sont ML-KEM-768, soit tous sont ML-KEM-1024.
 
 ### 5.1 WrappedDEK symétrique (48 octets)
 
 ```
-WrappedDEK = AEAD_hdr( KEK[32], nonce_env(kek_nonce), [], DEK[32] )
+WrappedDEK = AEAD_hdr( KEK[32], nonce_env(kek_nonce),
+                        "arsenic-v1-wrapped-dek", DEK[32] )
            = ciphertext[32] || tag[16]
 ```
 
-### 5.2 Compteur (4 octets)
+### 5.2 Compteurs (4 octets chacun)
 
-`hybrid_count` (u32 LE) : nombre N de keyslots hybrides. Vaut 0 si aucun destinataire.
+`hybrid_768_count` (u32 LE) : nombre N de keyslots ML-KEM-768.  
+`hybrid_1024_count` (u32 LE) : nombre M de keyslots ML-KEM-1024.  
+Les deux valent 0 si aucun destinataire asymétrique.
 
-### 5.3 Keyslot hybride — 1 180 octets chacun
+### 5.3 Keyslot ML-KEM-768 — 1 180 octets chacun
 
-Chaque keyslot permet à un destinataire de déchiffrer le fichier **sans connaître le mot de passe**. Il utilise un KEM hybride post-quantique.
+Chaque keyslot permet à un destinataire de déchiffrer le fichier **sans connaître le mot de passe**.
 
 ```
 Offset  Taille  Champ                Description
@@ -122,56 +137,80 @@ Offset  Taille  Champ                Description
   0      32     ephemeral_x25519     Clé publique X25519 éphémère
  32    1088     mlkem_ciphertext     Ciphertext ML-KEM-768
 1120     12     kek_nonce            Nonce AEAD
-1132     48     wrapped_dek          AEAD(wrapping_key, kek_nonce, [], DEK)
+1132     48     wrapped_dek          AEAD(wrapping_key, kek_nonce, aad, DEK)
 ──────────────────────────────────────────────────────────────────────────────
                                      Total : 1 180 octets
 ```
 
-**Calcul de la clé de wrapping hybride :**
+**Calcul de la clé de wrapping hybride (ML-KEM-768) :**
 
 ```
 Chiffrement :
-  ephemeral_x25519_sk  ← 32 octets aléatoires
+  ephemeral_x25519_sk  ← CSPRNG OS [32]
   ephemeral_x25519_pk  ← X25519PublicKey(ephemeral_x25519_sk)
-  ss_x25519            ← X25519_ECDH(ephemeral_x25519_sk, recipient.x25519)
+  ss_x25519            ← X25519_ECDH(ephemeral_x25519_sk, recipient.x25519_pk)
 
-  m[32]                ← 32 octets aléatoires
-  (mlkem_ct, ss_mlkem) ← ML-KEM-768.Encaps(recipient.mlkem, m)
+  m[32]                ← CSPRNG OS [32]
+  (mlkem_ct, ss_mlkem) ← ML-KEM-768.Encaps(recipient.mlkem_768_ek, m)
 
   wrapping_key ← BLAKE3_derive_key("Arsenic Hybrid KEM",
                    ephemeral_x25519_pk[32] || mlkem_ct[1088]
                    || ss_x25519[32] || ss_mlkem[32])
 
-  wrapped_dek  ← AEAD_hdr(wrapping_key, kek_nonce, [], DEK)
+  wrapped_dek  ← AEAD_hdr(wrapping_key, kek_nonce,
+                            "arsenic-v1-hybrid-wrapped-dek", DEK)
 
 Déchiffrement :
-  ss_x25519  ← X25519_ECDH(recipient_x25519_sk, ephemeral_x25519_pk)
-  ss_mlkem   ← ML-KEM-768.Decaps(recipient_x25519_sk_seed, mlkem_ct)
+  ss_x25519    ← X25519_ECDH(recipient_x25519_sk, ephemeral_x25519_pk)
+  ss_mlkem     ← ML-KEM-768.Decaps(recipient_mlkem_768_seed, mlkem_ct)
   wrapping_key ← même BLAKE3
-  DEK        ← AEAD_hdr_decrypt(wrapping_key, kek_nonce, wrapped_dek)
+  DEK          ← AEAD_hdr_decrypt(wrapping_key, kek_nonce, wrapped_dek)
 ```
 
-**Clé ML-KEM dérivée de la clé X25519 :**
+**Seeds indépendants (depuis v1.5.0) :** les seeds X25519 et ML-KEM du destinataire sont **indépendants** — générés séparément depuis le CSPRNG de l'OS. Le fichier `.key` stocke le seed X25519 (32 octets) et un seed ML-KEM séparé de 64 octets (`d[32]||z[32]`). Les anciens fichiers sans `# mlkem-seed:` dérivent le seed ML-KEM via BLAKE3 (compat).
 
-La clé secrète ML-KEM-768 est dérivée déterministiquement de la clé privée X25519 :
+### 5.4 Keyslot ML-KEM-1024 — 1 660 octets chacun
+
+Même structure que §5.3 mais avec ML-KEM-1024 (niveau NIST 5, ~256 bits quantiques) et un contexte BLAKE3 distinct.
+
 ```
-seed[64] = BLAKE3_derive_key("Arsenic ML-KEM d", x25519_sk)[32]
-        || BLAKE3_derive_key("Arsenic ML-KEM z", x25519_sk)[32]
-
-(dk_mlkem, ek_mlkem) ← ML-KEM-768.KeyGen_internal(seed)
+Offset  Taille  Champ                Description
+──────────────────────────────────────────────────────────────────────────────
+  0      32     ephemeral_x25519     Clé publique X25519 éphémère
+ 32    1568     mlkem_ciphertext     Ciphertext ML-KEM-1024
+1600     12     kek_nonce            Nonce AEAD
+1612     48     wrapped_dek          AEAD(wrapping_key, kek_nonce, aad, DEK)
+──────────────────────────────────────────────────────────────────────────────
+                                     Total : 1 660 octets
 ```
 
-Un seul fichier `.key` de 32 octets suffit ; les deux clés sont recalculées à l'usage.
+Contexte BLAKE3 : `"Arsenic Hybrid KEM 1024"` (au lieu de `"Arsenic Hybrid KEM"`).
 
-### 5.4 ProtectedMetadata (taille variable)
+### 5.5 ProtectedMetadata (taille variable)
 
 ```
 MetaKey[32]    ← BLAKE3_derive_key("Arsenic V1 Metadata Key", DEK)
 MetaNonce[12]  ← BLAKE3_derive_key("Arsenic V1 Meta Nonce",   DEK)[0..12]
 
-ProtectedMetadata = AEAD_hdr( MetaKey, nonce_env(MetaNonce), [], meta_tlv )
+ProtectedMetadata = AEAD_hdr( MetaKey, nonce_env(MetaNonce),
+                               "arsenic-v1-protected-meta", meta_tlv )
                   = ciphertext[len(meta_tlv)] || tag[16]
 ```
+
+### 5.6 Région de signature (taille variable)
+
+```
+sig_present[1]       0x00 = aucune signature
+                     0x01 = signature ML-DSA-65 présente
+
+[si sig_present == 0x01] :
+  verifying_key[1952]  Clé de vérification ML-DSA-65
+  signature[3309]      Signature ML-DSA-65
+
+Message signé = pre_mac[77]  (couvre paramètres KDF, IDs chiffrements, nonces)
+```
+
+La vérification est automatique et obligatoire au déchiffrement. Les clés de signature sont des fichiers `.sigkey` séparés (seed ML-DSA de 32 octets).
 
 **Champs TLV obligatoires (50 octets) :**
 
@@ -199,19 +238,24 @@ Tag `0x04` (CompressedSize) supprimé — toujours égal à OriginalSize (pas de
 ```
 header_total_size = PUB_HEADER_LEN(109)
                   + WRAPPED_DEK_LEN(48)
-                  + ASYM_COUNT_LEN(4)
-                  + N × HYBRID_KEYSLOT_LEN(1180)
+                  + ASYM_768_COUNT(4)  + N × KEYSLOT_768_LEN(1180)
+                  + ASYM_1024_COUNT(4) + M × KEYSLOT_1024_LEN(1660)
                   + len(meta_tlv) + GCM_TAG(16)
+                  + SIG_PRESENT(1)
+                  [+ VK_LEN(1952) + SIG_LEN(3309)  si signé]
 ```
 
-| Configuration             | Taille de l'en-tête         |
-|---------------------------|-----------------------------|
-| Minimum (0 keyslot)       | **227 octets**              |
-| 1 destinataire hybride    | 1 407 octets                |
-| N destinataires hybrides  | 227 + N × 1 180 octets      |
-| Maximum (256 keyslots)    | ~303 KiB                    |
+| Configuration                               | Taille             |
+|---------------------------------------------|--------------------|
+| Minimum (0 keyslot, sans signature)         | **232 octets**     |
+| 1 destinataire ML-KEM-768, sans signature   | 1 412 octets       |
+| N destinataires ML-KEM-768, sans signature  | 232 + N × 1 180    |
+| 1 destinataire ML-KEM-1024, sans signature  | 1 892 octets       |
+| M destinataires ML-KEM-1024, sans signature | 232 + M × 1 660    |
+| + signature ML-DSA-65                       | + 5 261 octets     |
+| Maximum (256 keyslots)                      | ~303 Kio           |
 
-Limite : `MAX_ASYM_KEYSLOTS = 256`, `MAX_HEADER_TOTAL_SIZE = 64 MiB`.
+Limite : `MAX_ASYM_KEYSLOTS = 256`, `MAX_HEADER_TOTAL_SIZE = 64 Mio`.
 
 ---
 
@@ -304,54 +348,64 @@ Tous produisent un tag de **16 octets**. `hdr_cipher_id` et `pld_cipher_id` sont
 mot_de_passe
   │
   └── Argon2id(t_cost, m_cost, p_cost, salt) → KEK[32]
-        ├── BLAKE3_keyed_hash(KEK, pré_mac[77])                 → HeaderMAC[32]
+        ├── BLAKE3_keyed_hash(KEK, pré_mac[77])    → HeaderMAC[32]
         └── AEAD_hdr(KEK, nonce_env(kek_nonce),
-                     aad="arsenic-v1-wrapped-dek", DEK)         → WrappedDEK[48]
+                     "arsenic-v1-wrapped-dek", DEK) → WrappedDEK[48]
 
-aléatoire → DEK[32]
-  ├── BLAKE3_derive_key("Arsenic V1 Metadata Key", DEK)           → MetaKey[32]
-  ├── BLAKE3_derive_key("Arsenic V1 Meta Nonce",   DEK)[0..12]    → MetaNonce[12]
+CSPRNG OS → DEK[32]
+  ├── BLAKE3_derive_key("Arsenic V1 Metadata Key", DEK) → MetaKey[32]
+  ├── BLAKE3_derive_key("Arsenic V1 Meta Nonce",   DEK)[0..12] → MetaNonce[12]
   ├── Pour bloc i :
-  │     BLAKE3_keyed_hash(DEK, i.to_le_bytes())                   → block_key_i[32]
+  │     BLAKE3_keyed_hash(DEK, i.to_le_bytes())     → block_key_i[32]
   │     BLAKE3_derive_key("Arsenic V1 Block Nonce",
-  │                        file_base_nonce||i.to_le_bytes())[0..24] → block_nonce_i[24]
-  └── Pour keyslot hybride j :
-        aléatoire → ephemeral_x25519_sk[32] → ephemeral_x25519_pk[32]
-        X25519_ECDH(ephemeral_x25519_sk, recipient.x25519)         → ss_x25519[32]
-        aléatoire → m[32]
-        ML-KEM-768.Encaps(recipient.mlkem, m)                      → (mlkem_ct[1088], ss_mlkem[32])
-        BLAKE3_derive_key("Arsenic Hybrid KEM",
-          eph_x25519_pk||mlkem_ct||ss_x25519||ss_mlkem)            → wrapping_key[32]
-        AEAD_hdr(wrapping_key, kek_nonce_j, [], DEK)               → wrapped_dek_j[48]
+  │       file_base_nonce||i.to_le_bytes())[0..24]  → block_nonce_i[24]
+  ├── Pour keyslot ML-KEM-768 j :
+  │     CSPRNG → eph_x25519_sk[32] → eph_x25519_pk[32]
+  │     X25519_ECDH(eph_x25519_sk, recipient.x25519_pk) → ss_x25519[32]
+  │     CSPRNG → m[32]
+  │     ML-KEM-768.Encaps(recipient.mlkem_768_ek, m) → (mlkem_ct[1088], ss_mlkem[32])
+  │     BLAKE3_derive_key("Arsenic Hybrid KEM",
+  │       eph_x25519_pk||mlkem_ct||ss_x25519||ss_mlkem) → wrapping_key_j[32]
+  │     AEAD_hdr(wrapping_key_j, kek_nonce_j,
+  │              "arsenic-v1-hybrid-wrapped-dek", DEK) → wrapped_dek_j[48]
+  └── Pour keyslot ML-KEM-1024 k :
+        (identique mais ML-KEM-1024, mlkem_ct[1568],
+         contexte = "Arsenic Hybrid KEM 1024")
+
+[optionnel — si clé de signature fournie] :
+  ML-DSA-65.Sign(signing_key_seed[32], pré_mac[77]) → signature[3309]
+  + verifying_key[1952] annexée à l'en-tête
 ```
 
 ---
 
-## 11. Diagramme complet — fichier minimal (0 keyslot)
+## 11. Diagramme complet — fichier minimal (0 keyslot, sans signature)
 
 ```
 Offset     Taille  Contenu
 ─────────────────────────────────────────────────────────────────────────────
-0x000000     4     magic            : 41 52 53 4E
-0x000004     2     version          : 00 01
-0x000006     1     kdf_id           : 01
-0x000007     1     hdr_cipher_id    : ex. 02
-0x000008     1     pld_cipher_id    : ex. 03
-0x000009     4     header_total_size: ED 00 00 00  (237, u32 LE)
-0x00000D    16     salt             : [16 oct. aléatoires]
-0x00001D     4     t_cost           : 04 00 00 00
-0x000021     4     m_cost           : 00 00 04 00  (262 144 Kio)
-0x000025     4     p_cost           : 04 00 00 00
-0x000029    24     file_base_nonce  : [24 oct. aléatoires]
-0x000041    12     kek_nonce        : [12 oct. aléatoires]
+0x000000     4     magic              : 41 52 53 4E
+0x000004     2     version            : 00 01
+0x000006     1     kdf_id             : 01
+0x000007     1     hdr_cipher_id      : ex. 02
+0x000008     1     pld_cipher_id      : ex. 03
+0x000009     4     header_total_size  : E8 00 00 00  (232, u32 LE)
+0x00000D    16     salt               : [16 oct. aléatoires]
+0x00001D     4     t_cost             : 04 00 00 00
+0x000021     4     m_cost             : 00 00 04 00  (262 144 Kio)
+0x000025     4     p_cost             : 04 00 00 00
+0x000029    24     file_base_nonce    : [24 oct. aléatoires]
+0x000041    12     kek_nonce          : [12 oct. aléatoires]
 ──────── fin section pré-MAC : 77 octets ────────────────────────────────────
-0x00004D    32     HeaderMAC        : BLAKE3_keyed_hash(KEK, pré_mac[77])
+0x00004D    32     HeaderMAC          : BLAKE3_keyed_hash(KEK, pré_mac[77])
 ──────── fin en-tête public : 109 octets ────────────────────────────────────
-0x00006D    48     WrappedDEK       : AEAD_hdr(KEK, aad="arsenic-v1-wrapped-dek", DEK)
-0x00009D     4     hybrid_count     : 00 00 00 00
-0x0000A1    66     ProtectedMetadata: AEAD_hdr(MetaKey, aad="arsenic-v1-protected-meta", TLV[50]) + tag[16]
-──────── fin en-tête : 227 octets ───────────────────────────────────────────
-0x0000E3     ∞     Payload (blocs consécutifs)
+0x00006D    48     WrappedDEK         : AEAD_hdr(KEK, "arsenic-v1-wrapped-dek", DEK)
+0x00009D     4     hybrid_768_count   : 00 00 00 00
+0x0000A1     4     hybrid_1024_count  : 00 00 00 00
+0x0000A5    66     ProtectedMetadata  : AEAD_hdr(MetaKey, "arsenic-v1-protected-meta", TLV[50])
+0x0000E7     1     sig_present        : 00  (aucune signature)
+──────── fin en-tête : 232 octets ───────────────────────────────────────────
+0x0000E8     ∞     Payload (blocs consécutifs)
 ─────────────────────────────────────────────────────────────────────────────
 ```
 
@@ -384,34 +438,49 @@ l'en-tête original est restauré depuis la sauvegarde à la prochaine ouverture
 
 ## 13. Identités des utilisateurs
 
-| Composant               | Taille      | Stockage      |
-|-------------------------|-------------|---------------|
-| Clé privée X25519       | 32 octets   | `.key` (seed) |
-| Clé publique X25519     | 32 octets   | dérivée       |
-| Graine ML-KEM-768       | 64 octets   | dérivée de X25519 |
-| Clé d'encapsulation EK  | 1 184 octets| dérivée       |
-| Clé secrète DK          | 2 400 octets| calculée en RAM uniquement |
+### Keypair de chiffrement (fichier `.key`)
 
-Un seul fichier `.key` (32 octets encodés en `ARSENIC-SECRET-KEY-1{bech32}`) suffit pour l'ensemble du keypair hybride.
+| Composant                       | Taille       | Stockage                                     |
+|---------------------------------|--------------|----------------------------------------------|
+| Clé privée X25519               | 32 octets    | ligne `ARSENIC-SECRET-KEY-1{bech32}`         |
+| Graine ML-KEM (`d\|\|z`)       | 64 octets    | ligne `# mlkem-seed: ARSENIC-MLKEM-SEED-1{…}` |
+| Clé publique X25519             | 32 octets    | ligne `# public key: arsenic1{…}`            |
+| Clé d'encapsulation ML-KEM-768  | 1 184 octets | ligne `# mlkem-public-key: arsenic1m{…}`     |
+| Clé de décapsulation ML-KEM-768 | 2 400 octets | Calculée en RAM, jamais stockée              |
+| Clé d'encapsulation ML-KEM-1024 | 1 568 octets | Dérivée du même seed ML-KEM 64 octets        |
+| Clé de décapsulation ML-KEM-1024| 3 168 octets | Calculée en RAM, jamais stockée              |
+
+Les seeds X25519 et ML-KEM sont **indépendants** depuis v1.5.0 (chacun généré séparément par le CSPRNG de l'OS).
+
+### Keypair de signature (fichier `.sigkey`)
+
+| Composant                     | Taille       | Stockage                                         |
+|-------------------------------|--------------|--------------------------------------------------|
+| Seed ML-DSA-65                | 32 octets    | ligne `ARSENIC-SIGN-SEED-1{bech32}`              |
+| Clé de vérification ML-DSA-65 | 1 952 octets | ligne `# verifying-key: ARSENIC-SIGN-PUB-1{…}`  |
+| Clé de signature ML-DSA-65    | 4 032 octets | Reconstruite depuis le seed, jamais stockée      |
 
 ---
 
 ## 14. Propriétés de sécurité
 
-| Propriété                         | Mécanisme                                                       |
-|-----------------------------------|-----------------------------------------------------------------|
-| Confidentialité — DEK             | AEAD sous KEK (Argon2id) ; DEK aléatoire 32 oct.               |
-| Confidentialité — métadonnées     | AEAD sous MetaKey = f(DEK)                                      |
-| Confidentialité — payload         | AEAD sous clés par-bloc dérivées de DEK + index                 |
-| Intégrité par bloc                | Tag AEAD 16 octets par bloc                                     |
-| Intégrité fichier entier          | Racine Merkle BLAKE3 vérifiée avant toute écriture plaintext    |
-| Ordre des blocs                   | Index lié comme AAD dans chaque AEAD de bloc                    |
-| Intégrité de l'en-tête            | BLAKE3_keyed_hash(KEK, 77 octets publics)                       |
-| Résistance DoS (paramètres KDF)   | Paramètres forgés rejetés par bornes avant tout Argon2id        |
-| Résistance quantique — payload    | Symmetric 256 bits : Grover exige 2¹²⁸ — déjà post-quantique   |
-| Résistance quantique — keyslots   | ML-KEM-768 (NIST niveau 3) résiste à Shor                       |
-| Défense en profondeur             | Hybride X25519+ML-KEM : une faille dans l'un ne compromet pas l'autre |
-| Harvest-now-decrypt-later         | ML-KEM protège les fichiers chiffrés aujourd'hui                |
-| Anonymat des destinataires        | Les keyslots ne révèlent pas la clé publique du destinataire    |
-| Séparation des domaines Merkle    | BLAKE3_derive_key avec contextes distincts                      |
-| Effacement mémoire                | `Secret<T>` appelle `zeroize` à la destruction                  |
+| Propriété                           | Mécanisme                                                         |
+|-------------------------------------|-------------------------------------------------------------------|
+| Confidentialité — DEK               | AEAD sous KEK (Argon2id) ; DEK aléatoire 32 oct.                 |
+| Confidentialité — métadonnées       | AEAD sous MetaKey = f(DEK)                                        |
+| Confidentialité — payload           | AEAD sous clés par-bloc dérivées de DEK + index                   |
+| Intégrité par bloc                  | Tag AEAD 16 octets par bloc                                       |
+| Intégrité fichier entier            | Racine Merkle BLAKE3 vérifiée avant toute écriture plaintext      |
+| Ordre des blocs                     | Index lié comme AAD dans chaque AEAD de bloc                      |
+| Intégrité de l'en-tête              | BLAKE3_keyed_hash(KEK, 77 octets publics)                         |
+| Résistance DoS (paramètres KDF)     | Paramètres forgés rejetés par bornes avant tout Argon2id          |
+| Résistance quantique — payload      | Symétrique 256 bits : Grover exige 2¹²⁸ — déjà post-quantique    |
+| Résistance quantique — keyslots L3  | ML-KEM-768 (NIST niveau 3, ~180 bits quantiques) résiste à Shor  |
+| Résistance quantique — keyslots L5  | ML-KEM-1024 (NIST niveau 5, ~256 bits quantiques) résiste à Shor |
+| Défense en profondeur               | Hybride X25519+ML-KEM : une faille dans l'un ne compromet pas l'autre |
+| Harvest-now-decrypt-later           | ML-KEM protège les fichiers chiffrés aujourd'hui                  |
+| Authentification de l'expéditeur    | Signature ML-DSA-65 optionnelle sur pré_mac (NIST FIPS 204)       |
+| Entropie indépendante               | Seeds X25519 et ML-KEM générés séparément depuis le CSPRNG OS     |
+| Anonymat des destinataires          | Les keyslots ne révèlent pas la clé publique du destinataire      |
+| Séparation des domaines Merkle      | BLAKE3_derive_key avec contextes distincts                        |
+| Effacement mémoire                  | `Secret<T>` appelle `zeroize` à la destruction                    |

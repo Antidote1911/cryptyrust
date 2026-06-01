@@ -61,13 +61,20 @@ typedef struct { ArsBenchResult *results; size_t count; } ArsBenchArray;
 
 ### Hybrid recipients
 
-Each recipient is represented by **1 216 bytes**: `x25519_pk[32] || mlkem_ek[1184]`.
+Each recipient is represented by **1 216 bytes**: `x25519_pk[32] || mlkem_768_ek[1184]`.
+This format is used for both ML-KEM-768 and ML-KEM-1024 keyslots; the `ArsParams`
+`kem_level` field selects which level is used during encryption.
+
+> **Note:** The FFI functions accept a 32-byte private key and derive the ML-KEM
+> seed via BLAKE3 internally (legacy behavior). Applications that generate new
+> keys should use `arsenic_generate_keypair` and store the 32-byte result; the
+> ML-KEM seed is derived automatically on each use.
 
 Derive the hybrid public key from a private key:
 ```c
-uint8_t priv[32];  // 32-byte private key
+uint8_t priv[32];  // 32-byte private key (seed)
 uint8_t hybrid_pub[1216];
-arsenic_hybrid_pubkey(priv, hybrid_pub);
+arsenic_hybrid_pubkey(priv, hybrid_pub);  // x25519_pk[32] || mlkem_768_ek[1184]
 ```
 
 ### In-memory encrypt / decrypt
