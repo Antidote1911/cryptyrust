@@ -11,6 +11,7 @@ use crate::file_utils::{cipher_from_key, cipher_to_key, detect_mode, Mode};
 use crate::job::{JobState, PasswordPopup};
 use crate::keystore::{
     delete_key, load_contacts, load_keystore, save_contacts, save_key, ContactEntry, KeyEntry,
+    save_signing_key, SigningKeyEntry,
 };
 use crate::ui::UI;
 
@@ -445,6 +446,44 @@ impl CryptyApp {
             self.keys.remove(index);
         }
         self.km_confirm_delete = None;
+    }
+
+    /// Generate a new ML-DSA-65 signing key and save it to the signing-keys keystore.
+    pub fn km_generate_signing_key(&mut self) {
+        let name = self.km_new_name.trim().to_string();
+        if name.is_empty() {
+            self.km_error = Some("Name cannot be empty.".into());
+            return;
+        }
+        if self.signing_keys.iter().any(|k| k.name == name) {
+            self.km_error = Some(format!("A signing key named \"{name}\" already exists."));
+            return;
+        }
+        let mut entry = SigningKeyEntry::generate(name);
+        if let Err(e) = save_signing_key(&mut entry) {
+            self.km_error = Some(format!("Could not save signing key: {e}"));
+            return;
+        }
+        self.signing_keys.push(entry);
+        self.km_new_name.clear();
+        self.km_error = None;
+    }
+
+    /// Delete the signing key at `index` and remove its `.sigkey` file.
+    pub fn km_delete_signing_key(&mut self, index: usize) {
+        if index < self.signing_keys.len() {
+            let entry = &self.signing_keys[index];
+            if let Some(ref path) = entry.file_path {
+                let _ = std::fs::remove_file(path);
+            }
+            // Adjust active signing key index.
+            if self.signing_key_index == Some(index) {
+                self.signing_key_index = None;
+            } else if let Some(i) = self.signing_key_index {
+                if i > index { self.signing_key_index = Some(i - 1); }
+            }
+            self.signing_keys.remove(index);
+        }
     }
 
     /// Export the public parts of keypair `index` as a `.pubkey` file via a save dialog.
