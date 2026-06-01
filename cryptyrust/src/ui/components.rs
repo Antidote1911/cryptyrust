@@ -11,7 +11,7 @@ use crate::file_utils::{
     Mode,
 };
 use crate::job::PasswordPopup;
-use arsenic::{encode_privkey, encode_pubkey, SignatureStatus};
+use arsenic::{encode_privkey, encode_pubkey};
 use crate::keystore::{contacts_path, keys_dir, pubkey_short};
 use arsenic::{best_combination, ArsenicStrength, CipherId, KemLevel};
 
