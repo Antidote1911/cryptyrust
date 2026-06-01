@@ -10,7 +10,7 @@ Ce document liste et explique chaque algorithme cryptographique utilisé dans la
 ## Table des matières
 
 1. [Dérivation de clé depuis un mot de passe — Argon2id](#1-argon2id)
-2. [MAC d'en-tête — HMAC-SHA256](#2-hmac-sha256)
+2. [MAC d'en-tête — BLAKE3_keyed_hash](#2-blake3_keyed_hash-pour-le-headermac)
 3. [Fonctions de hachage et dérivation interne — BLAKE3](#3-blake3)
 4. [Chiffrements authentifiés (AEAD)](#4-chiffrements-aead)
    - 4a. Deoxys-II-256
@@ -46,27 +46,11 @@ Argon2id combine Argon2d (résistant aux attaques par canal latéral GPU) et
 Argon2i (résistant aux compromis temps-mémoire). La variante `id` est la
 meilleure par défaut.
 
-**Deux usages distincts dans Arsenic :**
+**Usage unique dans Arsenic — dérivation du KEK :**
 
-### 1a. Pre-authentication (paramètres fixes)
-
-Utilisé pour générer le `PreKey` servant à vérifier le `HeaderMAC` **avant**
-de lancer la dérivation principale.
-
-```
-t_cost = 1         (1 itération)
-m_cost = 8 192 KB  (8 Mio)
-p_cost = 1         (1 thread)
-output = 32 octets
-```
-
-Coût typique : **~2 ms**. Suffisant pour rejeter un mauvais mot de passe
-rapidement (~15 000 tentatives/s sur GPU, contre >10⁹/s pour un HMAC-SHA256 nu),
-sans exposer de vecteur oracle à coût nul.
-
-### 1b. Dérivation principale du KEK (paramètres configurables)
-
-Génère le KEK (Key Encryption Key) qui protège le DEK.
+Génère le KEK (Key Encryption Key) qui protège le DEK et chiffre le HeaderMAC.
+Chaque tentative de mot de passe paie le coût KDF complet ; il n'existe aucun
+oracle de pré-authentification moins coûteux.
 
 | Preset | `t_cost` | `m_cost` | `p_cost` | RAM | Temps typique |
 |---|---|---|---|---|---|
@@ -84,28 +68,25 @@ de 256 bits à 128 bits effectifs — Argon2id avec une sortie de 32 octets
 
 ---
 
-## 2. HMAC-SHA256
+## 2. BLAKE3_keyed_hash pour le HeaderMAC
 
 **Rôle :** authentifier l'en-tête public du fichier (`HeaderMAC`).
 
-**Standard :** RFC 2104, NIST FIPS 198-1.
-
-**Pourquoi SHA-256 et pas SHA-3 / BLAKE3 ?**
-SHA-256 est omniprésent, accéléré matériellement, et son utilisation dans
-HMAC est bien analysée. BLAKE3 aurait pu être utilisé, mais SHA-256 offre
-une meilleure interopérabilité et une compatibilité plus large avec les
-outils de vérification externes.
+BLAKE3 est déjà utilisé pour toutes les dérivations internes (clés de bloc, nonces, arbre de Merkle).
+Le HeaderMAC l'adopte par cohérence, ce qui supprime les crates `sha2` et `hmac` en totalité.
 
 **Construction :**
 
 ```
 KEK = Argon2id(password, salt, t_cost, m_cost, p_cost) → 32 octets
 
-HeaderMAC = HMAC-SHA256(
-    key  = KEK[32],
-    msg  = section_pré_mac[77 octets]   ← tout l'en-tête public sauf le MAC lui-même
+HeaderMAC = BLAKE3_keyed_hash(
+    clé    = KEK[32],
+    données = pré_mac[77 octets]   ← tout l'en-tête public sauf le MAC lui-même
 )
 ```
+
+La comparaison `blake3::Hash::eq` est documentée comme à temps constant.
 
 **Ce que le MAC protège :**
 - Magic bytes et version du format
@@ -118,7 +99,7 @@ HeaderMAC = HMAC-SHA256(
 les paramètres Argon2id configurés (Interactive : 256 Mio / Sensitive : 1 Gio).
 Un attaquant hors-ligne doit payer le coût KDF complet par tentative de mot de
 passe — il n'existe aucun oracle plus rapide. Un mauvais mot de passe produit
-un KEK incorrect qui échoue au contrôle HMAC avant toute tentative de
+un KEK incorrect dont le MAC ne correspond pas, avant toute tentative de
 déchiffrement AEAD.
 
 **Protection DoS contre les paramètres forgés :** avant de lancer Argon2id,
@@ -127,8 +108,8 @@ sûres (`t_cost ≤ 64`, `m_cost ≤ 4 Gio`, `p_cost ≤ 16`). Un fichier falsif
 avec des paramètres absurdes (ex. t=1000, m=10 Gio) est rejeté immédiatement
 sans invoquer Argon2id.
 
-**Résistance post-quantique :** HMAC-SHA256 offre 128 bits de sécurité
-post-quantique (Grover sur SHA-256 → 2¹²⁸ opérations), ce qui est suffisant.
+**Résistance post-quantique :** BLAKE3 est symétrique avec une sortie de 256 bits ;
+Grover réduit la sécurité à 128 bits effectifs — suffisant.
 
 ---
 
@@ -555,7 +536,7 @@ Mot de passe ──► Argon2id ──► KEK[32] ──► AEAD ──► Wrapp
 │   Vérification complète avant toute écriture plaintext   │
 └──────────────────────────────────────────────────────────┘
 
-En-tête protégé par : HMAC-SHA256(Argon2id(password), en-tête_public)
+En-tête protégé par : BLAKE3_keyed_hash(KEK, en-tête_public[77 octets])
 ```
 
 ### Résumé de la résistance post-quantique
@@ -564,7 +545,7 @@ En-tête protégé par : HMAC-SHA256(Argon2id(password), en-tête_public)
 |---|---|---|---|
 | Chiffrement payload | XChaCha20 / Deoxys-II / AES-GCM-SIV | ✓ | Symétrique 256 bits, Grover → 128 bits |
 | KDF mot de passe | Argon2id | ✓ | Symétrique, Grover → 128 bits |
-| Header MAC | HMAC-SHA256 | ✓ | 128 bits post-quantique |
+| Header MAC | BLAKE3_keyed_hash | ✓ | Symétrique, Grover → 128 bits |
 | Dérivation interne | BLAKE3 | ✓ | Symétrique |
 | Keyslot X25519 | X25519 | ✗ | Shor casse ECDH |
 | Keyslot ML-KEM-768 | ML-KEM-768 | ✓ | FIPS 203, résiste à Shor |

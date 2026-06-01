@@ -173,7 +173,7 @@ ProtectedMetadata = AEAD_hdr( MetaKey, nonce_env(MetaNonce), [], meta_tlv )
                   = ciphertext[len(meta_tlv)] || tag[16]
 ```
 
-**Champs TLV obligatoires (60 octets) :**
+**Champs TLV obligatoires (50 octets) :**
 
 | Tag    | Longueur | Valeur                                 |
 |--------|----------|----------------------------------------|

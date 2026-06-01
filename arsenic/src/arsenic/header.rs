@@ -32,7 +32,7 @@ pub const MAX_P_COST: u32 = 16;
 //   0x29–0x40  24   file_base_nonce
 //   0x41–0x4C  12   kek_nonce (for primary symmetric keyslot)
 //
-// HeaderMAC: 32 bytes  (HMAC-SHA256 of pre-MAC region)
+// HeaderMAC: 32 bytes  (BLAKE3_keyed_hash(KEK, pre-MAC region))
 // PUB_HEADER_LEN = 77 + 32 = 109
 
 pub const PRE_MAC_LEN: usize = 0x4D; // 77

@@ -15,7 +15,7 @@ Used by the [`cryptyrust`](../cryptyrust) binary (GUI + CLI + key management) an
   - `Deoxys-II-256` — tweakable block cipher AEAD *(default header cipher)*
   - `XChaCha20-Poly1305` — 192-bit nonce, software-friendly *(default payload cipher)*
   - `AES-256-GCM-SIV` — nonce-misuse resistant
-- **Argon2id** key derivation with two presets (`Interactive` 256 MiB / `Sensitive` 1 GiB) plus a fast pre-auth pass (~2 ms) to reject wrong passwords before the full KDF
+- **Argon2id** key derivation with two presets (`Interactive` 256 MiB / `Sensitive` 1 GiB). HeaderMAC keyed on the full KEK — every password attempt costs the full KDF, no faster oracle
 - **LUKS-style keyslot** — password changes rewrite only the 48-byte DEK wrapper; the payload is never re-encrypted
 - **BLAKE3 Merkle tree** — domain-separated integrity over all encrypted blocks; full-file verification before any plaintext is written
 - **Streaming block processing** — O(block_size + N_blocks × 32) memory regardless of file size; files of any size processed correctly
@@ -214,7 +214,7 @@ An AEAD-on-the-fly (single-pass) alternative would authenticate each block
 individually (AEAD tag + block-index AAD prevents reordering), but it cannot
 prevent a truncation attack: an adversary who silently drops the last N
 complete blocks causes N × block_size bytes of plaintext to be emitted before
-the decryptor notices the shortfall against `CompressedSize`. The two-pass
+the decryptor notices the shortfall against `OriginalSize`. The two-pass
 Merkle approach closes this gap at near-zero memory cost
 (N_blocks × 32 bytes ≈ 20 KiB for a 10 GiB file) and low I/O cost (Pass 1
 is pure BLAKE3 hashing; the second read is served from OS cache on local
@@ -290,13 +290,13 @@ approach. The risk is acceptable given a trustworthy OS RNG.
 ```
 ┌──────────────────────────────────────────────┐  ← offset 0x00
 │  Section pré-MAC   77 bytes  (pre-MAC)        │  plaintext, integrity-protected
-│  HeaderMAC         32 bytes                   │  HMAC-SHA256(KEK, pre-MAC)
+│  HeaderMAC         32 bytes                   │  BLAKE3_keyed_hash(KEK, pre-MAC)
 │  WrappedDEK        48 bytes                   │  AEAD-encrypted DEK (symmetric keyslot)
 │  hybrid_count       4 bytes                   │  number of hybrid keyslots
 │  Keyslot_0       1180 bytes  ┐               │  X25519+ML-KEM-768 wrapped DEK
 │  Keyslot_1       1180 bytes  │ × N           │
-│  ProtectedMeta    ≥76 bytes  ┘               │  AEAD-encrypted TLV (Merkle root, sizes…)
-└──────────────────────────────────────────────┘  ← offset = header_total_size (≥237 bytes)
+│  ProtectedMeta    ≥66 bytes  ┘               │  AEAD-encrypted TLV (Merkle root, size…)
+└──────────────────────────────────────────────┘  ← offset = header_total_size (≥227 bytes)
 ┌──────────────────────────────────────────────┐
 │  Block 0: ciphertext + 16-byte AEAD tag       │
 │  Block 1: ciphertext + 16-byte AEAD tag       │  blocks processed sequentially,

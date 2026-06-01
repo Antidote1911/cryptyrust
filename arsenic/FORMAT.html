@@ -122,7 +122,7 @@
     <div class="pill">Magic <span>41 52 53 4E</span></div>
     <div class="pill">Version <span>00 01</span></div>
     <div class="pill">Extension <span>.arsn</span></div>
-    <div class="pill">Min. header <span>237 bytes</span></div>
+    <div class="pill">Min. header <span>227 bytes</span></div>
     <div class="pill">Hybrid keyslot <span>1 180 bytes</span></div>
     <div class="pill">Post-quantum <span class="badge-pq">ML-KEM-768</span></div>
   </div>
@@ -142,7 +142,7 @@
 <pre><span class="d">┌─────────────────────────────────────────────────┐</span>  offset <span class="h">0x00</span>
 <span class="d">│</span>  <span class="k">Pre-MAC section</span>    <span class="n">77 bytes</span>                  <span class="d">│</span>
 <span class="d">├─────────────────────────────────────────────────┤</span>  offset <span class="h">0x4D</span>
-<span class="d">│</span>  <span class="k">HeaderMAC</span>          <span class="n">32 bytes</span>                  <span class="d">│</span>  HMAC-SHA256
+<span class="d">│</span>  <span class="k">HeaderMAC</span>          <span class="n">32 bytes</span>                  <span class="d">│</span>  BLAKE3_keyed_hash(KEK, pre-MAC)
 <span class="d">├─────────────────────────────────────────────────┤</span>  offset <span class="h">0x6D</span>  <span class="d">(PUB_HEADER_LEN = 109)</span>
 <span class="d">│</span>  <span class="k">Envelope region</span>    <span class="n">variable</span>                  <span class="d">│</span>
 <span class="d">└─────────────────────────────────────────────────┘</span>  offset <span class="s">header_total_size</span></pre>
@@ -170,8 +170,10 @@
 
 <!-- ── 4 ── -->
 <h2 id="headermac"><span class="num">4</span> HeaderMAC (0x4D – 0x6C, 32 bytes)</h2>
-<pre><span class="c">PreKey</span>    = <span class="k">Argon2id</span>(<span class="r">password</span>, <span class="s">salt</span>, t=<span class="n">1</span>, m=<span class="n">8 192 KiB</span>, p=<span class="n">1</span>)  → <span class="n">32 bytes</span>
-<span class="c">HeaderMAC</span> = <span class="k">HMAC-SHA256</span>( <span class="c">PreKey</span>[<span class="n">32</span>], <span class="s">pre_mac</span>[<span class="n">77</span>] )           → <span class="n">32 bytes</span></pre>
+<pre><span class="c">KEK</span>       = <span class="k">Argon2id</span>(<span class="r">password</span>, <span class="s">salt</span>, <span class="s">t_cost</span>, <span class="s">m_cost</span>, <span class="s">p_cost</span>)  → <span class="n">32 bytes</span>
+<span class="c">HeaderMAC</span> = <span class="k">BLAKE3_keyed_hash</span>( <span class="c">KEK</span>[<span class="n">32</span>], <span class="s">pre_mac</span>[<span class="n">77</span>] )         → <span class="n">32 bytes</span></pre>
+<p>BLAKE3 is used throughout the format; the HeaderMAC adopts it for consistency.
+<code>blake3::Hash::eq</code> comparison is constant-time.</p>
 <div class="box success"><strong>End of public header: 109 bytes</strong> (PUB_HEADER_LEN = 0x6D).</div>
 
 <!-- ── 5 ── -->
@@ -217,31 +219,31 @@
                           <span class="s">eph_x25519_pk</span>[<span class="n">32</span>] ‖ <span class="s">mlkem_ct</span>[<span class="n">1088</span>]
                           ‖ <span class="c">ss_x25519</span>[<span class="n">32</span>] ‖ <span class="c">ss_mlkem</span>[<span class="n">32</span>])
 
-<span class="c">wrapped_dek</span>           ← AEAD_hdr(<span class="c">wrapping_key</span>, <span class="s">kek_nonce</span>, <span class="d">[]</span>, <span class="r">DEK</span>)
+<span class="c">wrapped_dek</span>           ← AEAD_hdr(<span class="c">wrapping_key</span>, <span class="s">kek_nonce</span>, <span class="h">"arsenic-v1-hybrid-wrapped-dek"</span>, <span class="r">DEK</span>)
 
 <span class="d">// Decryption (recipient)</span>
 <span class="c">ss_x25519</span>            ← X25519_ECDH(<span class="r">recipient_x25519_sk</span>, <span class="s">eph_x25519_pk</span>)
 <span class="c">ss_mlkem</span>             ← ML-KEM-768.Decaps(<span class="r">recipient_x25519_sk_seed</span>, <span class="s">mlkem_ct</span>)
 <span class="c">wrapping_key</span>         ← same BLAKE3
-<span class="r">DEK</span>                  ← AEAD_hdr_decrypt(<span class="c">wrapping_key</span>, <span class="s">kek_nonce</span>, <span class="c">wrapped_dek</span>)</pre>
+<span class="r">DEK</span>                  ← AEAD_hdr_decrypt(<span class="c">wrapping_key</span>, <span class="s">kek_nonce</span>, <span class="h">"arsenic-v1-hybrid-wrapped-dek"</span>, <span class="c">wrapped_dek</span>)</pre>
 
 <div class="box warn">The ML-KEM-768 key is <strong>deterministically derived</strong> from the X25519 private key via two BLAKE3_derive_key calls ("Arsenic ML-KEM d" and "Arsenic ML-KEM z"). A single 32-byte <code>.key</code> file is sufficient for the entire hybrid keypair.</div>
 
 <h3 id="protectedmeta">5.4 — ProtectedMetadata</h3>
 <pre><span class="c">MetaKey</span>[<span class="n">32</span>]   ← BLAKE3_derive_key(<span class="h">"Arsenic V1 Metadata Key"</span>, <span class="r">DEK</span>)
 <span class="c">MetaNonce</span>[<span class="n">12</span>] ← BLAKE3_derive_key(<span class="h">"Arsenic V1 Meta Nonce"</span>,   <span class="r">DEK</span>)[<span class="n">0..12</span>]
-ProtectedMetadata = AEAD_hdr(<span class="c">MetaKey</span>, <span class="c">nonce_env</span>(<span class="c">MetaNonce</span>), <span class="d">[]</span>, <span class="s">meta_tlv</span>)</pre>
-<h4>Mandatory TLV fields (60 bytes)</h4>
+ProtectedMetadata = AEAD_hdr(<span class="c">MetaKey</span>, <span class="c">nonce_env</span>(<span class="c">MetaNonce</span>), <span class="h">"arsenic-v1-protected-meta"</span>, <span class="s">meta_tlv</span>)</pre>
+<h4>Mandatory TLV fields (50 bytes)</h4>
 <div class="table-wrap"><table>
   <thead><tr><th>Tag</th><th>Length</th><th>Value</th></tr></thead>
   <tbody>
     <tr><td><span class="tg">0x02</span></td><td>32</td><td>MerkleRoot — BLAKE3 root</td></tr>
     <tr><td><span class="tg">0x03</span></td><td>8</td><td>OriginalSize (u64 LE)</td></tr>
-    <tr><td><span class="tg">0x04</span></td><td>8</td><td>CompressedSize (u64 LE)</td></tr>
     <tr><td><span class="tg">0x05</span></td><td>1</td><td>BlockSizeId</td></tr>
     <tr><td><span class="tg">0x06</span></td><td>1</td><td>MerkleAlgoId = <code>0x01</code></td></tr>
   </tbody>
 </table></div>
+<div class="box info">Tag <code>0x04</code> (CompressedSize) was removed — it always equalled OriginalSize.</div>
 
 <!-- ── 6 ── -->
 <h2 id="headersize"><span class="num">6</span> Header Size</h2>
@@ -253,9 +255,9 @@ ProtectedMetadata = AEAD_hdr(<span class="c">MetaKey</span>, <span class="c">non
 <div class="table-wrap"><table>
   <thead><tr><th>Configuration</th><th>Size</th></tr></thead>
   <tbody>
-    <tr><td>Minimum (0 keyslots)</td><td><strong>237 bytes</strong></td></tr>
-    <tr><td>1 hybrid recipient</td><td>1 417 bytes</td></tr>
-    <tr><td>N recipients</td><td>237 + N × 1 180 bytes</td></tr>
+    <tr><td>Minimum (0 keyslots)</td><td><strong>227 bytes</strong></td></tr>
+    <tr><td>1 hybrid recipient</td><td>1 407 bytes</td></tr>
+    <tr><td>N recipients</td><td>227 + N × 1 180 bytes</td></tr>
     <tr><td>Maximum (256 keyslots)</td><td>~303 KiB</td></tr>
   </tbody>
 </table></div>
@@ -314,10 +316,9 @@ where  block_i = AEAD_pld(<span class="c">block_key_i</span>, <span class="c">bl
 <div class="chain">
 <span class="r">password</span>
   │
-  ├── <span class="k">Argon2id</span>(t=<span class="n">1</span>, m=<span class="n">8192</span>Ki, p=<span class="n">1</span>, <span class="s">salt</span>)  → <span class="c">PreKey</span>[<span class="n">32</span>]
-  │     └── <span class="k">HMAC-SHA256</span>(<span class="c">PreKey</span>, <span class="s">pre_mac</span>[<span class="n">77</span>])  → <span class="c">HeaderMAC</span>[<span class="n">32</span>]
   └── <span class="k">Argon2id</span>(<span class="s">t/m/p</span>, <span class="s">salt</span>)  → <span class="c">KEK</span>[<span class="n">32</span>]
-        └── AEAD_hdr(<span class="c">KEK</span>, <span class="d">...</span>, <span class="r">DEK</span>) → <span class="c">WrappedDEK</span>[<span class="n">48</span>]
+        ├── <span class="k">BLAKE3_keyed_hash</span>(<span class="c">KEK</span>, <span class="s">pre_mac</span>[<span class="n">77</span>])  → <span class="c">HeaderMAC</span>[<span class="n">32</span>]
+        └── AEAD_hdr(<span class="c">KEK</span>, <span class="d">...</span>, <span class="h">"arsenic-v1-wrapped-dek"</span>, <span class="r">DEK</span>) → <span class="c">WrappedDEK</span>[<span class="n">48</span>]
 
 random → <span class="r">DEK</span>[<span class="n">32</span>]
   ├── BLAKE3_derive_key(<span class="h">"Arsenic V1 Metadata Key"</span>, <span class="r">DEK</span>)  → <span class="c">MetaKey</span>
@@ -331,7 +332,7 @@ random → <span class="r">DEK</span>[<span class="n">32</span>]
         ML-KEM-768.Encaps(<span class="s">recipient.mlkem_ek</span>, <span class="r">m_random</span>)  → (<span class="s">mlkem_ct</span>, <span class="c">ss_mlkem</span>)
         BLAKE3_derive_key(<span class="h">"Arsenic Hybrid KEM"</span>,
           <span class="s">eph_x25519_pk</span>‖<span class="s">mlkem_ct</span>‖<span class="c">ss_x25519</span>‖<span class="c">ss_mlkem</span>)  → <span class="c">wrapping_key_j</span>
-        AEAD_hdr(<span class="c">wrapping_key_j</span>, <span class="d">...</span>, <span class="r">DEK</span>)  → <span class="c">wrapped_dek_j</span>
+        AEAD_hdr(<span class="c">wrapping_key_j</span>, <span class="d">...</span>, <span class="h">"arsenic-v1-hybrid-wrapped-dek"</span>, <span class="r">DEK</span>)  → <span class="c">wrapped_dek_j</span>
 </div>
 
 <!-- ── 12 ── -->
@@ -344,7 +345,7 @@ random → <span class="r">DEK</span>[<span class="n">32</span>]
   <div class="mem-row"><div class="mc off">0x000006</div><div class="mc sz">1</div><div class="mc"><span style="color:#f1d060">kdf_id</span> : <span style="color:var(--grn);font-family:monospace">01</span></div></div>
   <div class="mem-row"><div class="mc off">0x000007</div><div class="mc sz">1</div><div class="mc"><span style="color:#f1d060">hdr_cipher_id</span> : <span style="color:var(--grn);font-family:monospace">02</span></div></div>
   <div class="mem-row"><div class="mc off">0x000008</div><div class="mc sz">1</div><div class="mc"><span style="color:#f1d060">pld_cipher_id</span> : <span style="color:var(--grn);font-family:monospace">03</span></div></div>
-  <div class="mem-row"><div class="mc off">0x000009</div><div class="mc sz">4</div><div class="mc"><span style="color:#f1d060">header_total_size</span> : <span style="color:var(--grn);font-family:monospace">ED 00 00 00</span>  (237, u32 LE)</div></div>
+  <div class="mem-row"><div class="mc off">0x000009</div><div class="mc sz">4</div><div class="mc"><span style="color:#f1d060">header_total_size</span> : <span style="color:var(--grn);font-family:monospace">E3 00 00 00</span>  (227, u32 LE)</div></div>
   <div class="mem-row"><div class="mc off">0x00000D</div><div class="mc sz">16</div><div class="mc"><span style="color:#f1d060">salt</span> : <span style="color:var(--red);font-family:monospace">[16 random bytes]</span></div></div>
   <div class="mem-row"><div class="mc off">0x00001D</div><div class="mc sz">4</div><div class="mc"><span style="color:#f1d060">t_cost</span> : <span style="color:var(--grn);font-family:monospace">04 00 00 00</span></div></div>
   <div class="mem-row"><div class="mc off">0x000021</div><div class="mc sz">4</div><div class="mc"><span style="color:#f1d060">m_cost</span> : <span style="color:var(--grn);font-family:monospace">00 00 04 00</span>  (262 144 KiB)</div></div>
@@ -352,13 +353,13 @@ random → <span class="r">DEK</span>[<span class="n">32</span>]
   <div class="mem-row"><div class="mc off">0x000029</div><div class="mc sz">24</div><div class="mc"><span style="color:#f1d060">file_base_nonce</span> : <span style="color:var(--red);font-family:monospace">[24 random bytes]</span></div></div>
   <div class="mem-row"><div class="mc off">0x000041</div><div class="mc sz">12</div><div class="mc"><span style="color:#f1d060">kek_nonce</span> : <span style="color:var(--red);font-family:monospace">[12 random bytes]</span></div></div>
   <div class="mem-row sep"><div class="mc sep-label">── end pre-MAC section: 77 bytes ──────────────────────────────────────────</div></div>
-  <div class="mem-row"><div class="mc off">0x00004D</div><div class="mc sz">32</div><div class="mc"><span style="color:var(--pur)">HeaderMAC</span> = HMAC-SHA256(PreKey, pre_mac[77])</div></div>
+  <div class="mem-row"><div class="mc off">0x00004D</div><div class="mc sz">32</div><div class="mc"><span style="color:var(--pur)">HeaderMAC</span> = BLAKE3_keyed_hash(KEK, pre_mac[77])</div></div>
   <div class="mem-row sep"><div class="mc sep-label">── end public header: 109 bytes ─────────────────────────────────────────</div></div>
   <div class="mem-row"><div class="mc off">0x00006D</div><div class="mc sz">48</div><div class="mc"><span style="color:var(--org)">WrappedDEK</span> = AEAD_hdr(KEK, ..., DEK) → ciphertext[32] ‖ tag[16]</div></div>
   <div class="mem-row"><div class="mc off">0x00009D</div><div class="mc sz">4</div><div class="mc"><span style="color:#f1d060">hybrid_count</span> : <span style="color:var(--grn);font-family:monospace">00 00 00 00</span></div></div>
-  <div class="mem-row"><div class="mc off">0x0000A1</div><div class="mc sz">76</div><div class="mc"><span style="color:var(--org)">ProtectedMetadata</span> = AEAD_hdr(MetaKey, ..., TLV[60]) ‖ tag[16]</div></div>
-  <div class="mem-row sep"><div class="mc sep-label">── end header: 237 bytes (0x0000ED) ─────────────────────────────────────</div></div>
-  <div class="mem-row"><div class="mc off">0x0000ED</div><div class="mc sz">∞</div><div class="mc"><span style="color:var(--acc)">Payload</span> — consecutive blocks AEAD_pld(block_key_i, nonce_i, aad_i, plaintext_i)</div></div>
+  <div class="mem-row"><div class="mc off">0x0000A1</div><div class="mc sz">66</div><div class="mc"><span style="color:var(--org)">ProtectedMetadata</span> = AEAD_hdr(MetaKey, ..., TLV[50]) ‖ tag[16]</div></div>
+  <div class="mem-row sep"><div class="mc sep-label">── end header: 227 bytes (0x0000E3) ─────────────────────────────────────</div></div>
+  <div class="mem-row"><div class="mc off">0x0000E3</div><div class="mc sz">∞</div><div class="mc"><span style="color:var(--acc)">Payload</span> — consecutive blocks AEAD_pld(block_key_i, nonce_i, aad_i, plaintext_i)</div></div>
 </div>
 
 <!-- ── 13 ── -->
@@ -389,8 +390,8 @@ random → <span class="r">DEK</span>[<span class="n">32</span>]
     <tr><td>Per-block integrity</td><td>16-byte AEAD tag per block</td></tr>
     <tr><td>Whole-file integrity</td><td>BLAKE3 Merkle root verified before any plaintext write</td></tr>
     <tr><td>Block ordering</td><td>Index bound as AAD in each block AEAD</td></tr>
-    <tr><td>Header integrity</td><td>HMAC-SHA256 over 77 public bytes</td></tr>
-    <tr><td>Fast oracle resistance</td><td>PreKey via mini-Argon2id (~15 000 H/s on GPU)</td></tr>
+    <tr><td>Header integrity</td><td>BLAKE3_keyed_hash(KEK, 77 public bytes)</td></tr>
+    <tr><td>DoS resistance (KDF params)</td><td>Params validated against bounds before any Argon2id</td></tr>
     <tr><td><strong>Quantum resistance — payload</strong></td><td>Symmetric 256 bits: Grover requires 2¹²⁸ — already post-quantum</td></tr>
     <tr><td><strong>Quantum resistance — keyslots</strong></td><td>ML-KEM-768 (NIST FIPS 203, level 3) resists Shor</td></tr>
     <tr><td><strong>Defence in depth</strong></td><td>Hybrid X25519+ML-KEM-768: a flaw in one does not compromise the other</td></tr>

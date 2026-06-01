@@ -31,7 +31,7 @@ The `header_total_size` field (u32 LE at offset 0x09) encodes the exact header l
 ┌─────────────────────────────────────────────┐  offset 0x00
 │  Pre-MAC section          77 bytes          │  covered by HeaderMAC
 ├─────────────────────────────────────────────┤  offset 0x4D
-│  HeaderMAC                32 bytes          │  HMAC-SHA256
+│  HeaderMAC                32 bytes          │  BLAKE3_keyed_hash(KEK, pre-MAC)
 ├─────────────────────────────────────────────┤  offset 0x6D  (PUB_HEADER_LEN = 109)
 │  Envelope region          variable          │  wrapped keys + encrypted metadata
 └─────────────────────────────────────────────┘  offset header_total_size
@@ -146,7 +146,7 @@ Encryption:
                    ephemeral_x25519_pk[32] || mlkem_ct[1088]
                    || ss_x25519[32] || ss_mlkem[32])
 
-  wrapped_dek  ← AEAD_hdr(wrapping_key, kek_nonce, [], DEK)
+  wrapped_dek  ← AEAD_hdr(wrapping_key, kek_nonce, "arsenic-v1-hybrid-wrapped-dek", DEK)
 
 Decryption:
   ss_x25519  ← X25519_ECDH(recipient_x25519_sk, ephemeral_x25519_pk)
@@ -173,11 +173,11 @@ A single 32-byte `.key` file is sufficient; both keys are recomputed on use.
 MetaKey[32]    ← BLAKE3_derive_key("Arsenic V1 Metadata Key", DEK)
 MetaNonce[12]  ← BLAKE3_derive_key("Arsenic V1 Meta Nonce",   DEK)[0..12]
 
-ProtectedMetadata = AEAD_hdr( MetaKey, nonce_env(MetaNonce), [], meta_tlv )
+ProtectedMetadata = AEAD_hdr( MetaKey, nonce_env(MetaNonce), "arsenic-v1-protected-meta", meta_tlv )
                   = ciphertext[len(meta_tlv)] || tag[16]
 ```
 
-**Mandatory TLV fields (60 bytes):**
+**Mandatory TLV fields (50 bytes):**
 
 | Tag    | Length | Value                                  |
 |--------|--------|----------------------------------------|
@@ -211,8 +211,8 @@ header_total_size = PUB_HEADER_LEN(109)
 | Configuration             | Header size                 |
 |---------------------------|-----------------------------|
 | Minimum (0 keyslots)      | **227 bytes**               |
-| 1 hybrid recipient        | 1 417 bytes                 |
-| N hybrid recipients       | 237 + N × 1 180 bytes       |
+| 1 hybrid recipient        | 1 407 bytes                 |
+| N hybrid recipients       | 227 + N × 1 180 bytes       |
 | Maximum (256 keyslots)    | ~303 KiB                    |
 
 Limits: `MAX_ASYM_KEYSLOTS = 256`, `MAX_HEADER_TOTAL_SIZE = 64 MiB`.
@@ -307,11 +307,10 @@ All produce a **16-byte** tag. `hdr_cipher_id` and `pld_cipher_id` are independe
 ```
 password
   │
-  ├── Argon2id(t=1, m=8192Ki, p=1, salt)    → PreKey[32]
-  │         └── BLAKE3_keyed_hash(KEK, pre_mac[77])   → HeaderMAC[32]
-  │
   └── Argon2id(t_cost, m_cost, p_cost, salt) → KEK[32]
-            └── AEAD_hdr(KEK, nonce_env(kek_nonce), [], DEK) → WrappedDEK[48]
+        ├── BLAKE3_keyed_hash(KEK, pre_mac[77])                              → HeaderMAC[32]
+        └── AEAD_hdr(KEK, nonce_env(kek_nonce),
+                     "arsenic-v1-wrapped-dek", DEK)                         → WrappedDEK[48]
 
 random → DEK[32]
   ├── BLAKE3_derive_key("Arsenic V1 Metadata Key", DEK)           → MetaKey[32]
@@ -327,7 +326,8 @@ random → DEK[32]
         ML-KEM-768.Encaps(recipient.mlkem, m)                      → (mlkem_ct[1088], ss_mlkem[32])
         BLAKE3_derive_key("Arsenic Hybrid KEM",
           eph_x25519_pk||mlkem_ct||ss_x25519||ss_mlkem)            → wrapping_key[32]
-        AEAD_hdr(wrapping_key, kek_nonce_j, [], DEK)               → wrapped_dek_j[48]
+        AEAD_hdr(wrapping_key, kek_nonce_j,
+                 "arsenic-v1-hybrid-wrapped-dek", DEK)             → wrapped_dek_j[48]
 ```
 
 ---
@@ -411,9 +411,8 @@ A single `.key` file (32 bytes encoded as `ARSENIC-SECRET-KEY-1{bech32}`) is suf
 | Per-block integrity               | 16-byte AEAD tag per block                                      |
 | Whole-file integrity              | BLAKE3 Merkle root verified before any plaintext write          |
 | Block ordering                    | Index bound as AAD in each block AEAD                           |
-| Header integrity                  | HMAC-SHA256 over 77 bytes (KDF params + cipher IDs)             |
-| Fast oracle resistance            | PreKey via mini-Argon2id (~15 000 H/s on GPU)                   |
-| DoS resistance (KDF params)       | Forged params rejected by MAC before any Argon2id               |
+| Header integrity                  | BLAKE3_keyed_hash(KEK, 77 public bytes)                         |
+| DoS resistance (KDF params)       | Params validated against bounds before any Argon2id             |
 | Quantum resistance — payload      | Symmetric 256 bits: Grover requires 2¹²⁸ — already post-quantum |
 | Quantum resistance — keyslots     | ML-KEM-768 (NIST level 3) resists Shor                          |
 | Defence in depth                  | Hybrid X25519+ML-KEM: a flaw in one does not compromise the other |

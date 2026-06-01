@@ -9,7 +9,7 @@ This document lists and explains every cryptographic algorithm used in the `arse
 ## Table of Contents
 
 1. [Password-based Key Derivation — Argon2id](#1-argon2id)
-2. [Header MAC — HMAC-SHA256](#2-hmac-sha256)
+2. [Header MAC — BLAKE3_keyed_hash](#2-blake3_keyed_hash-for-headermac)
 3. [Hash Functions and Internal Derivation — BLAKE3](#3-blake3)
 4. [Authenticated Ciphers (AEAD)](#4-aead-ciphers)
    - 4a. Deoxys-II-256
@@ -45,27 +45,11 @@ Argon2id combines Argon2d (resistant to GPU side-channel attacks) and
 Argon2i (resistant to time-memory trade-offs). The `id` variant is the
 best default.
 
-**Two distinct uses in Arsenic:**
+**Single use in Arsenic — KEK derivation:**
 
-### 1a. Pre-authentication (fixed parameters)
-
-Used to generate the `PreKey` for verifying the `HeaderMAC` **before**
-launching the main derivation.
-
-```
-t_cost = 1         (1 iteration)
-m_cost = 8 192 KB  (8 MiB)
-p_cost = 1         (1 thread)
-output = 32 bytes
-```
-
-Typical cost: **~2 ms**. Sufficient to reject a wrong password
-quickly (~15 000 attempts/s on GPU, vs. >10⁹/s for a bare HMAC-SHA256),
-without exposing a zero-cost oracle.
-
-### 1b. Main KEK derivation (configurable parameters)
-
-Generates the KEK (Key Encryption Key) that protects the DEK.
+Generates the KEK (Key Encryption Key) that protects the DEK and keys
+the HeaderMAC. Every password attempt pays the full KDF cost; there is
+no cheaper pre-authentication oracle.
 
 | Preset | `t_cost` | `m_cost` | `p_cost` | RAM | Typical time |
 |---|---|---|---|---|---|
@@ -547,7 +531,7 @@ Password ──► Argon2id ──► KEK[32] ──► AEAD ──► WrappedDE
 │   Full verification before any plaintext write             │
 └──────────────────────────────────────────────────────────┘
 
-Header protected by: HMAC-SHA256(Argon2id(password), public_header)
+Header protected by: BLAKE3_keyed_hash(KEK, public_header[77 bytes])
 ```
 
 ### Post-quantum Resistance Summary
@@ -556,7 +540,7 @@ Header protected by: HMAC-SHA256(Argon2id(password), public_header)
 |---|---|---|---|
 | Payload encryption | XChaCha20 / Deoxys-II / AES-GCM-SIV | ✓ | Symmetric 256 bits, Grover → 128 bits |
 | Password KDF | Argon2id | ✓ | Symmetric, Grover → 128 bits |
-| Header MAC | HMAC-SHA256 | ✓ | 128 bits post-quantum |
+| Header MAC | BLAKE3_keyed_hash | ✓ | Symmetric, Grover → 128 bits |
 | Internal derivation | BLAKE3 | ✓ | Symmetric |
 | X25519 keyslot | X25519 | ✗ | Shor breaks ECDH |
 | ML-KEM-768 keyslot | ML-KEM-768 | ✓ | FIPS 203, resists Shor |

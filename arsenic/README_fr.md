@@ -199,13 +199,13 @@ Les deux clés sont dérivées de la même graine de 32 octets stockée dans le 
 ```
 ┌──────────────────────────────────────────────┐  ← offset 0x00
 │  Section pré-MAC   77 octets  (pre-MAC)       │  plaintext, protégé par intégrité
-│  HeaderMAC         32 octets                  │  HMAC-SHA256(KEK, pre-MAC)
+│  HeaderMAC         32 octets                  │  BLAKE3_keyed_hash(KEK, pre-MAC)
 │  WrappedDEK        48 octets                  │  DEK chiffré AEAD (keyslot symétrique)
 │  hybrid_count       4 octets                  │  nombre de keyslots hybrides
 │  Keyslot_0       1180 octets  ┐               │  DEK wrappé X25519+ML-KEM-768
 │  Keyslot_1       1180 octets  │ × N           │
-│  ProtectedMeta    ≥76 octets  ┘               │  TLV AEAD chiffré (racine Merkle, tailles…)
-└──────────────────────────────────────────────┘  ← offset = header_total_size (≥237 octets)
+│  ProtectedMeta    ≥66 octets  ┘               │  TLV AEAD chiffré (racine Merkle, taille…)
+└──────────────────────────────────────────────┘  ← offset = header_total_size (≥227 octets)
 ┌──────────────────────────────────────────────┐
 │  Bloc 0 : ciphertext + tag AEAD 16 octets     │
 │  Bloc 1 : ciphertext + tag AEAD 16 octets     │  blocs traités séquentiellement,
