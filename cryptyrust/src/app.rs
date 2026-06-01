@@ -429,6 +429,53 @@ impl CryptyApp {
         self.km_confirm_delete = None;
     }
 
+    /// Export the public parts of keypair `index` as a `.pubkey` file via a save dialog.
+    pub fn km_export_key(&mut self, index: usize) {
+        let Some(entry) = self.keys.get(index) else { return };
+        let content  = arsenic::keystore::serialize_pubkey(entry);
+        let filename = format!("{}.pubkey", entry.name);
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Public key", &["pubkey"])
+            .set_file_name(&filename)
+            .save_file()
+        {
+            match std::fs::write(&path, &content) {
+                Ok(()) => self.km_error = Some(format!("✓ Exported to {}", path.display())),
+                Err(e) => self.km_error = Some(format!("Export failed: {e}")),
+            }
+        }
+    }
+
+    /// Open a file picker and import a contact from a `.pubkey` or `.key` file.
+    pub fn km_import_contact_from_file(&mut self) {
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Public key files", &["pubkey", "key"])
+            .set_title("Import contact — select a .pubkey or .key file")
+            .pick_file()
+        {
+            self.km_do_import_contact(path);
+        }
+    }
+
+    /// Core import logic — also used by drag-and-drop.
+    pub fn km_do_import_contact(&mut self, path: PathBuf) {
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c)  => c,
+            Err(e) => { self.km_contact_error = Some(format!("Cannot read file: {e}")); return; }
+        };
+        let entry = match arsenic::keystore::parse_pubkey_file(&content, path) {
+            Some(e) => e,
+            None    => { self.km_contact_error = Some("No valid public key found in this file.".into()); return; }
+        };
+        if self.contacts.iter().any(|c| c.name == entry.name) {
+            self.km_contact_error = Some(format!("A contact named \"{}\" already exists.", entry.name));
+            return;
+        }
+        self.contacts.push(entry);
+        save_contacts(&self.contacts);
+        self.km_contact_error = None;
+    }
+
     fn start_job(&mut self, ctx: egui::Context, password: String) {
         let recipients: Vec<arsenic::HybridRecipient> = self
             .keys
@@ -496,8 +543,26 @@ impl eframe::App for CryptyApp {
                     .collect()
             });
             if !dropped.is_empty() {
-                self.job = JobState::Idle;
-                self.add_files(dropped);
+                // Route dropped files: .pubkey/.key → import as contact,
+                // everything else → encrypt/decrypt queue.
+                let mut to_encrypt: Vec<PathBuf> = Vec::new();
+                for path in dropped {
+                    let ext = path.extension()
+                        .and_then(|e| e.to_str())
+                        .unwrap_or("")
+                        .to_lowercase();
+                    if ext == "pubkey" || ext == "key" {
+                        self.km_do_import_contact(path);
+                        // Open key manager so the user sees the result.
+                        if !self.show_key_manager { self.show_key_manager = true; }
+                    } else {
+                        to_encrypt.push(path);
+                    }
+                }
+                if !to_encrypt.is_empty() {
+                    self.job = JobState::Idle;
+                    self.add_files(to_encrypt);
+                }
             }
         }
 

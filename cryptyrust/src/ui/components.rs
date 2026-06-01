@@ -656,7 +656,9 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
     let mut cancel_confirm = false;
     let mut copy_text: Option<String> = None;
     let mut open_privkey_popup: Option<usize> = None;
+    let mut do_export_key: Option<usize> = None;
     let mut do_add_contact = false;
+    let mut do_import_contact = false;
     let mut do_confirm_delete_contact: Option<usize> = None;
     let mut do_delete_contact: Option<usize> = None;
     let mut cancel_confirm_contact = false;
@@ -699,8 +701,15 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
                             });
                             row.col(|ui| {
                                 ui.horizontal(|ui| {
-                                    if ui.button("📋 Copy").on_hover_text("Copy public key").clicked() {
+                                    if ui.button("📋 Copy").on_hover_text("Copy X25519 public key").clicked() {
                                         copy_text = Some(full_pub.clone());
+                                        cancel_confirm = true;
+                                    }
+                                    if ui.button("📤 Export")
+                                        .on_hover_text("Save public key as a shareable .pubkey file")
+                                        .clicked()
+                                    {
+                                        do_export_key = Some(i);
                                         cancel_confirm = true;
                                     }
                                     if ui.button("🔑 Secret key").on_hover_text("Reveal private key").clicked() {
@@ -749,8 +758,18 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
         // ════════════════════════════════════════════════════════
         // Section 2 — Contacts
         // ════════════════════════════════════════════════════════
-        ui.label(egui::RichText::new("Contacts").strong().size(14.0));
-        ui.label(egui::RichText::new("Hybrid public keys (X25519 + ML-KEM-768) received from correspondents.").small().weak());
+        ui.horizontal(|ui| {
+            ui.label(egui::RichText::new("Contacts").strong().size(14.0));
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                if ui.button("📥 Import from file")
+                    .on_hover_text("Import a contact from a .pubkey or .key file\n(drag-and-drop also works)")
+                    .clicked()
+                {
+                    do_import_contact = true;
+                }
+            });
+        });
+        ui.label(egui::RichText::new("Hybrid public keys received from correspondents. Ask them to export their .pubkey file.").small().weak());
         ui.add_space(4.0);
 
         if app.contacts.is_empty() {
@@ -810,8 +829,8 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
 
         ui.add_space(6.0);
 
-        // Add contact form — requires both X25519 and ML-KEM keys
-        ui.label(egui::RichText::new("Add contact:").small());
+        // Add contact form — manual entry (or use Import above / drag-and-drop)
+        ui.label(egui::RichText::new("Or add manually:").small());
         ui.horizontal(|ui| {
             ui.add(egui::TextEdit::singleline(&mut app.km_new_contact_name)
                 .hint_text("Name…")
@@ -864,6 +883,8 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
     if let Some(t) = copy_text  { ui.ctx().copy_text(t); }
     if do_generate              { app.km_generate_key(); }
     if do_add_contact           { app.km_add_contact(); }
+    if do_import_contact        { app.km_import_contact_from_file(); }
+    if let Some(i) = do_export_key { app.km_export_key(i); }
     if let Some(i) = do_confirm_delete         { app.km_confirm_delete = Some(i); app.km_error = None; }
     if let Some(i) = do_delete                 { app.km_delete_key(i); }
     if let Some(i) = do_confirm_delete_contact { app.km_confirm_delete_contact = Some(i); app.km_contact_error = None; }

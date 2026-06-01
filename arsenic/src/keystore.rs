@@ -159,6 +159,59 @@ fn is_leap(y: u64) -> bool { (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }
 
 // ── Identity file format ──────────────────────────────────────────────────────
 
+/// Serialize only the **public** parts of a keypair as a shareable `.pubkey` file.
+///
+/// The file contains no private key or ML-KEM seed — it is safe to share with
+/// any correspondent who wants to encrypt files for this identity.
+pub fn serialize_pubkey(entry: &KeyEntry) -> String {
+    let pub_enc   = encode_pubkey(&entry.public_key);
+    let mlkem_enc = encode_mlkem_pubkey(&entry.mlkem_public_key);
+    format!(
+        "# Arsenic public key — share this file with correspondents who want to encrypt for you.\n\
+         # name: {name}\n\
+         # public key: {pub_enc}\n\
+         # mlkem-public-key: {mlkem_enc}\n",
+        name = entry.name,
+    )
+}
+
+/// Parse a `.pubkey` **or** `.key` file and return a `ContactEntry`.
+///
+/// Private key lines (`ARSENIC-SECRET-KEY-1…`) and ML-KEM seed lines are ignored,
+/// so this function is safe to call on a full identity file — it will only extract
+/// the public parts.
+pub fn parse_pubkey_file(content: &str, path: std::path::PathBuf) -> Option<ContactEntry> {
+    let mut name = String::new();
+    let mut public_key: Option<[u8; 32]>    = None;
+    let mut mlkem_key:  Option<[u8; 1184]>  = None;
+
+    for line in content.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("# name:") {
+            name = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("# public key:") {
+            public_key = decode_pubkey(rest.trim());
+        } else if let Some(rest) = line.strip_prefix("# mlkem-public-key:") {
+            mlkem_key = decode_mlkem_pubkey(rest.trim());
+        }
+        // Lines beginning with ARSENIC-SECRET-KEY-1 or ARSENIC-MLKEM-SEED-1 are silently skipped.
+    }
+
+    if name.is_empty() {
+        name = path
+            .file_stem()
+            .map(|s| s.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        // Strip a trailing ".pubkey" or ".key" that may have been left in the stem on some OS.
+    }
+
+    Some(ContactEntry {
+        name,
+        public_key:      public_key?,
+        mlkem_public_key: Box::new(mlkem_key?),
+    })
+}
+
 pub fn serialize_identity(entry: &KeyEntry) -> String {
     let ts = utc_timestamp();
     let pub_enc = encode_pubkey(&entry.public_key);
