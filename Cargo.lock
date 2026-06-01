@@ -336,7 +336,7 @@ checksum = "7c02d123df017efcdfbd739ef81735b36c5ba83ec3c59c80a9d7ecc718f92e50"
 
 [[package]]
 name = "arsenic"
-version = "1.5.4"
+version = "1.5.5"
 dependencies = [
  "aead",
  "aes-gcm-siv",
@@ -360,7 +360,7 @@ dependencies = [
 
 [[package]]
 name = "arsenic_ffi"
-version = "1.5.4"
+version = "1.5.5"
 dependencies = [
  "arsenic",
  "tempfile",
@@ -1202,7 +1202,7 @@ dependencies = [
 
 [[package]]
 name = "cryptyrust"
-version = "1.5.4"
+version = "1.5.5"
 dependencies = [
  "anyhow",
  "arsenic",

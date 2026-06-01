@@ -9,7 +9,7 @@ members = [
 ]
 
 [workspace.package]
-version = "1.5.5"
+version = "1.5.6"
 authors = ["Antidote1911 <antidote1911@gmail.com>"]
 
 [workspace.lints.rust]

@@ -11,7 +11,7 @@ use crate::file_utils::{
     Mode,
 };
 use crate::job::PasswordPopup;
-use arsenic::{encode_privkey, encode_pubkey};
+use arsenic::{encode_privkey, encode_pubkey, SignatureStatus};
 use crate::keystore::{contacts_path, keys_dir, pubkey_short};
 use arsenic::{best_combination, ArsenicStrength, CipherId, KemLevel};
 
@@ -703,6 +703,8 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
     let mut cancel_confirm_contact = false;
     let mut do_generate_signing_key = false;
     let mut do_delete_signing_key: Option<usize> = None;
+    let mut do_export_sign_pubkey: Option<usize> = None;
+    let mut do_import_sign_pubkey_for: Option<usize> = None;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
 
@@ -820,12 +822,15 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
                 .striped(true)
                 .min_scrolled_height(0.0)
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .column(Column::initial(130.0).at_least(60.0).clip(true))
-                .column(Column::initial(155.0).at_least(90.0).clip(true))
-                .column(Column::remainder().at_least(120.0))
+                .column(Column::initial(120.0).at_least(60.0).clip(true))
+                .column(Column::initial(130.0).at_least(80.0).clip(true))
+                .column(Column::initial(50.0))
+                .column(Column::remainder().at_least(160.0))
                 .header(24.0, |mut h| {
                     h.col(|ui| { ui.label(egui::RichText::new("Name").small().strong()); });
                     h.col(|ui| { ui.label(egui::RichText::new("Public key").small().strong()); });
+                    h.col(|ui| { ui.label(egui::RichText::new("Sig ✓").small().strong())
+                        .on_hover_text("Whether a trusted ML-DSA-65 signing key is attached"); });
                     h.col(|ui| { ui.label(egui::RichText::new("Actions").small().strong()); });
                 })
                 .body(|mut body| {
@@ -833,6 +838,7 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
                         let c = &app.contacts[i];
                         let short    = pubkey_short(&c.public_key);
                         let full_pub = encode_pubkey(&c.public_key);
+                        let has_sig  = c.signing_verifying_key.is_some();
                         let pending  = app.km_confirm_delete_contact == Some(i);
 
                         body.row(30.0, |mut row| {
@@ -842,9 +848,25 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
                                     .on_hover_text(egui::RichText::new(&full_pub).monospace());
                             });
                             row.col(|ui| {
+                                let (icon, color, tip) = if has_sig {
+                                    ("✓", egui::Color32::from_rgb(80, 200, 100), "Signing key trusted — can verify signatures from this contact")
+                                } else {
+                                    ("—", ui.visuals().weak_text_color(), "No signing key — import a .sigpub to verify their signatures")
+                                };
+                                ui.label(egui::RichText::new(icon).color(color)).on_hover_text(tip);
+                            });
+                            row.col(|ui| {
                                 ui.horizontal(|ui| {
                                     if ui.button("📋 Copy").on_hover_text("Copy X25519 public key").clicked() {
                                         copy_text = Some(full_pub.clone());
+                                        cancel_confirm_contact = true;
+                                    }
+                                    let sig_btn = if has_sig { "🔑 Update sig key" } else { "🔑 Add sig key" };
+                                    if ui.button(sig_btn)
+                                        .on_hover_text("Import a .sigpub file to trust this contact's signatures")
+                                        .clicked()
+                                    {
+                                        do_import_sign_pubkey_for = Some(i);
                                         cancel_confirm_contact = true;
                                     }
                                     if pending {
@@ -948,6 +970,12 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
                                         app.signing_key_index =
                                             if active { None } else { Some(i) };
                                     }
+                                    if ui.button("📤 Export pubkey")
+                                        .on_hover_text("Save verifying key as .sigpub — share with contacts so they can verify your signatures")
+                                        .clicked()
+                                    {
+                                        do_export_sign_pubkey = Some(i);
+                                    }
                                     if ui.add(
                                         egui::Button::new("🗑 Delete")
                                             .fill(egui::Color32::TRANSPARENT),
@@ -1025,6 +1053,8 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
     if let Some(i) = open_privkey_popup        { app.km_show_privkey = Some(i); }
     if do_generate_signing_key                 { app.km_generate_signing_key(); }
     if let Some(i) = do_delete_signing_key     { app.km_delete_signing_key(i); }
+    if let Some(i) = do_export_sign_pubkey     { app.km_export_sign_pubkey(i); }
+    if let Some(i) = do_import_sign_pubkey_for { app.km_import_sign_pubkey_for_contact(i); }
 }
 
 /// Secret key reveal popup.  Call every frame when `app.km_show_privkey` is Some.

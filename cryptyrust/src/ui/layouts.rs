@@ -285,6 +285,36 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
                 success_label,
             } => {
                 completed_remove = render_completed_view(ui, files, statuses, success_label);
+                // Signature status banner
+                if let Some(ref status) = app.last_sig_status {
+                    ui.add_space(4.0);
+                    let (icon, msg, color) = match status {
+                        arsenic::SignatureStatus::SignedByKnown(name) => (
+                            "✍",
+                            format!("Signed by: {name}  ✓"),
+                            egui::Color32::from_rgb(80, 200, 100),
+                        ),
+                        arsenic::SignatureStatus::SignedByUnknown => (
+                            "⚠",
+                            "Signed by unknown key — import sender's .sigpub in Key Manager".into(),
+                            egui::Color32::from_rgb(220, 180, 40),
+                        ),
+                        arsenic::SignatureStatus::Invalid => (
+                            "✗",
+                            "Signature INVALID — file may have been tampered with".into(),
+                            egui::Color32::from_rgb(220, 60, 60),
+                        ),
+                        arsenic::SignatureStatus::NotSigned => (
+                            "—",
+                            "Not signed".into(),
+                            ui.visuals().weak_text_color(),
+                        ),
+                    };
+                    ui.horizontal(|ui| {
+                        ui.label(egui::RichText::new(icon).size(16.0).color(color));
+                        ui.label(egui::RichText::new(&msg).color(color));
+                    });
+                }
             }
             JobState::Idle => {
                 if app.files.is_empty() {

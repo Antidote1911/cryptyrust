@@ -9,7 +9,7 @@ use crate::{
     generate_x25519_keypair, pubkey_from_privkey,
 };
 use crate::arsenic::hybrid_kem;
-use crate::keyfmt::{encode_mlkem_seed, decode_mlkem_seed};
+use crate::keyfmt::{encode_mlkem_seed, decode_mlkem_seed, encode_mldsa_vk, decode_mldsa_vk};
 use std::path::{Path, PathBuf};
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -67,6 +67,9 @@ pub struct ContactEntry {
     pub public_key: [u8; 32],
     /// ML-KEM-768 encapsulation key (1184 bytes).
     pub mlkem_public_key: Box<[u8; 1184]>,
+    /// ML-DSA-65 verifying key (1952 bytes) — trusted signing key for this contact.
+    /// `None` if the contact has not shared their signing public key yet.
+    pub signing_verifying_key: Option<Box<[u8; 1952]>>,
 }
 
 impl ContactEntry {
@@ -74,6 +77,37 @@ impl ContactEntry {
     pub fn as_recipient(&self) -> crate::arsenic::HybridRecipient {
         crate::arsenic::HybridRecipient::new(self.public_key, *self.mlkem_public_key)
     }
+}
+
+/// Serialize a `SigningKeyEntry` as a shareable `.sigpub` file (verifying key only, no seed).
+pub fn serialize_sign_pubkey(entry: &SigningKeyEntry) -> String {
+    let vk_enc = encode_mldsa_vk(&entry.verifying_key);
+    format!(
+        "# Arsenic signing public key — share this file so correspondents can verify your signatures.\n\
+         # name: {}\n\
+         # sign-key: {}\n",
+        entry.name, vk_enc,
+    )
+}
+
+/// Parse a `.sigpub` file and return `(name, verifying_key)`.
+pub fn parse_sign_pubkey_file(content: &str, path: std::path::PathBuf) -> Option<(String, [u8; 1952])> {
+    let mut name = String::new();
+    let mut vk: Option<[u8; 1952]> = None;
+
+    for line in content.lines() {
+        let line = line.trim();
+        if let Some(rest) = line.strip_prefix("# name:") {
+            name = rest.trim().to_string();
+        } else if let Some(rest) = line.strip_prefix("# sign-key:") {
+            vk = decode_mldsa_vk(rest.trim());
+        }
+    }
+
+    if name.is_empty() {
+        name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+    }
+    Some((name, vk?))
 }
 
 // ── Short display ─────────────────────────────────────────────────────────────
@@ -207,8 +241,9 @@ pub fn parse_pubkey_file(content: &str, path: std::path::PathBuf) -> Option<Cont
 
     Some(ContactEntry {
         name,
-        public_key:      public_key?,
-        mlkem_public_key: Box::new(mlkem_key?),
+        public_key:            public_key?,
+        mlkem_public_key:      Box::new(mlkem_key?),
+        signing_verifying_key: None,
     })
 }
 
@@ -359,27 +394,56 @@ fn parse_contacts(data: &str) -> Vec<ContactEntry> {
     let mut result = Vec::new();
     let mut pending_name: Option<String> = None;
     let mut pending_x25519: Option<[u8; 32]> = None;
+    let mut pending_mlkem: Option<[u8; 1184]> = None;
+    let mut pending_sign_vk: Option<[u8; 1952]> = None;
+
+    let flush = |name: Option<String>,
+                 x25519: Option<[u8; 32]>,
+                 mlkem: Option<[u8; 1184]>,
+                 sign_vk: Option<[u8; 1952]>,
+                 result: &mut Vec<ContactEntry>| {
+        if let (Some(n), Some(k), Some(m)) = (name, x25519, mlkem) {
+            result.push(ContactEntry {
+                name: n,
+                public_key: k,
+                mlkem_public_key: Box::new(m),
+                signing_verifying_key: sign_vk.map(|v| Box::new(v)),
+            });
+        }
+    };
 
     for line in data.lines() {
         let line = line.trim();
         if line.is_empty() { continue; }
         if let Some(rest) = line.strip_prefix("# mlkem:") {
-            // ML-KEM line follows a # name: line and an arsenic1 line
-            if let (Some(name), Some(x25519)) = (pending_name.take(), pending_x25519.take()) {
-                if let Some(mlkem) = decode_mlkem_pubkey(rest.trim()) {
-                    result.push(ContactEntry {
-                        name,
-                        public_key: x25519,
-                        mlkem_public_key: Box::new(mlkem),
-                    });
-                }
+            pending_mlkem = decode_mlkem_pubkey(rest.trim());
+        } else if let Some(rest) = line.strip_prefix("# sign-key:") {
+            pending_sign_vk = decode_mldsa_vk(rest.trim());
+            // flush once we have mlkem (sign-key comes after mlkem in the file)
+            if pending_mlkem.is_some() {
+                flush(
+                    pending_name.take(), pending_x25519.take(),
+                    pending_mlkem.take(), pending_sign_vk.take(), &mut result,
+                );
             }
         } else if let Some(rest) = line.strip_prefix('#') {
+            // flush previous entry if any (no sign-key line → flush on new name)
+            if pending_mlkem.is_some() {
+                flush(
+                    pending_name.take(), pending_x25519.take(),
+                    pending_mlkem.take(), pending_sign_vk.take(), &mut result,
+                );
+            }
             pending_name = Some(rest.trim().to_string());
             pending_x25519 = None;
+            pending_sign_vk = None;
         } else if let Some(key) = decode_pubkey(line) {
             pending_x25519 = Some(key);
         }
+    }
+    // flush last pending entry
+    if pending_mlkem.is_some() {
+        flush(pending_name, pending_x25519, pending_mlkem, pending_sign_vk, &mut result);
     }
     result
 }
@@ -387,12 +451,18 @@ fn parse_contacts(data: &str) -> Vec<ContactEntry> {
 fn serialize_contacts(contacts: &[ContactEntry]) -> String {
     contacts
         .iter()
-        .map(|c| format!(
-            "# {}\n{}\n# mlkem:{}\n",
-            c.name,
-            encode_pubkey(&c.public_key),
-            encode_mlkem_pubkey(&c.mlkem_public_key),
-        ))
+        .map(|c| {
+            let mut s = format!(
+                "# {}\n{}\n# mlkem:{}\n",
+                c.name,
+                encode_pubkey(&c.public_key),
+                encode_mlkem_pubkey(&c.mlkem_public_key),
+            );
+            if let Some(ref vk) = c.signing_verifying_key {
+                s.push_str(&format!("# sign-key:{}\n", encode_mldsa_vk(vk)));
+            }
+            s
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }

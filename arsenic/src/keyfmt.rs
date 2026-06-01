@@ -101,6 +101,21 @@ pub fn decode_privkey(s: &str) -> Option<[u8; 32]> {
 /// Human-readable part for the 64-byte ML-KEM seed (uppercase signals secrecy).
 pub const MLKEM_SEED_HRP: &str = "ARSENIC-MLKEM-SEED-1";
 
+/// Human-readable part for the 1952-byte ML-DSA-65 verifying (public) key.
+pub const MLDSA_VK_HRP: &str = "ARSENIC-SIGN-PUB-1";
+
+/// Encode a 1952-byte ML-DSA-65 verifying key → `ARSENIC-SIGN-PUB-1{BECH32}`.
+pub fn encode_mldsa_vk(bytes: &[u8; 1952]) -> String {
+    format!("{}{}", MLDSA_VK_HRP, bech32_encode(bytes).to_uppercase())
+}
+
+/// Decode an `ARSENIC-SIGN-PUB-1…` string → 1952 bytes, or `None` if malformed.
+pub fn decode_mldsa_vk(s: &str) -> Option<[u8; 1952]> {
+    let upper = s.to_uppercase();
+    let inner = upper.strip_prefix(MLDSA_VK_HRP)?;
+    bech32_decode(&inner.to_lowercase())?.try_into().ok()
+}
+
 /// Encode a 64-byte ML-KEM seed → `ARSENIC-MLKEM-SEED-1{BECH32}` (~123 chars).
 pub fn encode_mlkem_seed(bytes: &[u8; 64]) -> String {
     format!("{}{}", MLKEM_SEED_HRP, bech32_encode(bytes).to_uppercase())

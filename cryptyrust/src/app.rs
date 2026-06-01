@@ -1,6 +1,6 @@
 use arsenic::{
     bench_cipher_combinations, ArsenicParams, ArsenicStrength, CipherBenchResult, CipherId,
-    KemLevel, Ui,
+    KemLevel, SignatureStatus, Ui,
 };
 use eframe::egui;
 use std::path::PathBuf;
@@ -46,6 +46,8 @@ pub struct CryptyApp {
     pub signing_key_index: Option<usize>,
     /// Loaded ML-DSA-65 signing keys from the signing-keys keystore.
     pub signing_keys: Vec<arsenic::keystore::SigningKeyEntry>,
+    /// Signature status of the last decrypted file.
+    pub last_sig_status: Option<SignatureStatus>,
     pub show_about: bool,
     pub dark_mode: bool,
     // Cipher benchmark state
@@ -137,6 +139,7 @@ impl CryptyApp {
             kem_level,
             signing_key_index: None,
             signing_keys: arsenic::keystore::load_signing_keystore(),
+            last_sig_status: None,
             show_about: false,
             dark_mode,
             bench_running: false,
@@ -422,6 +425,7 @@ impl CryptyApp {
             name,
             public_key,
             mlkem_public_key: Box::new(mlkem_key),
+            signing_verifying_key: None,
         });
         save_contacts(&self.contacts);
         self.km_new_contact_name.clear();
@@ -484,6 +488,51 @@ impl CryptyApp {
             }
             self.signing_keys.remove(index);
         }
+    }
+
+    /// Export the ML-DSA-65 verifying key of signing key `index` as a `.sigpub` file.
+    pub fn km_export_sign_pubkey(&mut self, index: usize) {
+        let Some(entry) = self.signing_keys.get(index) else { return };
+        let content  = arsenic::keystore::serialize_sign_pubkey(entry);
+        let filename = format!("{}.sigpub", entry.name);
+        if let Some(path) = rfd::FileDialog::new()
+            .add_filter("Signing public key", &["sigpub"])
+            .set_file_name(&filename)
+            .save_file()
+        {
+            match std::fs::write(&path, &content) {
+                Ok(()) => self.km_error = Some(format!("✓ Exported to {}", path.display())),
+                Err(e) => self.km_error = Some(format!("Export failed: {e}")),
+            }
+        }
+    }
+
+    /// Open a `.sigpub` file and attach its verifying key to the contact at `contact_index`.
+    pub fn km_import_sign_pubkey_for_contact(&mut self, contact_index: usize) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Signing public key", &["sigpub"])
+            .set_title("Import signing public key for contact")
+            .pick_file()
+        else { return };
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c)  => c,
+            Err(e) => { self.km_contact_error = Some(format!("Cannot read file: {e}")); return; }
+        };
+        let (_, vk) = match arsenic::keystore::parse_sign_pubkey_file(&content, path) {
+            Some(r) => r,
+            None    => { self.km_contact_error = Some("No valid signing key found in file.".into()); return; }
+        };
+        if let Some(c) = self.contacts.get_mut(contact_index) {
+            c.signing_verifying_key = Some(Box::new(vk));
+            save_contacts(&self.contacts);
+            self.km_contact_error = None;
+        }
+    }
+
+    /// Check the signature on a file against the current contact trust store.
+    pub fn check_and_store_sig_status(&mut self, path: &std::path::Path) {
+        self.last_sig_status = Some(arsenic::arsenic_check_signature(path, &self.contacts));
     }
 
     /// Export the public parts of keypair `index` as a `.pubkey` file via a save dialog.
@@ -660,6 +709,14 @@ impl eframe::App for CryptyApp {
         }
 
         if let Some((files, statuses, success_label)) = job_completed {
+            // After decrypt, check the signature on the first file against the trust store.
+            if self.mode == Mode::Decrypt {
+                if let Some(path) = files.first() {
+                    self.check_and_store_sig_status(path);
+                }
+            } else {
+                self.last_sig_status = None;
+            }
             self.job = JobState::Completed {
                 files,
                 statuses,
