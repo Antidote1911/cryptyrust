@@ -12,6 +12,7 @@ aes-gcm-siv = "0.11"
 chacha20poly1305 = "0.10.1"
 blake3 = "1.8.5"
 rand = "0.10.1"
+getrandom = { version = "0.4", features = ["std"] }
 thiserror = "2.0.18"
 zeroize = "1.8.2"
 deoxys = "0.1"

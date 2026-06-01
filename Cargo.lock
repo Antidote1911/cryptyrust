@@ -345,6 +345,7 @@ dependencies = [
  "chacha20poly1305",
  "criterion",
  "deoxys",
+ "getrandom 0.4.2",
  "hmac",
  "ml-kem",
  "rand 0.10.1",

@@ -44,7 +44,7 @@ pub fn encapsulation_key(x25519_sk: &[u8; 32]) -> [u8; EK_LEN] {
 
 /// Encapsulate: produce a ciphertext and shared secret for the given public key.
 ///
-/// `m` is 32 bytes of fresh randomness — caller provides it (e.g. `rand::random()`).
+/// `m` is 32 bytes of fresh randomness from the OS CSPRNG — caller provides it.
 /// Using caller-supplied randomness avoids any `rand_core` version coupling.
 pub fn encaps(ek_bytes: &[u8; EK_LEN], m: &[u8; 32]) -> ([u8; CT_LEN], [u8; 32]) {
     let ek_key: Key<EncapsulationKey768> = ek_bytes.as_slice().try_into().unwrap();

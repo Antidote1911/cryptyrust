@@ -32,9 +32,11 @@ pub const fn get_version() -> &'static str {
     APP_VERSION
 }
 
-/// Return 32 cryptographically random bytes.
+/// Return 32 cryptographically random bytes drawn directly from the OS CSPRNG.
 pub fn random_bytes_32() -> [u8; 32] {
-    rand::random()
+    let mut buf = [0u8; 32];
+    getrandom::fill(&mut buf).expect("OS random number generator unavailable");
+    buf
 }
 
 /// Derive the ML-KEM-768 encapsulation (public) key from an X25519 private key.
@@ -65,7 +67,8 @@ pub fn pubkey_from_privkey(privkey: &[u8; 32]) -> [u8; 32] {
 /// The caller is responsible for storing and zeroizing it appropriately.
 pub fn generate_x25519_keypair() -> ([u8; 32], [u8; 32]) {
     use x25519_dalek::{PublicKey, StaticSecret};
-    let privkey_bytes: [u8; 32] = rand::random();
+    let mut privkey_bytes = [0u8; 32];
+    getrandom::fill(&mut privkey_bytes).expect("OS random number generator unavailable");
     let secret = StaticSecret::from(privkey_bytes);
     let pubkey = PublicKey::from(&secret);
     (privkey_bytes, *pubkey.as_bytes())

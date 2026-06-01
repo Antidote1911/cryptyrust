@@ -1,7 +1,7 @@
 use std::io::{Read, Seek, SeekFrom, Write};
 
 use argon2::{Algorithm, Argon2, Params, Version};
-use rand::random;
+use getrandom::fill as os_fill;
 use x25519_dalek::{PublicKey as X25519PublicKey, StaticSecret as X25519StaticSecret};
 use zeroize::Zeroize;
 
@@ -47,6 +47,16 @@ fn validate_kdf_params(t_cost: u32, m_cost: u32, p_cost: u32) -> Result<(), Core
         )));
     }
     Ok(())
+}
+
+// ── OS random bytes ───────────────────────────────────────────────────────────
+
+/// Fill a fixed-size array with bytes from the OS CSPRNG (no PRNG layer).
+#[inline]
+fn random_array<const N: usize>() -> [u8; N] {
+    let mut buf = [0u8; N];
+    os_fill(&mut buf).expect("OS random number generator unavailable");
+    buf
 }
 
 // ── Key / nonce derivation ────────────────────────────────────────────────────
@@ -251,14 +261,14 @@ pub(crate) fn wrap_dek_hybrid(
     dek: &[u8; 32],
 ) -> Result<HybridKeyslot, CoreErr> {
     // X25519 half
-    let ephemeral_bytes: [u8; 32] = random();
+    let ephemeral_bytes: [u8; 32] = random_array();
     let ephemeral_secret = X25519StaticSecret::from(ephemeral_bytes);
     let ephemeral_pk_x25519 = X25519PublicKey::from(&ephemeral_secret);
     let recipient_x25519_pk = X25519PublicKey::from(recipient.x25519);
     let ss_x25519 = ephemeral_secret.diffie_hellman(&recipient_x25519_pk);
 
     // ML-KEM-768 half
-    let m: [u8; 32] = random();
+    let m: [u8; 32] = random_array();
     let (mlkem_ct, ss_mlkem) = hybrid_kem::encaps(&recipient.mlkem, &m);
 
     // Hybrid wrapping key
@@ -266,7 +276,7 @@ pub(crate) fn wrap_dek_hybrid(
         ephemeral_pk_x25519.as_bytes(), &mlkem_ct, ss_x25519.as_bytes(), &ss_mlkem,
     );
 
-    let kek_nonce: [u8; 12] = random();
+    let kek_nonce: [u8; 12] = random_array();
     let wrapped = cipher_dispatch::envelope_encrypt(hdr_cipher, &wrapping_key, &kek_nonce, &[], dek)?;
     let mut wrapped_dek = [0u8; WRAPPED_DEK_LEN];
     wrapped_dek.copy_from_slice(&wrapped);
@@ -438,10 +448,10 @@ where
     R: Read,
     W: Write + Seek,
 {
-    let salt: [u8; 16] = random();
-    let file_base_nonce: [u8; 24] = random();
-    let kek_nonce: [u8; 12] = random();
-    let mut dek: [u8; 32] = random();
+    let salt: [u8; 16] = random_array();
+    let file_base_nonce: [u8; 24] = random_array();
+    let kek_nonce: [u8; 12] = random_array();
+    let mut dek: [u8; 32] = random_array();
 
     let (block_size, block_size_id) = select_block_params(filesize);
     let pld_cipher = params.pld_cipher;
@@ -794,8 +804,8 @@ where
         return Err(CoreErr::DecryptionError);
     }
 
-    let new_salt: [u8; 16] = random();
-    let new_kek_nonce: [u8; 12] = random();
+    let new_salt: [u8; 16] = random_array();
+    let new_kek_nonce: [u8; 12] = random_array();
     let kek_new = derive_kek(
         new_password.expose().as_bytes(),
         &new_salt,
