@@ -1,6 +1,6 @@
 # Maintainer: Fabrice Corraire <antidote1911@gmail.com>
 pkgname=cryptyrust
-pkgver=1.5.6
+pkgver=1.5.7
 pkgrel=1
 pkgdesc="Post-quantum file encryption with a drag-and-drop GUI, CLI, and hybrid X25519+ML-KEM-768 key management"
 arch=('x86_64' 'aarch64')

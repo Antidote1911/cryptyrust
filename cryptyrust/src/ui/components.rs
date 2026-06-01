@@ -705,6 +705,7 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
     let mut do_delete_signing_key: Option<usize> = None;
     let mut do_export_sign_pubkey: Option<usize> = None;
     let mut do_import_sign_pubkey_for: Option<usize> = None;
+    let mut do_import_sigpub_global = false;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
 
@@ -804,7 +805,17 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Contacts").strong().size(14.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("📥 Import from file")
+                if ui.button("📥 Import .sigpub")
+                    .on_hover_text(
+                        "Import a contact's signing public key (.sigpub)\n\
+                         so their signatures are recognized when decrypting"
+                    )
+                    .clicked()
+                {
+                    do_import_sigpub_global = true;
+                }
+                ui.add_space(4.0);
+                if ui.button("📥 Import contact (.pubkey)")
                     .on_hover_text("Import a contact from a .pubkey or .key file\n(drag-and-drop also works)")
                     .clicked()
                 {
@@ -1055,6 +1066,7 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
     if let Some(i) = do_delete_signing_key     { app.km_delete_signing_key(i); }
     if let Some(i) = do_export_sign_pubkey     { app.km_export_sign_pubkey(i); }
     if let Some(i) = do_import_sign_pubkey_for { app.km_import_sign_pubkey_for_contact(i); }
+    if do_import_sigpub_global                 { app.km_import_sigpub_global(); }
 }
 
 /// Secret key reveal popup.  Call every frame when `app.km_show_privkey` is Some.

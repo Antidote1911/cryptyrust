@@ -530,9 +530,53 @@ impl CryptyApp {
         }
     }
 
-    /// Check the signature on a file against the current contact trust store.
+    /// Check the signature on a file against own signing keys then the contact trust store.
     pub fn check_and_store_sig_status(&mut self, path: &std::path::Path) {
+        // Read the embedded verifying key first.
+        let vk = match arsenic::arsenic_read_verifying_key(path) {
+            Some(v) => v,
+            None    => { self.last_sig_status = Some(arsenic::SignatureStatus::NotSigned); return; }
+        };
+        // 1. Check own signing keys (self-signed files).
+        for sk in &self.signing_keys {
+            if sk.verifying_key.as_slice() == vk.as_slice() {
+                self.last_sig_status = Some(arsenic::SignatureStatus::SignedByKnown(
+                    format!("{} (you)", sk.name),
+                ));
+                return;
+            }
+        }
+        // 2. Check trusted contacts.
         self.last_sig_status = Some(arsenic::arsenic_check_signature(path, &self.contacts));
+    }
+
+    /// Import a .sigpub file and attach the verifying key to a contact by name,
+    /// or add a new contact with only a signing key (for future key exchange).
+    pub fn km_import_sigpub_global(&mut self) {
+        let Some(path) = rfd::FileDialog::new()
+            .add_filter("Signing public key", &["sigpub"])
+            .set_title("Import signing public key (.sigpub)")
+            .pick_file()
+        else { return };
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c)  => c,
+            Err(e) => { self.km_contact_error = Some(format!("Cannot read file: {e}")); return; }
+        };
+        let (name, vk) = match arsenic::keystore::parse_sign_pubkey_file(&content, path) {
+            Some(r) => r,
+            None    => { self.km_contact_error = Some("No valid signing key found in this file.".into()); return; }
+        };
+        // Attach to existing contact with same name (case-insensitive).
+        if let Some(c) = self.contacts.iter_mut().find(|c| c.name.eq_ignore_ascii_case(&name)) {
+            c.signing_verifying_key = Some(Box::new(vk));
+            save_contacts(&self.contacts);
+            self.km_contact_error = Some(format!("✓ Signing key added to contact \"{name}\""));
+        } else {
+            self.km_contact_error = Some(format!(
+                "No contact named \"{name}\" found. Add them as a contact first, then import their .sigpub."
+            ));
+        }
     }
 
     /// Export the public parts of keypair `index` as a `.pubkey` file via a save dialog.
