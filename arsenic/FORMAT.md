@@ -67,13 +67,17 @@ Offset  Size  Field                Description
 ## 4. HeaderMAC (bytes 0x4D – 0x6C, 32 bytes)
 
 ```
-KEK       = Argon2id(password, salt, t_cost, m_cost, p_cost)  → 32 bytes
-HeaderMAC = HMAC-SHA256( KEK[32], pre_mac[77] )               → 32 bytes
+KEK       = Argon2id(password, salt, t_cost, m_cost, p_cost)   → 32 bytes
+HeaderMAC = BLAKE3_keyed_hash( key=KEK[32], data=pre_mac[77] ) → 32 bytes
 ```
+
+BLAKE3 is used throughout the format for all internal derivations; the
+HeaderMAC uses it for consistency (replaces the former HMAC-SHA256).
+BLAKE3's keyed-hash comparison is constant-time.
 
 The HeaderMAC is keyed with the full KEK, so every password attempt
 costs the full Argon2id derivation. A wrong password produces a wrong KEK
-whose HMAC does not match — the mismatch is detected before any AEAD
+whose MAC does not match — the mismatch is detected before any AEAD
 decryption is attempted.
 
 **DoS protection:** before invoking Argon2id the implementation validates
@@ -177,11 +181,12 @@ ProtectedMetadata = AEAD_hdr( MetaKey, nonce_env(MetaNonce), [], meta_tlv )
 
 | Tag    | Length | Value                                  |
 |--------|--------|----------------------------------------|
-| `0x02` | 32     | MerkleRoot (BLAKE3 root)               |
-| `0x03` | 8      | OriginalSize (u64 LE)                  |
-| `0x04` | 8      | CompressedSize (u64 LE, = OriginalSize)|
-| `0x05` | 1      | BlockSizeId                            |
-| `0x06` | 1      | MerkleAlgoId = `0x01`                  |
+| `0x02` | 32     | MerkleRoot (BLAKE3 root)   |
+| `0x03` | 8      | OriginalSize (u64 LE)      |
+| `0x05` | 1      | BlockSizeId                |
+| `0x06` | 1      | MerkleAlgoId = `0x01`      |
+
+Tag `0x04` (CompressedSize) was removed — it always equalled OriginalSize (no compression implemented).
 
 **Optional TLV fields:**
 
@@ -205,7 +210,7 @@ header_total_size = PUB_HEADER_LEN(109)
 
 | Configuration             | Header size                 |
 |---------------------------|-----------------------------|
-| Minimum (0 keyslots)      | **237 bytes**               |
+| Minimum (0 keyslots)      | **227 bytes**               |
 | 1 hybrid recipient        | 1 417 bytes                 |
 | N hybrid recipients       | 237 + N × 1 180 bytes       |
 | Maximum (256 keyslots)    | ~303 KiB                    |
@@ -284,8 +289,8 @@ All produce a **16-byte** tag. `hdr_cipher_id` and `pld_cipher_id` are independe
 | Algorithm          | Effective nonce | Procedure |
 |--------------------|-----------------|-----------|
 | AES-256-GCM-SIV    | 12 bytes        | `kek_nonce[0..12]` directly |
-| Deoxys-II-256      | 15 bytes        | `BLAKE3_derive_key("Arsenic V1 KEK Nonce DeoxysII256", kek_nonce‖0×20)[0..15]` |
-| XChaCha20-Poly1305 | 24 bytes        | `BLAKE3_derive_key("Arsenic V1 KEK Nonce XChaCha20",   kek_nonce‖0×20)[0..24]` |
+| Deoxys-II-256      | 15 bytes        | `BLAKE3_derive_key("Arsenic V1 KEK Nonce DeoxysII256", kek_nonce[12])[0..15]` |
+| XChaCha20-Poly1305 | 24 bytes        | `BLAKE3_derive_key("Arsenic V1 KEK Nonce XChaCha20",   kek_nonce[12])[0..24]` |
 
 ### 9.3 Block Nonce Truncation (24 derived bytes)
 
@@ -303,7 +308,7 @@ All produce a **16-byte** tag. `hdr_cipher_id` and `pld_cipher_id` are independe
 password
   │
   ├── Argon2id(t=1, m=8192Ki, p=1, salt)    → PreKey[32]
-  │         └── HMAC-SHA256(PreKey, pre_mac[77])   → HeaderMAC[32]
+  │         └── BLAKE3_keyed_hash(KEK, pre_mac[77])   → HeaderMAC[32]
   │
   └── Argon2id(t_cost, m_cost, p_cost, salt) → KEK[32]
             └── AEAD_hdr(KEK, nonce_env(kek_nonce), [], DEK) → WrappedDEK[48]
@@ -345,13 +350,13 @@ Offset     Size  Content
 0x000029    24   file_base_nonce  : [24 random bytes]
 0x000041    12   kek_nonce        : [12 random bytes]
 ──────── end pre-MAC section: 77 bytes ──────────────────────────────────────
-0x00004D    32   HeaderMAC        : HMAC-SHA256(PreKey, pre_mac[77])
+0x00004D    32   HeaderMAC        : BLAKE3_keyed_hash(KEK, pre_mac[77])
 ──────── end public header: 109 bytes ───────────────────────────────────────
-0x00006D    48   WrappedDEK       : AEAD_hdr(KEK, ...)
+0x00006D    48   WrappedDEK       : AEAD_hdr(KEK, aad="arsenic-v1-wrapped-dek", DEK)
 0x00009D     4   hybrid_count     : 00 00 00 00
-0x0000A1    76   ProtectedMetadata: AEAD_hdr(MetaKey, ..., TLV[60]) + tag[16]
-──────── end header: 237 bytes ──────────────────────────────────────────────
-0x0000ED     ∞   Payload (consecutive blocks)
+0x0000A1    66   ProtectedMetadata: AEAD_hdr(MetaKey, aad="arsenic-v1-protected-meta", TLV[50]) + tag[16]
+──────── end header: 227 bytes ──────────────────────────────────────────────
+0x0000E3     ∞   Payload (consecutive blocks)
 ─────────────────────────────────────────────────────────────────────────────
 ```
 

@@ -49,6 +49,14 @@ fn validate_kdf_params(t_cost: u32, m_cost: u32, p_cost: u32) -> Result<(), Core
     Ok(())
 }
 
+// ── Domain AAD for envelope AEAD operations ───────────────────────────────────
+// Binding a non-empty domain string as AAD provides explicit separation between
+// the three distinct contexts in which envelope_encrypt/decrypt is called.
+
+const AAD_SYM_WRAPPED_DEK:    &[u8] = b"arsenic-v1-wrapped-dek";
+const AAD_HYBRID_WRAPPED_DEK: &[u8] = b"arsenic-v1-hybrid-wrapped-dek";
+const AAD_PROTECTED_META:     &[u8] = b"arsenic-v1-protected-meta";
+
 // ── OS random bytes ───────────────────────────────────────────────────────────
 
 /// Fill a fixed-size array with bytes from the OS CSPRNG (no PRNG layer).
@@ -277,7 +285,7 @@ pub(crate) fn wrap_dek_hybrid(
     );
 
     let kek_nonce: [u8; 12] = random_array();
-    let wrapped = cipher_dispatch::envelope_encrypt(hdr_cipher, &wrapping_key, &kek_nonce, &[], dek)?;
+    let wrapped = cipher_dispatch::envelope_encrypt(hdr_cipher, &wrapping_key, &kek_nonce, AAD_HYBRID_WRAPPED_DEK, dek)?;
     let mut wrapped_dek = [0u8; WRAPPED_DEK_LEN];
     wrapped_dek.copy_from_slice(&wrapped);
 
@@ -315,7 +323,7 @@ pub fn find_slot_for_privkey<R: Read>(
             &slot.ephemeral_x25519, &slot.mlkem_ct, ss_x25519.as_bytes(), &ss_mlkem,
         );
         if cipher_dispatch::envelope_decrypt(
-            hdr_cipher, &wrapping_key, &slot.kek_nonce, &[], &slot.wrapped_dek,
+            hdr_cipher, &wrapping_key, &slot.kek_nonce, AAD_HYBRID_WRAPPED_DEK, &slot.wrapped_dek,
         ).is_ok() {
             return Ok(Some(slot_idx));
         }
@@ -364,7 +372,7 @@ pub(crate) fn unwrap_dek_hybrid(
         );
 
         match cipher_dispatch::envelope_decrypt(
-            hdr_cipher, &wrapping_key, &slot.kek_nonce, &[], &slot.wrapped_dek,
+            hdr_cipher, &wrapping_key, &slot.kek_nonce, AAD_HYBRID_WRAPPED_DEK, &slot.wrapped_dek,
         ) {
             Ok(dek_vec) if dek_vec.len() == 32 => {
                 let mut dek = [0u8; 32];
@@ -405,7 +413,7 @@ fn decrypt_envelope_symmetric(
         hdr_cipher,
         kek,
         kek_nonce,
-        &[],
+        AAD_SYM_WRAPPED_DEK,
         &envelope.wrapped_dek,
     )?;
     if dek_vec.len() != 32 {
@@ -425,7 +433,7 @@ fn decrypt_protected_meta(
     let meta_key = derive_meta_key(&dek);
     let meta_nonce = derive_meta_nonce(&dek);
     let meta_pt =
-        cipher_dispatch::envelope_decrypt(hdr_cipher, &meta_key, &meta_nonce, &[], protected_meta)?;
+        cipher_dispatch::envelope_decrypt(hdr_cipher, &meta_key, &meta_nonce, AAD_PROTECTED_META, protected_meta)?;
     deserialize_meta_tlv(&meta_pt, dek)
 }
 
@@ -519,8 +527,7 @@ where
     let env = EnvelopeContent {
         dek,
         merkle_root: root,
-        original_size: filesize,
-        compressed_size: total_read,
+        original_size: total_read,
         block_size_id,
         merkle_algo_id: MERKLE_V1,
         filename: meta.filename.clone(),
@@ -538,7 +545,7 @@ where
     )?;
 
     let wrapped_dek_vec =
-        cipher_dispatch::envelope_encrypt(params.hdr_cipher, kek.expose(), &kek_nonce, &[], &dek)?;
+        cipher_dispatch::envelope_encrypt(params.hdr_cipher, kek.expose(), &kek_nonce, AAD_SYM_WRAPPED_DEK, &dek)?;
     let mut wrapped_dek = [0u8; WRAPPED_DEK_LEN];
     wrapped_dek.copy_from_slice(&wrapped_dek_vec);
 
@@ -550,7 +557,7 @@ where
     let meta_key = derive_meta_key(&dek);
     let meta_nonce = derive_meta_nonce(&dek);
     let protected_meta =
-        cipher_dispatch::envelope_encrypt(params.hdr_cipher, &meta_key, &meta_nonce, &[], &meta_tlv)?;
+        cipher_dispatch::envelope_encrypt(params.hdr_cipher, &meta_key, &meta_nonce, AAD_PROTECTED_META, &meta_tlv)?;
 
     let enc_envelope = build_envelope_region(&wrapped_dek, &hybrid_keyslots, &protected_meta);
 
@@ -637,7 +644,7 @@ where
     let block_size = block_size_from_id(env.block_size_id)?;
     let dek = env.dek;
     let file_base_nonce = pub_hdr.file_base_nonce;
-    let num_blocks = env.compressed_size.div_ceil(block_size as u64);
+    let num_blocks = env.original_size.div_ceil(block_size as u64);
     let payload_start = pub_hdr.header_total_size as u64;
 
     // ── Pass 1: verify Merkle root ────────────────────────────────────────
@@ -647,7 +654,7 @@ where
     let mut leaves: Vec<[u8; 32]> = Vec::with_capacity(num_blocks as usize);
     for block_index in 0..num_blocks {
         let enc_block = read_one_enc_block(
-            input, block_index, num_blocks, block_size, env.compressed_size,
+            input, block_index, num_blocks, block_size, env.original_size,
         )?;
         leaves.push(merkle_leaf(&enc_block));
     }
@@ -664,7 +671,7 @@ where
             return Err(CoreErr::Cancelled);
         }
         let enc_block = read_one_enc_block(
-            input, block_index, num_blocks, block_size, env.compressed_size,
+            input, block_index, num_blocks, block_size, env.original_size,
         )?;
         let block_key = derive_block_key(&dek, block_index);
         let block_nonce = derive_block_nonce(&file_base_nonce, block_index);
@@ -722,7 +729,7 @@ where
 
     let block_size = block_size_from_id(env.block_size_id)?;
     let file_base_nonce = pub_hdr.file_base_nonce;
-    let num_blocks = env.compressed_size.div_ceil(block_size as u64);
+    let num_blocks = env.original_size.div_ceil(block_size as u64);
     let payload_start = pub_hdr.header_total_size as u64;
 
     // ── Pass 1: verify Merkle root ────────────────────────────────────────
@@ -730,7 +737,7 @@ where
     let mut leaves: Vec<[u8; 32]> = Vec::with_capacity(num_blocks as usize);
     for block_index in 0..num_blocks {
         let enc_block = read_one_enc_block(
-            input, block_index, num_blocks, block_size, env.compressed_size,
+            input, block_index, num_blocks, block_size, env.original_size,
         )?;
         leaves.push(merkle_leaf(&enc_block));
     }
@@ -747,7 +754,7 @@ where
             return Err(CoreErr::Cancelled);
         }
         let enc_block = read_one_enc_block(
-            input, block_index, num_blocks, block_size, env.compressed_size,
+            input, block_index, num_blocks, block_size, env.original_size,
         )?;
         let block_key = derive_block_key(&dek, block_index);
         let block_nonce = derive_block_nonce(&file_base_nonce, block_index);
@@ -821,7 +828,7 @@ where
         hdr_cipher,
         kek_old.expose(),
         &pub_hdr.kek_nonce,
-        &[],
+        AAD_SYM_WRAPPED_DEK,
         &envelope.wrapped_dek,
     )?;
 
@@ -829,7 +836,7 @@ where
         hdr_cipher,
         kek_new.expose(),
         &new_kek_nonce,
-        &[],
+        AAD_SYM_WRAPPED_DEK,
         &dek_vec,
     )?;
     dek_vec.zeroize();
@@ -918,7 +925,7 @@ pub fn build_header_with_added_recipient<R: Read + Seek>(
         hdr_cipher,
         kek.expose(),
         &pub_hdr.kek_nonce,
-        &[],
+        AAD_SYM_WRAPPED_DEK,
         &envelope.wrapped_dek,
     )?;
     if dek_vec.len() != 32 {

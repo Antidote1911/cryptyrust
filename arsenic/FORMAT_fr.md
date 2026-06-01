@@ -31,7 +31,7 @@ Le champ `header_total_size` (u32 LE à l'offset 0x09) encode la longueur exacte
 ┌─────────────────────────────────────────────┐  offset 0x00
 │  Section pré-MAC          77 octets         │  couverts par le HeaderMAC
 ├─────────────────────────────────────────────┤  offset 0x4D
-│  HeaderMAC                32 octets         │  HMAC-SHA256
+│  HeaderMAC                32 octets         │  BLAKE3_keyed_hash(KEK, pré-MAC)
 ├─────────────────────────────────────────────┤  offset 0x6D  (PUB_HEADER_LEN = 109)
 │  Région d'enveloppe       variable          │  clés wrappées + métadonnées chiffrées
 └─────────────────────────────────────────────┘  offset header_total_size
@@ -68,12 +68,12 @@ Offset  Taille  Champ                Description
 
 ```
 KEK       = Argon2id(password, salt, t_cost, m_cost, p_cost)  → 32 oct.
-HeaderMAC = HMAC-SHA256( KEK[32], pré_mac[77] )               → 32 oct.
+HeaderMAC = BLAKE3_keyed_hash( clé=KEK[32], données=pré_mac[77] ) → 32 oct.
 ```
 
 Le HeaderMAC est chiffré avec le KEK complet, donc chaque tentative de mot
 de passe coûte la dérivation Argon2id entière. Un mauvais mot de passe produit
-un KEK incorrect dont le HMAC ne correspond pas — la non-concordance est
+un KEK incorrect dont le MAC ne correspond pas — la non-concordance est
 détectée avant toute tentative de déchiffrement AEAD.
 
 **Protection DoS :** avant d'invoquer Argon2id, l'implémentation valide que les
@@ -177,11 +177,12 @@ ProtectedMetadata = AEAD_hdr( MetaKey, nonce_env(MetaNonce), [], meta_tlv )
 
 | Tag    | Longueur | Valeur                                 |
 |--------|----------|----------------------------------------|
-| `0x02` | 32       | MerkleRoot (racine BLAKE3)             |
-| `0x03` | 8        | OriginalSize (u64 LE)                  |
-| `0x04` | 8        | CompressedSize (u64 LE, = OriginalSize)|
-| `0x05` | 1        | BlockSizeId                            |
-| `0x06` | 1        | MerkleAlgoId = `0x01`                  |
+| `0x02` | 32  | MerkleRoot (racine BLAKE3) |
+| `0x03` | 8   | OriginalSize (u64 LE)      |
+| `0x05` | 1   | BlockSizeId                |
+| `0x06` | 1   | MerkleAlgoId = `0x01`      |
+
+Tag `0x04` (CompressedSize) supprimé — toujours égal à OriginalSize (pas de compression).
 
 **Champs TLV optionnels :**
 
@@ -205,9 +206,9 @@ header_total_size = PUB_HEADER_LEN(109)
 
 | Configuration             | Taille de l'en-tête         |
 |---------------------------|-----------------------------|
-| Minimum (0 keyslot)       | **237 octets**              |
-| 1 destinataire hybride    | 1 417 octets                |
-| N destinataires hybrides  | 237 + N × 1 180 octets      |
+| Minimum (0 keyslot)       | **227 octets**              |
+| 1 destinataire hybride    | 1 407 octets                |
+| N destinataires hybrides  | 227 + N × 1 180 octets      |
 | Maximum (256 keyslots)    | ~303 KiB                    |
 
 Limite : `MAX_ASYM_KEYSLOTS = 256`, `MAX_HEADER_TOTAL_SIZE = 64 MiB`.
@@ -284,8 +285,8 @@ Tous produisent un tag de **16 octets**. `hdr_cipher_id` et `pld_cipher_id` sont
 | Algorithme         | Nonce effectif | Procédé |
 |--------------------|----------------|---------|
 | AES-256-GCM-SIV    | 12 oct.        | `kek_nonce[0..12]` directement |
-| Deoxys-II-256      | 15 oct.        | `BLAKE3_derive_key("Arsenic V1 KEK Nonce DeoxysII256", kek_nonce‖0×20)[0..15]` |
-| XChaCha20-Poly1305 | 24 oct.        | `BLAKE3_derive_key("Arsenic V1 KEK Nonce XChaCha20",   kek_nonce‖0×20)[0..24]` |
+| Deoxys-II-256      | 15 oct.        | `BLAKE3_derive_key("Arsenic V1 KEK Nonce DeoxysII256", kek_nonce[12])[0..15]` |
+| XChaCha20-Poly1305 | 24 oct.        | `BLAKE3_derive_key("Arsenic V1 KEK Nonce XChaCha20",   kek_nonce[12])[0..24]` |
 
 ### 9.3 Troncature du nonce de bloc (24 octets dérivés)
 
@@ -302,11 +303,10 @@ Tous produisent un tag de **16 octets**. `hdr_cipher_id` et `pld_cipher_id` sont
 ```
 mot_de_passe
   │
-  ├── Argon2id(t=1, m=8192Ki, p=1, salt)    → PreKey[32]
-  │         └── HMAC-SHA256(PreKey, pré_mac[77])   → HeaderMAC[32]
-  │
   └── Argon2id(t_cost, m_cost, p_cost, salt) → KEK[32]
-            └── AEAD_hdr(KEK, nonce_env(kek_nonce), [], DEK) → WrappedDEK[48]
+        ├── BLAKE3_keyed_hash(KEK, pré_mac[77])                 → HeaderMAC[32]
+        └── AEAD_hdr(KEK, nonce_env(kek_nonce),
+                     aad="arsenic-v1-wrapped-dek", DEK)         → WrappedDEK[48]
 
 aléatoire → DEK[32]
   ├── BLAKE3_derive_key("Arsenic V1 Metadata Key", DEK)           → MetaKey[32]
@@ -345,13 +345,13 @@ Offset     Taille  Contenu
 0x000029    24     file_base_nonce  : [24 oct. aléatoires]
 0x000041    12     kek_nonce        : [12 oct. aléatoires]
 ──────── fin section pré-MAC : 77 octets ────────────────────────────────────
-0x00004D    32     HeaderMAC        : HMAC-SHA256(PreKey, pré_mac[77])
+0x00004D    32     HeaderMAC        : BLAKE3_keyed_hash(KEK, pré_mac[77])
 ──────── fin en-tête public : 109 octets ────────────────────────────────────
-0x00006D    48     WrappedDEK       : AEAD_hdr(KEK, ...)
+0x00006D    48     WrappedDEK       : AEAD_hdr(KEK, aad="arsenic-v1-wrapped-dek", DEK)
 0x00009D     4     hybrid_count     : 00 00 00 00
-0x0000A1    76     ProtectedMetadata: AEAD_hdr(MetaKey, ..., TLV[60]) + tag[16]
-──────── fin en-tête : 237 octets ───────────────────────────────────────────
-0x0000ED     ∞     Payload (blocs consécutifs)
+0x0000A1    66     ProtectedMetadata: AEAD_hdr(MetaKey, aad="arsenic-v1-protected-meta", TLV[50]) + tag[16]
+──────── fin en-tête : 227 octets ───────────────────────────────────────────
+0x0000E3     ∞     Payload (blocs consécutifs)
 ─────────────────────────────────────────────────────────────────────────────
 ```
 
@@ -406,9 +406,8 @@ Un seul fichier `.key` (32 octets encodés en `ARSENIC-SECRET-KEY-1{bech32}`) su
 | Intégrité par bloc                | Tag AEAD 16 octets par bloc                                     |
 | Intégrité fichier entier          | Racine Merkle BLAKE3 vérifiée avant toute écriture plaintext    |
 | Ordre des blocs                   | Index lié comme AAD dans chaque AEAD de bloc                    |
-| Intégrité de l'en-tête            | HMAC-SHA256 sur 77 octets (paramètres KDF + IDs chiffrement)   |
-| Résistance oracle rapide          | PreKey via mini-Argon2id (~15 000 H/s sur GPU)                  |
-| Résistance DoS (paramètres KDF)   | Paramètres forgés rejetés par MAC avant tout Argon2id           |
+| Intégrité de l'en-tête            | BLAKE3_keyed_hash(KEK, 77 octets publics)                       |
+| Résistance DoS (paramètres KDF)   | Paramètres forgés rejetés par bornes avant tout Argon2id        |
 | Résistance quantique — payload    | Symmetric 256 bits : Grover exige 2¹²⁸ — déjà post-quantique   |
 | Résistance quantique — keyslots   | ML-KEM-768 (NIST niveau 3) résiste à Shor                       |
 | Défense en profondeur             | Hybride X25519+ML-KEM : une faille dans l'un ne compromet pas l'autre |

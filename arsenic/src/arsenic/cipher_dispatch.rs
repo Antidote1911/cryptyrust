@@ -24,18 +24,14 @@ use super::CipherId;
 
 /// BLAKE3-expand a 12-byte nonce to 24 bytes for XChaCha20 header use.
 fn expand_12_to_24(n: &[u8; 12]) -> [u8; 24] {
-    let mut input = [0u8; 32];
-    input[..12].copy_from_slice(n);
-    let h = blake3::derive_key("Arsenic V1 KEK Nonce XChaCha20", &input);
-    h[..24].try_into().expect("24 <= 32")
+    blake3::derive_key("Arsenic V1 KEK Nonce XChaCha20", n.as_slice())[..24]
+        .try_into().expect("24 <= 32")
 }
 
 /// BLAKE3-expand a 12-byte nonce to 15 bytes for Deoxys-II-256 header use.
 fn expand_12_to_15(n: &[u8; 12]) -> [u8; 15] {
-    let mut input = [0u8; 32];
-    input[..12].copy_from_slice(n);
-    let h = blake3::derive_key("Arsenic V1 KEK Nonce DeoxysII256", &input);
-    h[..15].try_into().expect("15 <= 32")
+    blake3::derive_key("Arsenic V1 KEK Nonce DeoxysII256", n.as_slice())[..15]
+        .try_into().expect("15 <= 32")
 }
 
 /// Encrypt the key envelope using the chosen header cipher.

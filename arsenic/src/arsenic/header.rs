@@ -1,9 +1,4 @@
-use hmac::{Hmac, KeyInit, Mac};
-use sha2::Sha256;
-
 use crate::errors::CoreErr;
-
-type HmacSha256 = Hmac<Sha256>;
 type ParsedHeader = (PublicHeader, [u8; PRE_MAC_LEN], [u8; 32], Vec<u8>);
 
 pub const MAGIC: [u8; 4] = [0x41, 0x52, 0x53, 0x4E]; // "ARSN"
@@ -75,11 +70,14 @@ pub const MAX_ASYM_KEYSLOTS: usize = 256;
 
 pub const MERKLE_V1: u8 = 0x01;
 
-pub const META_TLV_MANDATORY_PT_LEN: usize = 60;
+/// Mandatory TLV plaintext length (50 bytes):
+///   MerkleRoot(34) + OriginalSize(10) + BlockSizeId(3) + MerkleAlgoId(3)
+///   (CompressedSize removed — it always equalled OriginalSize.)
+pub const META_TLV_MANDATORY_PT_LEN: usize = 50;
 
 /// Minimum total header size (0 asymmetric keyslots, no optional metadata):
-///   PUB_HEADER_LEN(110) + WRAPPED_DEK_LEN(48) + ASYM_COUNT_LEN(4)
-///   + META_TLV_MANDATORY_PT_LEN(60) + GCM_TAG(16) = 238
+///   PUB_HEADER_LEN(109) + WRAPPED_DEK_LEN(48) + ASYM_COUNT_LEN(4)
+///   + META_TLV_MANDATORY_PT_LEN(50) + GCM_TAG(16) = 227
 pub const MIN_HEADER_TOTAL_SIZE: usize =
     PUB_HEADER_LEN + WRAPPED_DEK_LEN + ASYM_COUNT_LEN + META_TLV_MANDATORY_PT_LEN + GCM_TAG;
 
@@ -88,7 +86,7 @@ pub const MIN_HEADER_TOTAL_SIZE: usize =
 pub mod tlv_tags {
     pub const MERKLE_ROOT: u8 = 0x02;
     pub const ORIGINAL_SIZE: u8 = 0x03;
-    pub const COMPRESSED_SIZE: u8 = 0x04;
+    // 0x04 (CompressedSize) removed — always equalled OriginalSize (no compression).
     pub const BLOCK_SIZE_ID: u8 = 0x05;
     pub const MERKLE_ALGO_ID: u8 = 0x06;
     pub const FILENAME: u8 = 0x10;
@@ -164,7 +162,6 @@ pub struct EnvelopeContent {
     pub dek: [u8; 32],
     pub merkle_root: [u8; 32],
     pub original_size: u64,
-    pub compressed_size: u64,
     pub block_size_id: u8,
     pub merkle_algo_id: u8,
     pub filename: Option<String>,
@@ -204,7 +201,6 @@ pub fn serialize_meta_tlv(env: &EnvelopeContent) -> Vec<u8> {
     let mut buf = Vec::with_capacity(META_TLV_MANDATORY_PT_LEN + 32);
     tlv_push(&mut buf, tlv_tags::MERKLE_ROOT, &env.merkle_root);
     tlv_push(&mut buf, tlv_tags::ORIGINAL_SIZE, &env.original_size.to_le_bytes());
-    tlv_push(&mut buf, tlv_tags::COMPRESSED_SIZE, &env.compressed_size.to_le_bytes());
     tlv_push(&mut buf, tlv_tags::BLOCK_SIZE_ID, &[env.block_size_id]);
     tlv_push(&mut buf, tlv_tags::MERKLE_ALGO_ID, &[env.merkle_algo_id]);
     if let Some(ref s) = env.filename {
@@ -228,7 +224,6 @@ pub fn serialize_meta_tlv(env: &EnvelopeContent) -> Vec<u8> {
 pub fn deserialize_meta_tlv(buf: &[u8], dek: [u8; 32]) -> Result<EnvelopeContent, CoreErr> {
     let mut merkle_root: Option<[u8; 32]> = None;
     let mut original_size: Option<u64> = None;
-    let mut compressed_size: Option<u64> = None;
     let mut block_size_id: Option<u8> = None;
     let mut merkle_algo_id: Option<u8> = None;
     let mut filename: Option<String> = None;
@@ -256,9 +251,6 @@ pub fn deserialize_meta_tlv(buf: &[u8], dek: [u8; 32]) -> Result<EnvelopeContent
             tlv_tags::ORIGINAL_SIZE if len == 8 && original_size.is_none() => {
                 original_size = Some(u64::from_le_bytes(val.try_into().unwrap()));
             }
-            tlv_tags::COMPRESSED_SIZE if len == 8 && compressed_size.is_none() => {
-                compressed_size = Some(u64::from_le_bytes(val.try_into().unwrap()));
-            }
             tlv_tags::BLOCK_SIZE_ID if len == 1 && block_size_id.is_none() => {
                 block_size_id = Some(val[0]);
             }
@@ -274,7 +266,7 @@ pub fn deserialize_meta_tlv(buf: &[u8], dek: [u8; 32]) -> Result<EnvelopeContent
             tlv_tags::TIMESTAMP_SECS if len == 8 && timestamp_secs.is_none() => {
                 timestamp_secs = Some(u64::from_le_bytes(val.try_into().unwrap()));
             }
-            _ => {}
+            _ => {} // unknown or obsolete tags silently ignored
         }
     }
 
@@ -292,8 +284,6 @@ pub fn deserialize_meta_tlv(buf: &[u8], dek: [u8; 32]) -> Result<EnvelopeContent
             .ok_or_else(|| CoreErr::DecryptFail("TLV: missing MerkleRoot".into()))?,
         original_size: original_size
             .ok_or_else(|| CoreErr::DecryptFail("TLV: missing OriginalSize".into()))?,
-        compressed_size: compressed_size
-            .ok_or_else(|| CoreErr::DecryptFail("TLV: missing CompressedSize".into()))?,
         block_size_id: block_size_id
             .ok_or_else(|| CoreErr::DecryptFail("TLV: missing BlockSizeId".into()))?,
         merkle_algo_id,
@@ -389,20 +379,22 @@ pub fn serialize_pre_mac(hdr: &PublicHeader) -> [u8; PRE_MAC_LEN] {
     buf
 }
 
+/// Compute HeaderMAC = BLAKE3_keyed_hash(KEK, pre_mac).
+///
+/// BLAKE3 is used throughout arsenic for all internal derivations; using it here
+/// replaces the former HMAC-SHA256 and removes the sha2/hmac crates entirely.
 pub fn compute_header_mac(kek: &[u8; 32], pre_mac_bytes: &[u8; PRE_MAC_LEN]) -> [u8; 32] {
-    let mut mac = HmacSha256::new_from_slice(kek).expect("HMAC accepts any key length");
-    mac.update(pre_mac_bytes);
-    mac.finalize().into_bytes().into()
+    *blake3::keyed_hash(kek, pre_mac_bytes.as_slice()).as_bytes()
 }
 
+/// Verify HeaderMAC in constant time.
 pub fn verify_header_mac(
     kek: &[u8; 32],
     pre_mac_bytes: &[u8; PRE_MAC_LEN],
     expected_mac: &[u8; 32],
 ) -> bool {
-    let mut mac = HmacSha256::new_from_slice(kek).expect("HMAC accepts any key length");
-    mac.update(pre_mac_bytes);
-    mac.verify_slice(expected_mac).is_ok()
+    // blake3::Hash::eq is documented as constant-time.
+    blake3::keyed_hash(kek, pre_mac_bytes.as_slice()) == blake3::Hash::from(*expected_mac)
 }
 
 // ── Header assembly / parsing ─────────────────────────────────────────────────

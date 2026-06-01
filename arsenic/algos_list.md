@@ -83,27 +83,25 @@ therefore remains secure against quantum computers.
 
 ---
 
-## 2. HMAC-SHA256
+## 2. BLAKE3_keyed_hash for HeaderMAC
 
 **Role:** authenticate the file's public header (`HeaderMAC`).
 
-**Standard:** RFC 2104, NIST FIPS 198-1.
-
-**Why SHA-256 and not SHA-3 / BLAKE3?**
-SHA-256 is ubiquitous, hardware-accelerated, and its use in
-HMAC is well-analysed. BLAKE3 could have been used, but SHA-256 offers
-better interoperability and wider compatibility with external verification tools.
+BLAKE3 is already used for all internal derivations (block keys, nonces, Merkle tree).
+The HeaderMAC adopts it for consistency, eliminating the `sha2` and `hmac` crates entirely.
 
 **Construction:**
 
 ```
 KEK = Argon2id(password, salt, t_cost, m_cost, p_cost) → 32 bytes
 
-HeaderMAC = HMAC-SHA256(
+HeaderMAC = BLAKE3_keyed_hash(
     key  = KEK[32],
-    msg  = pre_mac[77 bytes]   ← all of public header except the MAC itself
+    data = pre_mac[77 bytes]   ← all of public header except the MAC itself
 )
 ```
+
+`blake3::Hash::eq` comparison is documented as constant-time.
 
 **What the MAC protects:**
 - Magic bytes and format version
@@ -116,7 +114,7 @@ HeaderMAC = HMAC-SHA256(
 configured Argon2id parameters (Interactive: 256 MiB / Sensitive: 1 GiB).
 An offline attacker must pay the full KDF cost per password attempt —
 there is no faster oracle. A wrong password produces a wrong KEK which
-fails the HMAC check before any AEAD decryption is attempted.
+fails the MAC check before any AEAD decryption is attempted.
 
 **DoS protection against forged parameters:** before running Argon2id,
 the implementation validates that the declared KDF parameters are within
@@ -124,8 +122,8 @@ safe bounds (`t_cost ≤ 64`, `m_cost ≤ 4 GiB`, `p_cost ≤ 16`). A tampered
 file with absurd parameters (e.g. t=1000, m=10 GiB) is rejected
 immediately without invoking Argon2id.
 
-**Post-quantum resistance:** HMAC-SHA256 provides 128 bits of
-post-quantum security (Grover on SHA-256 → 2¹²⁸ operations), which is sufficient.
+**Post-quantum resistance:** BLAKE3 is symmetric with 256-bit output;
+Grover reduces security to 128 effective bits — sufficient.
 
 ---
 
