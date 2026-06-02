@@ -99,15 +99,24 @@ pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bo
             );
             ui.separator();
             ui.selectable_value(&mut app.signing_key_index, None, "— None —");
-            let n = app.signing_keys.len();
+            let n = app.keys.len();
             for i in 0..n {
-                let name = app.signing_keys[i].name.clone();
-                ui.selectable_value(&mut app.signing_key_index, Some(i),
-                    format!("✍ {name}"));
+                let key = &app.keys[i];
+                let has_sign = key.signing_seed.is_some();
+                let label = if has_sign {
+                    format!("✍ {}", key.name)
+                } else {
+                    format!("⚠ {} (legacy — no signing key)", key.name)
+                };
+                let selected = app.signing_key_index == Some(i);
+                let btn = egui::Button::selectable(selected, label);
+                if ui.add_enabled(has_sign, btn).clicked() && has_sign {
+                    app.signing_key_index = Some(i);
+                }
             }
             if n == 0 {
                 ui.label(
-                    egui::RichText::new("No signing keys — generate one in Key Manager")
+                    egui::RichText::new("No keypairs — generate one in Key Manager")
                         .small().weak().italics()
                 );
             }
@@ -706,11 +715,8 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
     let mut do_confirm_delete_contact: Option<usize> = None;
     let mut do_delete_contact: Option<usize> = None;
     let mut cancel_confirm_contact = false;
-    let mut do_generate_signing_key = false;
-    let mut do_delete_signing_key: Option<usize> = None;
-    let mut do_export_sign_pubkey: Option<usize> = None;
+    let do_export_sign_pubkey: Option<usize> = None;
     let mut do_import_sign_pubkey_for: Option<usize> = None;
-    let do_import_sigpub_global = false;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
 
@@ -738,12 +744,26 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
                 .body(|mut body| {
                     for i in 0..app.keys.len() {
                         let key = &app.keys[i];
-                        let short    = pubkey_short(&key.public_key);
-                        let full_pub = encode_pubkey(&key.public_key);
-                        let pending  = app.km_confirm_delete == Some(i);
+                        let short     = pubkey_short(&key.public_key);
+                        let full_pub  = encode_pubkey(&key.public_key);
+                        let pending   = app.km_confirm_delete == Some(i);
+                        let has_sign  = key.signing_seed.is_some();
+                        let is_active = app.signing_key_index == Some(i);
 
                         body.row(30.0, |mut row| {
-                            row.col(|ui| { ui.label(&key.name); });
+                            row.col(|ui| {
+                                ui.horizontal(|ui| {
+                                    ui.label(&key.name);
+                                    let (icon, color, tip) = if is_active {
+                                        ("✍", egui::Color32::from_rgb(80,200,100), "Active identity — used to sign encrypted files")
+                                    } else if has_sign {
+                                        ("✍", ui.visuals().weak_text_color(), "Has signing key — set active in Config to use")
+                                    } else {
+                                        ("⚠", egui::Color32::from_rgb(220,160,40), "Legacy key — no signing key. Regenerate to enable signing.")
+                                    };
+                                    ui.label(egui::RichText::new(icon).color(color).small()).on_hover_text(tip);
+                                });
+                            });
                             row.col(|ui| {
                                 ui.label(egui::RichText::new(&short).monospace().weak())
                                     .on_hover_text(egui::RichText::new(&full_pub).monospace());
@@ -927,125 +947,7 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
         ui.add_space(6.0);
 
         // ════════════════════════════════════════════════════════
-        // Section 3 — Signing keys (ML-DSA-65)
-        // ════════════════════════════════════════════════════════
-        ui.label(egui::RichText::new("Signing keys  (ML-DSA-65)").strong().size(14.0));
-        ui.label(
-            egui::RichText::new(
-                "NIST FIPS 204 — signing is mandatory to encrypt. \
-                 Recipients verify the signature automatically.",
-            )
-            .small()
-            .weak(),
-        );
-        ui.add_space(4.0);
-
-        // Active signing key status banner
-        match app.signing_key_index.and_then(|i| app.signing_keys.get(i)) {
-            Some(sk) => {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(format!("✍  Active: {}", sk.name))
-                            .color(egui::Color32::from_rgb(80, 200, 100))
-                            .strong(),
-                    );
-                    ui.label(egui::RichText::new("— click \"★ Active\" on another key to switch").small().weak());
-                });
-            }
-            None => {
-                let (msg, color) = if app.signing_keys.is_empty() {
-                    ("⚠  No signing key — generate one below and activate it to encrypt.", egui::Color32::from_rgb(220, 80, 60))
-                } else {
-                    ("⚠  No signing key active — click \"Set active\" on a key below.", egui::Color32::from_rgb(220, 160, 40))
-                };
-                ui.label(egui::RichText::new(msg).color(color).strong());
-            }
-        }
-        ui.add_space(4.0);
-
-        if app.signing_keys.is_empty() {
-            ui.label(
-                egui::RichText::new("No signing keys yet — generate one below.")
-                    .weak()
-                    .italics(),
-            );
-        } else {
-            TableBuilder::new(ui)
-                .striped(true)
-                .min_scrolled_height(0.0)
-                .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-                .column(Column::initial(160.0).at_least(80.0).clip(true))
-                .column(Column::remainder().at_least(120.0))
-                .header(24.0, |mut h| {
-                    h.col(|ui| { ui.label(egui::RichText::new("Name").small().strong()); });
-                    h.col(|ui| { ui.label(egui::RichText::new("Actions").small().strong()); });
-                })
-                .body(|mut body| {
-                    for i in 0..app.signing_keys.len() {
-                        let sk = &app.signing_keys[i];
-                        let active = app.signing_key_index == Some(i);
-                        body.row(30.0, |mut row| {
-                            row.col(|ui| {
-                                let label = if active {
-                                    egui::RichText::new(format!("✍ {}", sk.name)).strong()
-                                } else {
-                                    egui::RichText::new(&sk.name)
-                                };
-                                ui.label(label);
-                            });
-                            row.col(|ui| {
-                                ui.horizontal(|ui| {
-                                    let btn_label = if active { "★ Active" } else { "Set active" };
-                                    if ui.button(btn_label)
-                                        .on_hover_text("Use this key to sign encrypted files")
-                                        .clicked()
-                                    {
-                                        app.signing_key_index =
-                                            if active { None } else { Some(i) };
-                                    }
-                                    if ui.button("📤 Export pubkey")
-                                        .on_hover_text("Save verifying key as .sigpub — share with contacts so they can verify your signatures")
-                                        .clicked()
-                                    {
-                                        do_export_sign_pubkey = Some(i);
-                                    }
-                                    if ui.add(
-                                        egui::Button::new("🗑 Delete")
-                                            .fill(egui::Color32::TRANSPARENT),
-                                    ).clicked() {
-                                        do_delete_signing_key = Some(i);
-                                    }
-                                });
-                            });
-                        });
-                    }
-                });
-        }
-
-        ui.add_space(6.0);
-        // New signing key form
-        ui.horizontal(|ui| {
-            ui.label(egui::RichText::new("New signing key:").small());
-            ui.add(
-                egui::TextEdit::singleline(&mut app.km_new_name)
-                    .hint_text("Name…")
-                    .desired_width(180.0),
-            );
-            if ui
-                .button("✍ Generate")
-                .on_hover_text("Generate a new ML-DSA-65 signing key")
-                .clicked()
-            {
-                do_generate_signing_key = true;
-            }
-        });
-        if let Some(err) = &app.km_error {
-            ui.colored_label(ui.visuals().error_fg_color, err);
-        }
-
-        ui.add_space(10.0);
-        ui.separator();
-        ui.add_space(4.0);
+        // (Signing keys are now embedded in each keypair — no separate section needed.)
 
         // ── Storage paths + security warning ─────────────────────────────
         let keys_label = keys_dir()
@@ -1084,11 +986,8 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
     if let Some(i) = do_confirm_delete_contact { app.km_confirm_delete_contact = Some(i); app.km_contact_error = None; }
     if let Some(i) = do_delete_contact         { app.km_delete_contact(i); }
     if let Some(i) = open_privkey_popup        { app.km_show_privkey = Some(i); }
-    if do_generate_signing_key                 { app.km_generate_signing_key(); }
-    if let Some(i) = do_delete_signing_key     { app.km_delete_signing_key(i); }
-    if let Some(i) = do_export_sign_pubkey     { app.km_export_sign_pubkey(i); }
+    if let Some(i) = do_export_sign_pubkey     { app.km_export_key(i); }
     if let Some(i) = do_import_sign_pubkey_for { app.km_import_sign_pubkey_for_contact(i); }
-    if do_import_sigpub_global                 { app.km_import_sigpub_global(); }
 }
 
 /// Secret key reveal popup.  Call every frame when `app.km_show_privkey` is Some.

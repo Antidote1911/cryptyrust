@@ -108,11 +108,12 @@ pub fn render_bottom_bar(app: &CryptyApp, ui: &mut egui::Ui) {
                 ui.separator();
                 // Signing key indicator — red if none active
                 let (sign_icon, sign_label, sign_color) = match app.signing_key_index
-                    .and_then(|i| app.signing_keys.get(i))
+                    .and_then(|i| app.keys.get(i))
+                    .filter(|k| k.signing_seed.is_some())
                 {
-                    Some(sk) => (
+                    Some(k) => (
                         "✍",
-                        sk.name.clone(),
+                        k.name.clone(),
                         egui::Color32::from_rgb(80, 200, 100),
                     ),
                     None => (

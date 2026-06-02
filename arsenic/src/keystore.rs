@@ -9,17 +9,20 @@ use crate::{
     generate_x25519_keypair, pubkey_from_privkey,
 };
 use crate::arsenic::hybrid_kem;
-use crate::keyfmt::{encode_mlkem_seed, decode_mlkem_seed, encode_mldsa_vk, decode_mldsa_vk};
+use crate::keyfmt::{encode_mlkem_seed, decode_mlkem_seed, encode_mldsa_vk, decode_mldsa_vk,
+    bech32_encode_upper, bech32_decode_lower};
+use ml_dsa::{MlDsa65, SigningKey as MlDsaSignKey, KeyExport, Keypair, Seed as MlDsaSeed};
 use std::path::{Path, PathBuf};
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-/// A named hybrid (X25519 + ML-KEM-768/1024) keypair stored as a `.key` file.
+/// A complete identity stored in a `.key` file: encryption keypair + ML-DSA-65 signing key.
 ///
-/// X25519 and ML-KEM entropy are **independent**: `private_key` (32 bytes) is
-/// the X25519 seed; `mlkem_seed` (64 bytes, `d||z`) is the ML-KEM seed.
-/// Legacy key files that only stored 32 bytes derive `mlkem_seed` via BLAKE3
-/// (see `hybrid_kem::seed_from_x25519`) for backward compatibility.
+/// All three components (X25519, ML-KEM, ML-DSA) are generated with independent
+/// entropy from the OS CSPRNG in a single `generate()` call.
+///
+/// Legacy files without `# sign-seed:` have `signing_seed = None`; they can still
+/// encrypt/decrypt but cannot sign.
 #[derive(Clone)]
 pub struct KeyEntry {
     pub name: String,
@@ -31,6 +34,10 @@ pub struct KeyEntry {
     pub public_key: [u8; 32],
     /// ML-KEM-768 encapsulation key (1184 bytes, derived from mlkem_seed).
     pub mlkem_public_key: Box<[u8; 1184]>,
+    /// ML-DSA-65 signing seed (32 bytes) — `None` for legacy key files.
+    pub signing_seed: Option<[u8; 32]>,
+    /// ML-DSA-65 verifying key (1952 bytes) — `None` for legacy key files.
+    pub signing_verifying_key: Option<Box<[u8; 1952]>>,
     /// Path of the `.key` file on disk (`None` before first save).
     pub file_path: Option<PathBuf>,
 }
@@ -39,18 +46,28 @@ impl KeyEntry {
     pub fn generate(name: String) -> Self {
         use crate::random_bytes_32;
         let (private_key, public_key) = generate_x25519_keypair();
-        // Independent entropy for ML-KEM — not derived from X25519.
+        // Independent entropy for ML-KEM.
         let mut mlkem_seed = [0u8; 64];
-        let d = random_bytes_32();
-        let z = random_bytes_32();
-        mlkem_seed[..32].copy_from_slice(&d);
-        mlkem_seed[32..].copy_from_slice(&z);
+        mlkem_seed[..32].copy_from_slice(&random_bytes_32());
+        mlkem_seed[32..].copy_from_slice(&random_bytes_32());
         let mlkem_public_key = Box::new(hybrid_kem::encapsulation_key_768(&mlkem_seed));
-        Self { name, private_key, mlkem_seed, public_key, mlkem_public_key, file_path: None }
+        // Independent entropy for ML-DSA-65 signing.
+        let signing_seed = random_bytes_32();
+        let sign_seed_arr: ml_dsa::Seed = signing_seed.into();
+        let sign_sk = ml_dsa::SigningKey::<ml_dsa::MlDsa65>::from_seed(&sign_seed_arr);
+        let sign_vk = <ml_dsa::SigningKey<ml_dsa::MlDsa65> as ml_dsa::Keypair>::verifying_key(&sign_sk);
+        let vk_enc = <ml_dsa::VerifyingKey<ml_dsa::MlDsa65> as ml_dsa::KeyExport>::to_bytes(&sign_vk);
+        let mut vk_arr = [0u8; 1952];
+        vk_arr.copy_from_slice(vk_enc.as_slice());
+        Self {
+            name, private_key, mlkem_seed, public_key, mlkem_public_key,
+            signing_seed: Some(signing_seed),
+            signing_verifying_key: Some(Box::new(vk_arr)),
+            file_path: None,
+        }
     }
 
     /// Build a `HybridRecipient` including both ML-KEM-768 and ML-KEM-1024 keys.
-    /// The encrypt path selects the right one based on `ArsenicParams::kem_level`.
     pub fn as_recipient(&self) -> crate::arsenic::HybridRecipient {
         let mlkem_1024 = hybrid_kem::encapsulation_key_1024(&self.mlkem_seed);
         crate::arsenic::HybridRecipient::new_with_1024(
@@ -198,7 +215,7 @@ fn is_leap(y: u64) -> bool { (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }
 /// If `signing_vk` is provided, the ML-DSA-65 verifying key is included so
 /// the recipient can both encrypt for this identity **and** verify its signatures
 /// from a single file exchange.
-pub fn serialize_pubkey(entry: &KeyEntry, signing_vk: Option<&[u8; 1952]>) -> String {
+pub fn serialize_pubkey(entry: &KeyEntry) -> String {
     let pub_enc   = encode_pubkey(&entry.public_key);
     let mlkem_enc = encode_mlkem_pubkey(&entry.mlkem_public_key);
     let mut s = format!(
@@ -208,7 +225,7 @@ pub fn serialize_pubkey(entry: &KeyEntry, signing_vk: Option<&[u8; 1952]>) -> St
          # mlkem-public-key: {mlkem_enc}\n",
         name = entry.name,
     );
-    if let Some(vk) = signing_vk {
+    if let Some(ref vk) = entry.signing_verifying_key {
         s.push_str(&format!("# sign-key: {}\n", encode_mldsa_vk(vk)));
     }
     s
@@ -255,15 +272,22 @@ pub fn parse_pubkey_file(content: &str, path: std::path::PathBuf) -> Option<Cont
 
 pub fn serialize_identity(entry: &KeyEntry) -> String {
     let ts = utc_timestamp();
-    let pub_enc = encode_pubkey(&entry.public_key);
+    let pub_enc   = encode_pubkey(&entry.public_key);
     let mlkem_enc = encode_mlkem_pubkey(&entry.mlkem_public_key);
-    let priv_enc = encode_privkey(&entry.private_key);
-    let seed_enc = encode_mlkem_seed(&entry.mlkem_seed);
-    format!(
+    let priv_enc  = encode_privkey(&entry.private_key);
+    let seed_enc  = encode_mlkem_seed(&entry.mlkem_seed);
+    let mut s = format!(
         "# created: {ts}\n# name: {name}\n# public key: {pub_enc}\n\
-         # mlkem-public-key: {mlkem_enc}\n# mlkem-seed: {seed_enc}\n{priv_enc}\n",
+         # mlkem-public-key: {mlkem_enc}\n# mlkem-seed: {seed_enc}\n",
         name = entry.name,
-    )
+    );
+    if let (Some(sign_seed), Some(ref sign_vk)) = (entry.signing_seed, &entry.signing_verifying_key) {
+        let sign_seed_enc = format!("ARSENIC-SIGN-SEED-1{}", bech32_encode_upper(&sign_seed));
+        let sign_vk_enc   = encode_mldsa_vk(sign_vk);
+        s.push_str(&format!("# sign-pub: {sign_vk_enc}\n# sign-seed: {sign_seed_enc}\n"));
+    }
+    s.push_str(&format!("{priv_enc}\n"));
+    s
 }
 
 /// Parse one identity file. Returns `None` if no private key line is found.
@@ -275,6 +299,8 @@ pub fn parse_identity(content: &str, path: PathBuf) -> Option<KeyEntry> {
     let mut public_key: Option<[u8; 32]> = None;
     let mut private_key: Option<[u8; 32]> = None;
     let mut mlkem_seed: Option<[u8; 64]> = None;
+    let mut signing_seed: Option<[u8; 32]> = None;
+    let mut signing_vk: Option<[u8; 1952]> = None;
 
     for line in content.lines() {
         let line = line.trim();
@@ -284,24 +310,47 @@ pub fn parse_identity(content: &str, path: PathBuf) -> Option<KeyEntry> {
             public_key = decode_pubkey(rest.trim());
         } else if let Some(rest) = line.strip_prefix("# mlkem-seed:") {
             mlkem_seed = decode_mlkem_seed(rest.trim());
+        } else if let Some(rest) = line.strip_prefix("# sign-pub:") {
+            signing_vk = decode_mldsa_vk(rest.trim());
+        } else if let Some(rest) = line.strip_prefix("# sign-seed:") {
+            let upper = rest.trim().to_uppercase();
+            if let Some(inner) = upper.strip_prefix("ARSENIC-SIGN-SEED-1") {
+                signing_seed = bech32_decode_lower(&inner.to_lowercase())
+                    .and_then(|v| v.try_into().ok());
+            }
         } else if !line.starts_with('#') && !line.is_empty() {
             private_key = decode_privkey(line);
         }
-        // "# mlkem-public-key:" is human-readable only; always re-derived.
     }
 
     let private_key = private_key?;
     let public_key = public_key.unwrap_or_else(|| pubkey_from_privkey(&private_key));
-    // Use stored seed if present; fall back to BLAKE3 derivation for legacy files.
     let mlkem_seed = mlkem_seed.unwrap_or_else(|| hybrid_kem::seed_from_x25519(&private_key));
     let mlkem_public_key = Box::new(hybrid_kem::encapsulation_key_768(&mlkem_seed));
+
+    // Derive sign_vk from signing_seed if vk not stored (or verify consistency).
+    let (signing_seed, signing_verifying_key) = match signing_seed {
+        Some(seed) => {
+            let vk = signing_vk.unwrap_or_else(|| {
+                let arr: MlDsaSeed = seed.into();
+                let sk = MlDsaSignKey::<MlDsa65>::from_seed(&arr);
+                let vk_enc = KeyExport::to_bytes(&Keypair::verifying_key(&sk));
+                let mut out = [0u8; 1952];
+                out.copy_from_slice(vk_enc.as_slice());
+                out
+            });
+            (Some(seed), Some(Box::new(vk)))
+        }
+        None => (None, None), // legacy key — no signing capability
+    };
+
     if name.is_empty() {
-        name = path
-            .file_stem()
-            .map(|s| s.to_string_lossy().into_owned())
-            .unwrap_or_default();
+        name = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
     }
-    Some(KeyEntry { name, private_key, mlkem_seed, public_key, mlkem_public_key, file_path: Some(path) })
+    Some(KeyEntry {
+        name, private_key, mlkem_seed, public_key, mlkem_public_key,
+        signing_seed, signing_verifying_key, file_path: Some(path),
+    })
 }
 
 /// Load an identity from a standalone file (not necessarily in the keystore).

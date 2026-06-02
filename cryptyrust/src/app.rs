@@ -11,7 +11,6 @@ use crate::file_utils::{cipher_from_key, cipher_to_key, detect_mode, Mode};
 use crate::job::{JobState, PasswordPopup};
 use crate::keystore::{
     delete_key, load_contacts, load_keystore, save_contacts, save_key, ContactEntry, KeyEntry,
-    save_signing_key, SigningKeyEntry,
 };
 use crate::ui::UI;
 
@@ -44,8 +43,6 @@ pub struct CryptyApp {
     pub kem_level: KemLevel,
     /// Index into `signing_keys` of the active signing key (None = no signature).
     pub signing_key_index: Option<usize>,
-    /// Loaded ML-DSA-65 signing keys from the signing-keys keystore.
-    pub signing_keys: Vec<arsenic::keystore::SigningKeyEntry>,
     /// Signature status of the last decrypted file.
     pub last_sig_status: Option<SignatureStatus>,
     pub show_about: bool,
@@ -138,7 +135,6 @@ impl CryptyApp {
             pld_cipher,
             kem_level,
             signing_key_index: None,
-            signing_keys: arsenic::keystore::load_signing_keystore(),
             last_sig_status: None,
             show_about: false,
             dark_mode,
@@ -276,13 +272,22 @@ impl CryptyApp {
 
     pub fn validate_and_start(&mut self, ctx: &egui::Context) {
         // Signing is mandatory for encryption.
-        if self.mode == Mode::Encrypt && self.signing_key_index.is_none() {
-            self.pw_error = Some(if self.signing_keys.is_empty() {
-                "Signing is required — generate a signing key in Key Manager first.".into()
-            } else {
-                "Signing is required — select a signing key in the Config menu.".into()
-            });
-            return;
+        if self.mode == Mode::Encrypt {
+            let has_signing = self.signing_key_index
+                .and_then(|i| self.keys.get(i))
+                .and_then(|k| k.signing_seed)
+                .is_some();
+            if !has_signing {
+                self.pw_error = Some(if self.keys.is_empty() {
+                    "Signing is required — generate a keypair in Key Manager first.".into()
+                } else if self.signing_key_index.is_none() {
+                    "Signing is required — select your identity in the Config menu.".into()
+                } else {
+                    "Signing is required — this keypair is legacy (no signing key). \
+                     Regenerate it in Key Manager.".into()
+                });
+                return;
+            }
         }
 
         let n_sel = self.pw_selected_own_keys.iter().filter(|&&s| s).count()
@@ -463,60 +468,6 @@ impl CryptyApp {
     }
 
     /// Generate a new ML-DSA-65 signing key and save it to the signing-keys keystore.
-    pub fn km_generate_signing_key(&mut self) {
-        let name = self.km_new_name.trim().to_string();
-        if name.is_empty() {
-            self.km_error = Some("Name cannot be empty.".into());
-            return;
-        }
-        if self.signing_keys.iter().any(|k| k.name == name) {
-            self.km_error = Some(format!("A signing key named \"{name}\" already exists."));
-            return;
-        }
-        let mut entry = SigningKeyEntry::generate(name);
-        if let Err(e) = save_signing_key(&mut entry) {
-            self.km_error = Some(format!("Could not save signing key: {e}"));
-            return;
-        }
-        self.signing_keys.push(entry);
-        self.km_new_name.clear();
-        self.km_error = None;
-    }
-
-    /// Delete the signing key at `index` and remove its `.sigkey` file.
-    pub fn km_delete_signing_key(&mut self, index: usize) {
-        if index < self.signing_keys.len() {
-            let entry = &self.signing_keys[index];
-            if let Some(ref path) = entry.file_path {
-                let _ = std::fs::remove_file(path);
-            }
-            // Adjust active signing key index.
-            if self.signing_key_index == Some(index) {
-                self.signing_key_index = None;
-            } else if let Some(i) = self.signing_key_index {
-                if i > index { self.signing_key_index = Some(i - 1); }
-            }
-            self.signing_keys.remove(index);
-        }
-    }
-
-    /// Export the ML-DSA-65 verifying key of signing key `index` as a `.sigpub` file.
-    pub fn km_export_sign_pubkey(&mut self, index: usize) {
-        let Some(entry) = self.signing_keys.get(index) else { return };
-        let content  = arsenic::keystore::serialize_sign_pubkey(entry);
-        let filename = format!("{}.sigpub", entry.name);
-        if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Signing public key", &["sigpub"])
-            .set_file_name(&filename)
-            .save_file()
-        {
-            match std::fs::write(&path, &content) {
-                Ok(()) => self.km_error = Some(format!("✓ Exported to {}", path.display())),
-                Err(e) => self.km_error = Some(format!("Export failed: {e}")),
-            }
-        }
-    }
-
     /// Open a `.sigpub` file and attach its verifying key to the contact at `contact_index`.
     pub fn km_import_sign_pubkey_for_contact(&mut self, contact_index: usize) {
         let Some(path) = rfd::FileDialog::new()
@@ -547,46 +498,19 @@ impl CryptyApp {
             Some(v) => v,
             None    => { self.last_sig_status = Some(arsenic::SignatureStatus::NotSigned); return; }
         };
-        // 1. Check own signing keys (self-signed files).
-        for sk in &self.signing_keys {
-            if sk.verifying_key.as_slice() == vk.as_slice() {
-                self.last_sig_status = Some(arsenic::SignatureStatus::SignedByKnown(
-                    format!("{} (you)", sk.name),
-                ));
-                return;
+        // 1. Check own keypairs (self-signed files).
+        for key in &self.keys {
+            if let Some(ref own_vk) = key.signing_verifying_key {
+                if own_vk.as_slice() == vk.as_slice() {
+                    self.last_sig_status = Some(arsenic::SignatureStatus::SignedByKnown(
+                        format!("{} (you)", key.name),
+                    ));
+                    return;
+                }
             }
         }
         // 2. Check trusted contacts.
         self.last_sig_status = Some(arsenic::arsenic_check_signature(path, &self.contacts));
-    }
-
-    /// Import a .sigpub file and attach the verifying key to a contact by name,
-    /// or add a new contact with only a signing key (for future key exchange).
-    pub fn km_import_sigpub_global(&mut self) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Signing public key", &["sigpub"])
-            .set_title("Import signing public key (.sigpub)")
-            .pick_file()
-        else { return };
-
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c)  => c,
-            Err(e) => { self.km_contact_error = Some(format!("Cannot read file: {e}")); return; }
-        };
-        let (name, vk) = match arsenic::keystore::parse_sign_pubkey_file(&content, path) {
-            Some(r) => r,
-            None    => { self.km_contact_error = Some("No valid signing key found in this file.".into()); return; }
-        };
-        // Attach to existing contact with same name (case-insensitive).
-        if let Some(c) = self.contacts.iter_mut().find(|c| c.name.eq_ignore_ascii_case(&name)) {
-            c.signing_verifying_key = Some(Box::new(vk));
-            save_contacts(&self.contacts);
-            self.km_contact_error = Some(format!("✓ Signing key added to contact \"{name}\""));
-        } else {
-            self.km_contact_error = Some(format!(
-                "No contact named \"{name}\" found. Add them as a contact first, then import their .sigpub."
-            ));
-        }
     }
 
     /// Export the public parts of keypair `index` as a `.pubkey` file.
@@ -594,13 +518,7 @@ impl CryptyApp {
     /// gets both the encryption key and the signing key in one file.
     pub fn km_export_key(&mut self, index: usize) {
         let Some(entry) = self.keys.get(index) else { return };
-        let signing_vk: Option<[u8; 1952]> = self.signing_key_index
-            .and_then(|i| self.signing_keys.get(i))
-            .map(|sk| *sk.verifying_key);
-        let content  = arsenic::keystore::serialize_pubkey(
-            entry,
-            signing_vk.as_ref(),
-        );
+        let content = arsenic::keystore::serialize_pubkey(entry);
         let filename = format!("{}.pubkey", entry.name);
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Public key", &["pubkey"])
@@ -666,10 +584,10 @@ impl CryptyApp {
             .and_then(|i| self.keys.get(i))
             .cloned();
 
-        // Optional ML-DSA-65 signing key seed.
+        // ML-DSA-65 signing key seed — from the selected encryption keypair.
         let signing_key = self.signing_key_index
-            .and_then(|i| self.signing_keys.get(i))
-            .map(|sk| sk.seed);
+            .and_then(|i| self.keys.get(i))
+            .and_then(|k| k.signing_seed);
 
         let params = ArsenicParams {
             hdr_cipher: self.hdr_cipher,
