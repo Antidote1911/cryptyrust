@@ -193,31 +193,36 @@ fn is_leap(y: u64) -> bool { (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }
 
 // ── Identity file format ──────────────────────────────────────────────────────
 
-/// Serialize only the **public** parts of a keypair as a shareable `.pubkey` file.
+/// Serialize the **public** parts of a keypair as a shareable `.pubkey` file.
 ///
-/// The file contains no private key or ML-KEM seed — it is safe to share with
-/// any correspondent who wants to encrypt files for this identity.
-pub fn serialize_pubkey(entry: &KeyEntry) -> String {
+/// If `signing_vk` is provided, the ML-DSA-65 verifying key is included so
+/// the recipient can both encrypt for this identity **and** verify its signatures
+/// from a single file exchange.
+pub fn serialize_pubkey(entry: &KeyEntry, signing_vk: Option<&[u8; 1952]>) -> String {
     let pub_enc   = encode_pubkey(&entry.public_key);
     let mlkem_enc = encode_mlkem_pubkey(&entry.mlkem_public_key);
-    format!(
-        "# Arsenic public key — share this file with correspondents who want to encrypt for you.\n\
+    let mut s = format!(
+        "# Arsenic identity — share with correspondents (encryption key + signing key).\n\
          # name: {name}\n\
          # public key: {pub_enc}\n\
          # mlkem-public-key: {mlkem_enc}\n",
         name = entry.name,
-    )
+    );
+    if let Some(vk) = signing_vk {
+        s.push_str(&format!("# sign-key: {}\n", encode_mldsa_vk(vk)));
+    }
+    s
 }
 
 /// Parse a `.pubkey` **or** `.key` file and return a `ContactEntry`.
 ///
-/// Private key lines (`ARSENIC-SECRET-KEY-1…`) and ML-KEM seed lines are ignored,
-/// so this function is safe to call on a full identity file — it will only extract
-/// the public parts.
+/// Reads encryption keys and, if present, the `# sign-key:` ML-DSA-65 verifying
+/// key. Private key / seed lines are silently ignored.
 pub fn parse_pubkey_file(content: &str, path: std::path::PathBuf) -> Option<ContactEntry> {
     let mut name = String::new();
     let mut public_key: Option<[u8; 32]>    = None;
     let mut mlkem_key:  Option<[u8; 1184]>  = None;
+    let mut sign_vk:    Option<[u8; 1952]>  = None;
 
     for line in content.lines() {
         let line = line.trim();
@@ -227,8 +232,10 @@ pub fn parse_pubkey_file(content: &str, path: std::path::PathBuf) -> Option<Cont
             public_key = decode_pubkey(rest.trim());
         } else if let Some(rest) = line.strip_prefix("# mlkem-public-key:") {
             mlkem_key = decode_mlkem_pubkey(rest.trim());
+        } else if let Some(rest) = line.strip_prefix("# sign-key:") {
+            sign_vk = decode_mldsa_vk(rest.trim());
         }
-        // Lines beginning with ARSENIC-SECRET-KEY-1 or ARSENIC-MLKEM-SEED-1 are silently skipped.
+        // Private key / seed lines silently skipped.
     }
 
     if name.is_empty() {
@@ -236,14 +243,13 @@ pub fn parse_pubkey_file(content: &str, path: std::path::PathBuf) -> Option<Cont
             .file_stem()
             .map(|s| s.to_string_lossy().into_owned())
             .unwrap_or_default();
-        // Strip a trailing ".pubkey" or ".key" that may have been left in the stem on some OS.
     }
 
     Some(ContactEntry {
         name,
         public_key:            public_key?,
         mlkem_public_key:      Box::new(mlkem_key?),
-        signing_verifying_key: None,
+        signing_verifying_key: sign_vk.map(Box::new),
     })
 }
 

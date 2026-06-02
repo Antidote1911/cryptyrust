@@ -86,11 +86,16 @@ pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bo
             ui.add_space(6.0);
 
             // ── ML-DSA-65 signing key ─────────────────────────────────
-            ui.label(egui::RichText::new("Signing key  (ML-DSA-65)").strong());
+            let sig_color = if app.signing_key_index.is_none() {
+                egui::Color32::from_rgb(220, 100, 60) // red-orange if none set
+            } else {
+                ui.visuals().text_color()
+            };
+            ui.label(egui::RichText::new("Signing key  (ML-DSA-65)").strong().color(sig_color));
             ui.label(
-                egui::RichText::new("optional — signs encrypted files")
+                egui::RichText::new("required — must be set to encrypt")
                     .small()
-                    .weak(),
+                    .color(sig_color),
             );
             ui.separator();
             ui.selectable_value(&mut app.signing_key_index, None, "— None —");
@@ -805,25 +810,19 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("Contacts").strong().size(14.0));
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if ui.button("📥 Import .sigpub")
+                if ui.button("📥 Import .pubkey")
                     .on_hover_text(
-                        "Import a contact's signing public key (.sigpub)\n\
-                         so their signatures are recognized when decrypting"
+                        "Import a contact from a .pubkey file.\n\
+                         If the file contains a signing key it is imported too.\n\
+                         (drag-and-drop also works)"
                     )
-                    .clicked()
-                {
-                    do_import_sigpub_global = true;
-                }
-                ui.add_space(4.0);
-                if ui.button("📥 Import contact (.pubkey)")
-                    .on_hover_text("Import a contact from a .pubkey or .key file\n(drag-and-drop also works)")
                     .clicked()
                 {
                     do_import_contact = true;
                 }
             });
         });
-        ui.label(egui::RichText::new("Hybrid public keys received from correspondents. Ask them to export their .pubkey file.").small().weak());
+        ui.label(egui::RichText::new("Import a contact's .pubkey to encrypt for them and verify their signatures.").small().weak());
         ui.add_space(4.0);
 
         if app.contacts.is_empty() {

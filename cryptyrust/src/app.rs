@@ -275,6 +275,16 @@ impl CryptyApp {
     }
 
     pub fn validate_and_start(&mut self, ctx: &egui::Context) {
+        // Signing is mandatory for encryption.
+        if self.mode == Mode::Encrypt && self.signing_key_index.is_none() {
+            self.pw_error = Some(if self.signing_keys.is_empty() {
+                "Signing is required — generate a signing key in Key Manager first.".into()
+            } else {
+                "Signing is required — select a signing key in the Config menu.".into()
+            });
+            return;
+        }
+
         let n_sel = self.pw_selected_own_keys.iter().filter(|&&s| s).count()
             + self.pw_selected_recipients.iter().filter(|&&s| s).count();
 
@@ -579,10 +589,18 @@ impl CryptyApp {
         }
     }
 
-    /// Export the public parts of keypair `index` as a `.pubkey` file via a save dialog.
+    /// Export the public parts of keypair `index` as a `.pubkey` file.
+    /// Automatically includes the active signing verifying key so the recipient
+    /// gets both the encryption key and the signing key in one file.
     pub fn km_export_key(&mut self, index: usize) {
         let Some(entry) = self.keys.get(index) else { return };
-        let content  = arsenic::keystore::serialize_pubkey(entry);
+        let signing_vk: Option<[u8; 1952]> = self.signing_key_index
+            .and_then(|i| self.signing_keys.get(i))
+            .map(|sk| *sk.verifying_key);
+        let content  = arsenic::keystore::serialize_pubkey(
+            entry,
+            signing_vk.as_ref(),
+        );
         let filename = format!("{}.pubkey", entry.name);
         if let Some(path) = rfd::FileDialog::new()
             .add_filter("Public key", &["pubkey"])
