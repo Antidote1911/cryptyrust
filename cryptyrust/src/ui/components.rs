@@ -710,7 +710,7 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
     let mut do_delete_signing_key: Option<usize> = None;
     let mut do_export_sign_pubkey: Option<usize> = None;
     let mut do_import_sign_pubkey_for: Option<usize> = None;
-    let mut do_import_sigpub_global = false;
+    let do_import_sigpub_global = false;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
 
