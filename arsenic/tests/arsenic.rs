@@ -1,7 +1,7 @@
 use arsenic::{
     decrypt_arsenic, decrypt_arsenic_with_key, encrypt_arsenic, ArsenicParams, ArsenicStrength,
     CipherId, EnvelopeMetadata, HybridRecipient, KemLevel, BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE,
-    arsenic_add_recipient, arsenic_list_recipients, arsenic_rekey,
+    arsenic_add_recipient, arsenic_list_recipients, arsenic_rekey, arsenic_read_sender_info,
     arsenic_remove_recipient, hybrid_recipient_from_privkey, is_arsenic_file, CoreErr, Secret, Ui,
 };
 use std::io::Cursor;
@@ -1010,4 +1010,91 @@ fn rekey_preserves_asym_keyslots() {
     assert!(do_decrypt(&rekeyed, PASSWORD).is_err());
     // Asymmetric recipient still works after rekey.
     assert_eq!(do_decrypt_with_privkey(&rekeyed, &priv1).unwrap(), data);
+}
+
+// ── Sender identity + signature binding ──────────────────────────────────────
+
+fn signing_seed() -> [u8; 32] {
+    // Deterministic seed for tests
+    [0x42u8; 32]
+}
+
+fn params_with_sender_and_signing() -> ArsenicParams {
+    use arsenic::keystore::KeyEntry;
+    let key = KeyEntry::generate("alice".into());
+    ArsenicParams {
+        t_cost: 1, m_cost: 64, p_cost: 1,
+        hdr_cipher: CipherId::DeoxysII256,
+        pld_cipher: CipherId::XChaCha20Poly1305,
+        metadata: EnvelopeMetadata::default(),
+        recipients: vec![],
+        kem_level: arsenic::KemLevel::L768,
+        signing_key: key.signing_seed,
+        sender_name: Some("alice".into()),
+        sender_x25519_pk: Some(key.public_key),
+        sender_mlkem_pk: Some(*key.mlkem_public_key),
+    }
+}
+
+#[test]
+fn sender_round_trip_readable_without_decryption() {
+    let data = b"sender test";
+    let params = params_with_sender_and_signing();
+    let sender_x25519 = params.sender_x25519_pk.unwrap();
+
+    let ct = do_encrypt_with(data, PASSWORD, params, &[]);
+
+    // Write to tempfile so arsenic_read_sender_info can open it.
+    let mut tmp = NamedTempFile::new().unwrap();
+    std::io::Write::write_all(&mut tmp, &ct).unwrap();
+    tmp.as_file_mut().sync_all().unwrap();
+
+    let sender = arsenic_read_sender_info(tmp.path()).expect("sender info must be present");
+    assert_eq!(sender.name, "alice");
+    assert_eq!(sender.x25519_pk, sender_x25519);
+
+    // File still decrypts correctly.
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn tampered_sender_region_invalidates_signature() {
+    let data = b"tamper test";
+    let mut ct = do_encrypt_with(data, PASSWORD, params_with_sender_and_signing(), &[]);
+
+    // The sender_present byte is the last byte of the header.
+    // We know it's SENDER_PRESENT (0x01). Flip one byte in the sender name region.
+    // The sender region layout (from tail): sender_present[1] + mlkem[1184] + x25519[32] + name_len[2] + name[N]
+    // The name "alice" = 5 bytes. name_len is at offset -(1+1184+32+2) = -1219 from end of header.
+    // We need header_total_size to find the header boundary.
+    let hdr_size = u32::from_le_bytes(ct[9..13].try_into().unwrap()) as usize;
+    // Flip a byte in the middle of the sender mlkem region (safe area to tamper).
+    let tamper_offset = hdr_size - 1 - 1184 / 2;
+    ct[tamper_offset] ^= 0xFF;
+
+    // Decryption must fail because the signature no longer verifies.
+    assert!(
+        do_decrypt(&ct, PASSWORD).is_err(),
+        "tampered sender region must invalidate ML-DSA signature"
+    );
+}
+
+#[test]
+fn no_sender_still_verifies_correctly() {
+    // File signed but with no sender region — backward-compat path.
+    use arsenic::keystore::KeyEntry;
+    let key = KeyEntry::generate("bob".into());
+    let params = ArsenicParams {
+        t_cost: 1, m_cost: 64, p_cost: 1,
+        hdr_cipher: CipherId::DeoxysII256,
+        pld_cipher: CipherId::XChaCha20Poly1305,
+        metadata: EnvelopeMetadata::default(),
+        recipients: vec![],
+        kem_level: arsenic::KemLevel::L768,
+        signing_key: key.signing_seed,
+        sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
+    };
+    let data = b"signed no sender";
+    let ct = do_encrypt_with(data, PASSWORD, params, &[]);
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
 }

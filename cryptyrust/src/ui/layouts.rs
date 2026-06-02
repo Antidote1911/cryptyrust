@@ -341,13 +341,25 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
                 let sender_banner = app.pending_contact_from_file.as_ref().map(|p| p.name.clone());
                 if let Some(sender_name) = sender_banner {
                     ui.add_space(4.0);
-                    let accent = egui::Color32::from_rgb(80, 160, 220);
+                    // Sender region is authenticated only when the file is signed
+                    // (the signature covers pre_mac || sender_bytes).
+                    // Without a valid signature the public keys could have been swapped by an attacker.
+                    let sig_ok = matches!(
+                        app.last_sig_status,
+                        Some(arsenic::SignatureStatus::SignedByKnown(_))
+                            | Some(arsenic::SignatureStatus::SignedByUnknown)
+                    );
+                    let (color, note) = if sig_ok {
+                        (egui::Color32::from_rgb(80, 160, 220), "")
+                    } else {
+                        (egui::Color32::from_rgb(220, 140, 40), " ⚠ non signé — identité non vérifiée")
+                    };
                     let mut do_add = false;
                     let mut do_dismiss = false;
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(format!("📨 From: {sender_name}  — add to contacts?"))
-                                .color(accent),
+                            egui::RichText::new(format!("📨 From: {sender_name}  — add to contacts?{note}"))
+                                .color(color),
                         );
                         if ui.button("Add").clicked() { do_add = true; }
                         if ui.button("✕").clicked()  { do_dismiss = true; }

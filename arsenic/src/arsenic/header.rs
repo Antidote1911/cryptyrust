@@ -563,6 +563,25 @@ pub fn build_envelope_region(
     buf
 }
 
+/// Serialize the sender region bytes for inclusion in the ML-DSA-65 signed message.
+///
+/// When a sender is present the signed message is `pre_mac[77] || sender_bytes_for_signing(s)`.
+/// When no sender is present the signed message is just `pre_mac[77]` — backward compatible with
+/// files produced before sender-identity support was added.
+///
+/// This ensures that stripping or swapping the sender region invalidates the signature.
+pub fn sender_bytes_for_signing(sender: &SenderInfo) -> Vec<u8> {
+    let name_bytes = sender.name.as_bytes();
+    let name_len = name_bytes.len().min(255) as u16;
+    let mut buf = Vec::with_capacity(name_len as usize + 2 + 32 + 1184 + 1);
+    buf.extend_from_slice(&name_bytes[..name_len as usize]);
+    buf.extend_from_slice(&name_len.to_le_bytes());
+    buf.extend_from_slice(&sender.x25519_pk);
+    buf.extend_from_slice(&sender.mlkem_pk);
+    buf.push(SENDER_PRESENT);
+    buf
+}
+
 // ── Public header serialization ───────────────────────────────────────────────
 
 pub fn serialize_pre_mac(hdr: &PublicHeader) -> [u8; PRE_MAC_LEN] {
