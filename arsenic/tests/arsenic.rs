@@ -3,6 +3,7 @@ use arsenic::{
     CipherId, EnvelopeMetadata, HybridRecipient, KemLevel, BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE,
     arsenic_add_recipient, arsenic_list_recipients, arsenic_rekey, arsenic_read_sender_info,
     arsenic_remove_recipient, hybrid_recipient_from_privkey, is_arsenic_file, CoreErr, Secret, Ui,
+    arsenic_add_passphrase, arsenic_remove_passphrase, arsenic_list_passphrases,
 };
 use std::io::Cursor;
 use tempfile::NamedTempFile;
@@ -30,6 +31,7 @@ fn fast_params_with(hdr: CipherId, pld: CipherId) -> ArsenicParams {
         recipients: vec![],
         kem_level: arsenic::KemLevel::L768,
         sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
+        compress: None,
     }
 }
 
@@ -44,6 +46,7 @@ fn fast_params_with_metadata(meta: EnvelopeMetadata) -> ArsenicParams {
         recipients: vec![],
         kem_level: arsenic::KemLevel::L768,
         sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
+        compress: None,
     }
 }
 
@@ -1025,6 +1028,7 @@ fn params_with_sender() -> ArsenicParams {
         sender_name: Some("alice".into()),
         sender_x25519_pk: Some(key.public_key),
         sender_mlkem_pk: Some(*key.mlkem_public_key),
+        compress: None,
     }
 }
 
@@ -1062,4 +1066,266 @@ fn tampered_payload_rejected_by_merkle() {
 
     assert!(do_decrypt_with_privkey(&tampered, &priv_bob).is_err(), "tampered payload rejected");
     assert!(do_decrypt(&tampered, PASSWORD).is_err(), "tampered payload rejected (symmetric)");
+}
+
+// ── Feature 1: ASCII armor ────────────────────────────────────────────────────
+
+#[test]
+fn armor_round_trip() {
+    let ct = do_encrypt(b"armor test");
+    let armored = arsenic::armor(&ct);
+    assert!(armored.contains("-----BEGIN ARSENIC ENCRYPTED FILE-----"));
+    assert!(armored.contains("-----END ARSENIC ENCRYPTED FILE-----"));
+    let dearmored = arsenic::dearmor(&armored).expect("dearmor failed");
+    assert_eq!(dearmored, ct);
+    assert_eq!(do_decrypt(&dearmored, PASSWORD).unwrap(), b"armor test");
+}
+
+#[test]
+fn armor_missing_header_rejected() {
+    let bad = "no header\n-----END ARSENIC ENCRYPTED FILE-----\n";
+    assert!(arsenic::dearmor(bad).is_err());
+}
+
+#[test]
+fn armor_missing_footer_rejected() {
+    let bad = "-----BEGIN ARSENIC ENCRYPTED FILE-----\nYWJj\n";
+    assert!(arsenic::dearmor(bad).is_err());
+}
+
+#[test]
+fn armor_invalid_base64_rejected() {
+    let bad = "-----BEGIN ARSENIC ENCRYPTED FILE-----\n!!!\n-----END ARSENIC ENCRYPTED FILE-----\n";
+    assert!(arsenic::dearmor(bad).is_err());
+}
+
+#[test]
+fn armor_line_width() {
+    let ct = do_encrypt(&vec![0u8; 256]);
+    let armored = arsenic::armor(&ct);
+    for line in armored.lines() {
+        if line.starts_with('-') { continue; }
+        assert!(line.len() <= 64, "line too long: {} chars", line.len());
+    }
+}
+
+// ── Feature 2: encrypt to non-seekable output ─────────────────────────────────
+
+#[test]
+fn to_writer_round_trip() {
+    use arsenic::encrypt_arsenic_to_writer;
+    let data = b"non-seekable encrypt test";
+    let password = Secret::new(PASSWORD.into());
+    let mut ct = Vec::new();
+    encrypt_arsenic_to_writer(
+        &mut Cursor::new(data),
+        &mut ct,
+        &password,
+        &NoUi,
+        data.len() as u64,
+        &fast_params(),
+    ).expect("encrypt_arsenic_to_writer failed");
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn to_writer_matches_seekable_output() {
+    use arsenic::encrypt_arsenic_to_writer;
+    let data = b"comparison test";
+    let mut ct_seekable = Cursor::new(Vec::new());
+    encrypt_arsenic(&mut Cursor::new(data), &mut ct_seekable,
+        &Secret::new(PASSWORD.into()), &NoUi, data.len() as u64, &fast_params()).unwrap();
+    let mut ct_writer = Vec::new();
+    encrypt_arsenic_to_writer(&mut Cursor::new(data), &mut ct_writer,
+        &Secret::new(PASSWORD.into()), &NoUi, data.len() as u64, &fast_params()).unwrap();
+    // Both must decrypt correctly (ciphertexts differ due to random nonces).
+    assert_eq!(do_decrypt(&ct_seekable.into_inner(), PASSWORD).unwrap(), data);
+    assert_eq!(do_decrypt(&ct_writer, PASSWORD).unwrap(), data);
+}
+
+// ── Feature 3: partial block decryption ──────────────────────────────────────
+
+#[test]
+fn decrypt_block_at_single_block_file() {
+    use arsenic::decrypt_block_at;
+    let data = b"single block data";
+    let ct = do_encrypt(data);
+    let mut cursor = Cursor::new(ct);
+    let block = decrypt_block_at(&mut cursor, &Secret::new(PASSWORD.into()), 0, &NoUi)
+        .expect("decrypt_block_at failed");
+    assert_eq!(block, data);
+}
+
+#[test]
+fn decrypt_block_at_out_of_bounds() {
+    use arsenic::decrypt_block_at;
+    let ct = do_encrypt(b"small");
+    let mut cursor = Cursor::new(ct);
+    assert!(decrypt_block_at(&mut cursor, &Secret::new(PASSWORD.into()), 999, &NoUi).is_err());
+}
+
+#[test]
+fn decrypt_block_at_tampered_block_rejected() {
+    use arsenic::decrypt_block_at;
+    let data = b"block tamper test";
+    let mut ct = do_encrypt(data);
+    let hdr_size = u32::from_le_bytes(ct[9..13].try_into().unwrap()) as usize;
+    ct[hdr_size + 5] ^= 0xFF;
+    let mut cursor = Cursor::new(ct);
+    assert!(decrypt_block_at(&mut cursor, &Secret::new(PASSWORD.into()), 0, &NoUi).is_err());
+}
+
+#[test]
+fn decrypt_block_at_compressed_rejected() {
+    use arsenic::decrypt_block_at;
+    let mut params = fast_params();
+    params.compress = Some(3);
+    let data = b"compressible compressible compressible data";
+    let ct = do_encrypt_with(data, PASSWORD, params, &[]);
+    let mut cursor = Cursor::new(ct);
+    assert!(
+        decrypt_block_at(&mut cursor, &Secret::new(PASSWORD.into()), 0, &NoUi).is_err(),
+        "compressed file should reject random-access"
+    );
+}
+
+// ── Feature 4: extra passphrase slots ────────────────────────────────────────
+
+#[test]
+fn add_passphrase_decrypt_with_new() {
+    let data = b"multi-passphrase";
+    let ct_path = {
+        let mut tmp = NamedTempFile::new().unwrap();
+        let ct = do_encrypt(data);
+        std::io::Write::write_all(&mut tmp, &ct).unwrap();
+        tmp.into_temp_path()
+    };
+    arsenic::arsenic_add_passphrase(
+        ct_path.as_ref(),
+        &Secret::new(PASSWORD.into()),
+        &Secret::new("extra_pass".into()),
+        &NoUi,
+    ).expect("add_passphrase failed");
+
+    // Primary password still works.
+    assert_eq!(do_decrypt(&std::fs::read(&ct_path).unwrap(), PASSWORD).unwrap(), data);
+    // Extra password also works.
+    assert_eq!(do_decrypt(&std::fs::read(&ct_path).unwrap(), "extra_pass").unwrap(), data);
+}
+
+#[test]
+fn add_passphrase_max_slots_rejected() {
+    let ct_path = {
+        let mut tmp = NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, &do_encrypt(b"x")).unwrap();
+        tmp.into_temp_path()
+    };
+    for i in 0..15 {
+        arsenic::arsenic_add_passphrase(
+            ct_path.as_ref(),
+            &Secret::new(PASSWORD.into()),
+            &Secret::new(format!("extra_{i}").as_str().into()),
+            &NoUi,
+        ).expect("add_passphrase failed");
+    }
+    // 16th must fail.
+    assert!(arsenic::arsenic_add_passphrase(
+        ct_path.as_ref(),
+        &Secret::new(PASSWORD.into()),
+        &Secret::new("one_too_many".into()),
+        &NoUi,
+    ).is_err());
+}
+
+#[test]
+fn remove_passphrase_revokes_access() {
+    let data = b"remove slot test";
+    let ct_path = {
+        let mut tmp = NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, &do_encrypt(data)).unwrap();
+        tmp.into_temp_path()
+    };
+    arsenic::arsenic_add_passphrase(
+        ct_path.as_ref(), &Secret::new(PASSWORD.into()), &Secret::new("to_remove".into()), &NoUi,
+    ).unwrap();
+    arsenic::arsenic_remove_passphrase(
+        ct_path.as_ref(), &Secret::new(PASSWORD.into()), &Secret::new("to_remove".into()), &NoUi,
+    ).expect("remove_passphrase failed");
+    // Extra slot gone.
+    assert!(do_decrypt(&std::fs::read(&ct_path).unwrap(), "to_remove").is_err());
+    // Primary still works.
+    assert_eq!(do_decrypt(&std::fs::read(&ct_path).unwrap(), PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn remove_primary_slot_rejected() {
+    let ct_path = {
+        let mut tmp = NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, &do_encrypt(b"x")).unwrap();
+        tmp.into_temp_path()
+    };
+    assert!(arsenic::arsenic_remove_passphrase(
+        ct_path.as_ref(),
+        &Secret::new(PASSWORD.into()),
+        &Secret::new(PASSWORD.into()),
+        &NoUi,
+    ).is_err());
+}
+
+#[test]
+fn list_passphrases_count() {
+    let ct_path = {
+        let mut tmp = NamedTempFile::new().unwrap();
+        std::io::Write::write_all(&mut tmp, &do_encrypt(b"x")).unwrap();
+        tmp.into_temp_path()
+    };
+    assert_eq!(arsenic::arsenic_list_passphrases(ct_path.as_ref()).unwrap(), 0);
+    arsenic::arsenic_add_passphrase(
+        ct_path.as_ref(), &Secret::new(PASSWORD.into()), &Secret::new("p2".into()), &NoUi,
+    ).unwrap();
+    assert_eq!(arsenic::arsenic_list_passphrases(ct_path.as_ref()).unwrap(), 1);
+}
+
+// ── Feature 5: zstd compression ──────────────────────────────────────────────
+
+#[test]
+fn compress_zstd_round_trip() {
+    let data: Vec<u8> = b"hello compressible data ".iter().cycle().take(4096).copied().collect();
+    let mut params = fast_params();
+    params.compress = Some(3);
+    let ct = do_encrypt_with(&data, PASSWORD, params, &[]);
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn compress_incompressible_still_works() {
+    // Random data compresses poorly but should still round-trip.
+    let mut params = fast_params();
+    params.compress = Some(1);
+    let data = do_encrypt(b"random-ish data for compress test"); // use a ciphertext as "random" data
+    let ct = do_encrypt_with(&data, PASSWORD, params, &[]);
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
+}
+
+#[test]
+fn compress_tampered_block_rejected() {
+    let mut params = fast_params();
+    params.compress = Some(3);
+    let data: Vec<u8> = vec![b'A'; 1024];
+    let mut ct = do_encrypt_with(&data, PASSWORD, params, &[]);
+    let hdr_size = u32::from_le_bytes(ct[9..13].try_into().unwrap()) as usize;
+    ct[hdr_size + 5] ^= 0xFF;
+    assert!(do_decrypt(&ct, PASSWORD).is_err());
+}
+
+#[test]
+fn compress_original_size_preserved() {
+    let data: Vec<u8> = vec![b'Z'; 2048];
+    let mut params = fast_params();
+    params.compress = Some(9);
+    let ct = do_encrypt_with(&data, PASSWORD, params, &[]);
+    // Verify ciphertext is smaller than uncompressed would be (loosely).
+    // Uncompressed: MIN_HEADER + 2048 + 16 (tag) ≈ 2300 bytes.
+    assert!(ct.len() < data.len() + 300, "compressed ct should be smaller than 2348");
+    assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
 }

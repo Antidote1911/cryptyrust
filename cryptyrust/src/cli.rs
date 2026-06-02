@@ -13,8 +13,12 @@ Key management:
 Encryption / decryption:
   cryptyrust -e FILE                               Encrypt (password, interactive prompt)
   cryptyrust -e FILE -R alice                      Encrypt for recipient (passwordless)
-  cryptyrust -e FILE --kem-level 1024              Encrypt using ML-KEM-1024 keyslots
+  cryptyrust -e FILE --kem-level 1024              Encrypt with ML-KEM-1024 keyslots
+  cryptyrust -e FILE --armor                       Encrypt and ASCII-armor the output
+  cryptyrust -e FILE --compress                    Encrypt with zstd compression (level 3)
+  cryptyrust -e FILE --compress 9                  Encrypt with zstd compression level 9
   cryptyrust -d FILE                               Decrypt (auto-tries keystore, then password)
+  cryptyrust -d FILE.armor                         Decrypt ASCII-armored file (auto-detected)
   cryptyrust --rekey FILE                          Change password
   cryptyrust --bench                               Benchmark ciphers
 
@@ -22,6 +26,11 @@ Recipient management:
   cryptyrust recipients list FILE                  List keyslots in a file
   cryptyrust recipients add FILE -R alice          Add a recipient keyslot
   cryptyrust recipients remove FILE -i KEY_FILE    Remove a recipient keyslot
+
+Passphrase slot management:
+  cryptyrust passphrase list FILE                  Count extra passphrase slots
+  cryptyrust passphrase add FILE -p PW --new-pass NEW  Add a passphrase slot
+  cryptyrust passphrase remove FILE -p PW --remove-pass OLD  Remove a passphrase slot
 
 Author : Fabrice Corraire <antidote1911@gmail.com>
 Github : https://github.com/Antidote1911/
@@ -88,6 +97,19 @@ pub struct Cli {
     #[clap(long = "kem-level", value_enum, value_name = "LEVEL", default_value = "768")]
     kem_level: KemLevelArg,
 
+    /// Wrap the encrypted output in ASCII armor (base64, BEGIN/END headers).
+    ///
+    /// On decrypt, armor is detected automatically — this flag is not needed.
+    #[clap(long, short = 'a', action = clap::ArgAction::SetTrue)]
+    armor: bool,
+
+    /// Enable zstd compression before encryption (level 1–22, default 3).
+    ///
+    /// WARNING: compression leaks plaintext entropy via ciphertext size.
+    /// Do not use for size-sensitive data.
+    #[clap(long, value_name = "LEVEL", default_missing_value = "3",
+           require_equals = false, num_args = 0..=1)]
+    compress: Option<i32>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
@@ -142,6 +164,78 @@ pub struct KeygenCli {
     /// ML-KEM security level for new encryption keypairs.
     #[clap(long = "kem-level", value_enum, value_name = "LEVEL", default_value = "768")]
     pub kem_level: KemLevelArg,
+}
+
+// ── Passphrase slot management sub-command ────────────────────────────────────
+
+#[derive(Parser)]
+#[clap(name = "cryptyrust passphrase", author, version)]
+#[clap(about = "Add, remove, or list extra passphrase keyslots in an .arsn file")]
+pub struct PassphraseCli {
+    #[clap(subcommand)]
+    pub action: PassphraseAction,
+}
+
+#[derive(clap::Subcommand)]
+pub enum PassphraseAction {
+    /// Show the number of extra passphrase slots (primary slot not counted).
+    List {
+        #[clap(value_name = "FILE")]
+        file: String,
+    },
+
+    /// Add an extra passphrase slot.
+    ///
+    /// After this, the file can be decrypted with either the primary password
+    /// or the new password.
+    ///
+    /// NOTE: extra slots do not benefit from the HeaderMAC fast-fail — a wrong
+    /// password pays the full Argon2id cost for each extra slot.
+    Add {
+        #[clap(value_name = "FILE")]
+        file: String,
+
+        /// Existing password to authenticate (primary slot recommended).
+        #[clap(short, long, value_name = "PASSWORD")]
+        password: Option<String>,
+
+        /// Read the existing password from a file.
+        #[clap(short = 'f', long, value_name = "FILE")]
+        passwordfile: Option<String>,
+
+        /// New passphrase to add as an extra slot.
+        #[clap(long = "new-pass", value_name = "PASSWORD")]
+        new_pass: Option<String>,
+
+        /// Read the new passphrase from a file.
+        #[clap(long = "new-pass-file", value_name = "FILE")]
+        new_pass_file: Option<String>,
+    },
+
+    /// Remove an extra passphrase slot.
+    ///
+    /// Requires the primary password to recompute the HeaderMAC.
+    /// The primary slot itself cannot be removed.
+    Remove {
+        #[clap(value_name = "FILE")]
+        file: String,
+
+        /// Primary password (used for HeaderMAC authentication).
+        #[clap(short, long, value_name = "PASSWORD")]
+        password: Option<String>,
+
+        /// Read the primary password from a file.
+        #[clap(short = 'f', long, value_name = "FILE")]
+        passwordfile: Option<String>,
+
+        /// The passphrase slot to remove.
+        #[clap(long = "remove-pass", value_name = "PASSWORD")]
+        remove_pass: Option<String>,
+
+        /// Read the passphrase-to-remove from a file.
+        #[clap(long = "remove-pass-file", value_name = "FILE")]
+        remove_pass_file: Option<String>,
+    },
 }
 
 // ── Recipient management sub-command ─────────────────────────────────────────
@@ -259,4 +353,6 @@ impl Cli {
             KemLevelArg::L1024 => KemLevel::L1024,
         }
     }
+    pub fn armor(&self)    -> bool          { self.armor }
+    pub fn compress(&self) -> Option<i32>   { self.compress }
 }

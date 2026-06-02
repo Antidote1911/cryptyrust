@@ -10,6 +10,7 @@ use arsenic::{
     arsenic_main_routine, arsenic_main_routine_with_key, arsenic_rekey, ArsenicParams, CoreErr,
     Direction, Secret, Ui,
     keystore::KeyEntry,
+    armor, dearmor, decrypt_arsenic, decrypt_arsenic_with_key,
 };
 
 use crate::file_utils::{create_unique_output_file, Mode};
@@ -79,6 +80,7 @@ impl JobState {
         files: Vec<PathBuf>,
         mode: Mode,
         params: ArsenicParams,
+        armor: bool,
         password: String,
         privkey: Option<KeyEntry>,
         ctx: eframe::egui::Context,
@@ -129,6 +131,7 @@ impl JobState {
                     let password = password.clone();
                     let privkey = privkey.clone();
                     let ctx = ctx.clone();
+                    let armor = armor;
 
                     s.spawn(move |_| {
                         if cancel_flag.load(Ordering::Relaxed)
@@ -156,15 +159,28 @@ impl JobState {
                                         cancel_flag: cancel_flag.clone(),
                                         cancel_all: cancel_all.clone(),
                                     });
-                                    match arsenic_main_routine(
+                                    let result = arsenic_main_routine(
                                         &Direction::Encrypt,
                                         Some(&in_path),
                                         Some(&out_path),
                                         &Secret::new(password),
                                         ui,
                                         Some(params),
-                                    ) {
-                                        Ok(_) => true,
+                                    );
+                                    match result {
+                                        Ok(_) => {
+                                            // Post-processing: ASCII armor if requested.
+                                            if armor {
+                                                match apply_armor(&out_path) {
+                                                    Ok(()) => {},
+                                                    Err(e) => {
+                                                        report_error(&file_statuses_clone, i, e);
+                                                        // armor failed; keep the unarmored file
+                                                    }
+                                                }
+                                            }
+                                            true
+                                        }
                                         Err(CoreErr::Cancelled) => {
                                             let _ = std::fs::remove_file(&out_path);
                                             file_statuses_clone.lock().unwrap()[i] =
@@ -180,7 +196,9 @@ impl JobState {
                                 }
                             },
                             Mode::Decrypt => {
-                                let base = if in_path.ends_with(".arsn") {
+                                let base = if in_path.ends_with(".arsn.armor") {
+                                    in_path.trim_end_matches(".arsn.armor").to_string()
+                                } else if in_path.ends_with(".arsn") {
                                     in_path.trim_end_matches(".arsn").to_string()
                                 } else {
                                     format!("decrypted_{}", in_path)
@@ -197,22 +215,28 @@ impl JobState {
                                             cancel_flag: cancel_flag.clone(),
                                             cancel_all: cancel_all.clone(),
                                         });
-                                        let result = if let Some(ref key) = privkey {
-                                            arsenic_main_routine_with_key(
-                                                Some(&in_path),
-                                                Some(&out_path),
-                                                key,
-                                                ui,
-                                            )
-                                        } else {
-                                            arsenic_main_routine(
-                                                &Direction::Decrypt,
-                                                Some(&in_path),
-                                                Some(&out_path),
-                                                &Secret::new(password),
-                                                ui,
-                                                None,
-                                            )
+
+                                        // Check for ASCII armor and dearmor if needed.
+                                        let result: Result<(), CoreErr> = match try_dearmor_file(&in_path) {
+                                            Ok(Some(ct)) => {
+                                                decrypt_bytes_to_file(ct, &out_path, &password, privkey.as_ref(), ui)
+                                                    .map(|_| ())
+                                            }
+                                            Ok(None) => {
+                                                // Binary .arsn file — standard path.
+                                                if let Some(ref key) = privkey {
+                                                    arsenic_main_routine_with_key(
+                                                        Some(&in_path), Some(&out_path), key, ui,
+                                                    ).map(|_| ())
+                                                } else {
+                                                    arsenic_main_routine(
+                                                        &Direction::Decrypt,
+                                                        Some(&in_path), Some(&out_path),
+                                                        &Secret::new(password), ui, None,
+                                                    ).map(|_| ())
+                                                }
+                                            }
+                                            Err(e) => Err(e),
                                         };
                                         match result {
                                             Ok(_) => true,
@@ -322,4 +346,50 @@ fn do_change_pw_arsenic(
 
 fn report_error(statuses: &Arc<Mutex<Vec<FileStatus>>>, index: usize, msg: String) {
     statuses.lock().unwrap()[index] = FileStatus::Failed(msg);
+}
+
+/// Read the file; if it looks like ASCII armor, dearmor and return `Some(bytes)`.
+/// Returns `Ok(None)` for binary files, `Err` on read/dearmor failure.
+fn try_dearmor_file(path: &str) -> Result<Option<Vec<u8>>, CoreErr> {
+    let data = std::fs::read(path).map_err(CoreErr::IOError)?;
+    if data.starts_with(b"-----BEGIN ARSENIC") {
+        let s = std::str::from_utf8(&data)
+            .map_err(|_| CoreErr::DecryptFail("armor file is not valid UTF-8".into()))?;
+        let ct = dearmor(s)?;
+        Ok(Some(ct))
+    } else {
+        Ok(None)
+    }
+}
+
+/// Decrypt a ciphertext byte slice to a file, trying the keypair first then the password.
+fn decrypt_bytes_to_file(
+    ct: Vec<u8>,
+    out_path: &str,
+    password: &str,
+    key: Option<&KeyEntry>,
+    ui: Box<dyn Ui>,
+) -> Result<arsenic::EnvelopeMetadata, CoreErr> {
+    use std::io::Cursor;
+    let filesize = ct.len() as u64;
+    let mut input = Cursor::new(&ct);
+    let mut output = std::fs::File::create(out_path).map_err(CoreErr::IOError)?;
+    if let Some(k) = key {
+        let privkey = Secret::new(k.private_key);
+        decrypt_arsenic_with_key(&mut input, &mut output, &privkey, &k.mlkem_seed, &*ui, filesize)
+    } else {
+        decrypt_arsenic(&mut input, &mut output, &Secret::new(password.to_string()), &*ui, filesize)
+    }
+}
+
+/// ASCII-armor `path` in-place: reads the binary file, armors it, writes to
+/// `path.armor`, then removes the original `.arsn` file.
+fn apply_armor(path: &str) -> Result<(), String> {
+    let ct = std::fs::read(path).map_err(|e| format!("armor read: {e}"))?;
+    let armored = armor(&ct);
+    let armor_path = format!("{path}.armor");
+    std::fs::write(&armor_path, armored.as_bytes())
+        .map_err(|e| format!("armor write: {e}"))?;
+    std::fs::remove_file(path).map_err(|e| format!("armor cleanup: {e}"))?;
+    Ok(())
 }

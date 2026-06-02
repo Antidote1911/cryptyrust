@@ -9,16 +9,18 @@ Built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/e
 ## Features
 
 - **Drag-and-drop** — drop files directly onto the window
-- **Automatic mode detection** — `.arsn` = decrypt, other = encrypt
+- **Automatic mode detection** — `.arsn` / `.arsn.armor` = decrypt, other = encrypt
 - **Multi-file parallel encryption** via Rayon
 - **Individual cancellation** of each in-progress operation
 - **Post-quantum hybrid encryption** — X25519 + ML-KEM-768 or ML-KEM-1024 (NIST FIPS 203)
-- **Sender identity embedding** — sender's public keys embedded in the file header (plaintext); recipient auto-prompted to add sender as a contact after decryption
-- **Automatic key-based decryption** — if a keystore key matches the file, no password is requested
-- **Key manager** — generate hybrid keypairs (X25519 + ML-KEM), manage contacts
+- **Multiple passphrase keyslots** — up to 15 extra passwords on the same file
+- **ASCII armor** — base64 output for email/text channels; auto-detected on decrypt
+- **Optional zstd compression** — levels 1–22, with size-leak warning
+- **Automatic key-based decryption** — if a keystore key matches, no password popup
+- **Key manager** — generate hybrid keypairs, manage contacts
 - **Built-in benchmark** of AEAD ciphers
-- **In-place password change** (rekey)
-- **Recipient management** — add or remove asymmetric keyslots from an existing file
+- **In-place password change** (rekey — O(1), payload untouched)
+- **Recipient management** — add or remove asymmetric keyslots post-encryption
 - Light / dark theme; settings persisted between sessions
 
 ---
@@ -29,21 +31,20 @@ Built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/e
 
 1. Drop files or click **Add files**
 2. Click **Encrypt**, enter the password (+ confirmation)
-3. `.arsn` files are created in the same directory
+3. `.arsn` files are created in the same directory (or `.arsn.armor` if armor is enabled)
 
 ### Asymmetric Encryption (passwordless)
 
-1. Open **Keys → Key Manager**
-2. Click **⚡ Generate** to create a keypair, or add a contact (paste their public key)
+1. Open **Keys → Key Manager** → **⚡ Generate** to create a keypair
+2. Add a contact (paste their public key or drag their `.pubkey` file)
 3. Click **Encrypt** → select recipients in the popup
-4. The password becomes optional if at least one recipient is selected
 
 ### Decryption
 
-- **With stored key**: if a keystore key matches the file, decryption starts immediately without a popup
+- **With stored key**: if a keystore key matches the file (binary or armored), decryption starts immediately
 - **With password**: if no key matches, the popup asks for the password
-- **Sender identity**: if the file contains sender info, a banner appears after decryption:
-  **"📨 From: alice — add to contacts?"** — click **Add** to register them automatically
+- **Armored files**: `.arsn.armor` files are auto-detected and dearmored transparently
+- **Sender identity**: if the file contains sender info, a banner offers to add them as a contact
 
 ---
 
@@ -53,48 +54,35 @@ Built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/e
 
 | Setting | Options | Default |
 |---|---|---|
-| Argon2id strength | Interactive (256 MiB, ~1-3 s) · Sensitive (1 GiB, ~10-30 s) | Interactive |
+| Argon2id strength | Interactive (256 MiB) · Sensitive (1 GiB) | Interactive |
 | Header cipher | Deoxys-II-256 · AES-256-GCM-SIV · XChaCha20-Poly1305 | Deoxys-II-256 |
 | Payload cipher | XChaCha20-Poly1305 · AES-256-GCM-SIV · Deoxys-II-256 | XChaCha20-Poly1305 |
+| Compression | Off · zstd level 1–22 | Off |
+| ASCII Armor | Off · On | Off |
 | Benchmark | ⏱ Benchmark ciphers… | — |
-
-Settings are persisted between sessions via eframe storage.
 
 ---
 
 ## CLI Usage
 
-The `cryptyrust` binary runs as a CLI when any argument is passed.
-
 ### Encrypt / Decrypt
 
 ```bash
-# Encrypt with password (prompts interactively)
-cryptyrust -e file.txt
+cryptyrust -e file.txt                       # password prompt
+cryptyrust -e file.txt -p "passphrase"       # inline password (shell history risk)
+cryptyrust -e file.txt -R alice -R bob       # recipients (ML-KEM-768)
+cryptyrust -e file.txt -R alice --kem-level 1024  # ML-KEM-1024
+cryptyrust -e file.txt --armor               # ASCII-armored output (.arsn.armor)
+cryptyrust -e file.txt --compress            # zstd level 3 (default)
+cryptyrust -e file.txt --compress 9          # zstd level 9
+cryptyrust -e file.txt --compress 6 --armor  # combined
 
-# Encrypt with password passed on the command line (not recommended)
-cryptyrust -e file.txt -p "passphrase"
+cryptyrust -d file.txt.arsn                  # auto-tries keystore, then password
+cryptyrust -d file.txt.arsn.armor            # armor auto-detected
+cryptyrust -d file.txt.arsn -i my.key        # specific identity
 
-# Encrypt for recipients (ML-KEM-768, default)
-cryptyrust -e file.txt -R alice -R bob
-
-# Encrypt with ML-KEM-1024 (NIST Level 5, ~256-bit quantum security)
-cryptyrust -e file.txt -R alice --kem-level 1024
-
-# Decrypt (auto-tries all keystore keys, then prompts for password)
-cryptyrust -d file.txt.arsn
-
-# Decrypt with a specific identity file
-cryptyrust -d file.txt.arsn -i ~/.config/cryptyrust/keys/alice.key
-
-# Change password without re-encrypting the payload
-cryptyrust --rekey file.txt.arsn
-
-# Benchmark ciphers
-cryptyrust --bench
-
-# Full option list
-cryptyrust --help
+cryptyrust --rekey file.txt.arsn             # change password (payload untouched)
+cryptyrust --bench                           # benchmark ciphers
 ```
 
 ### Options
@@ -103,39 +91,30 @@ cryptyrust --help
 |---|---|
 | `-e FILE` | Encrypt FILE |
 | `-d FILE` | Decrypt FILE |
-| `--rekey FILE` | Change symmetric password in-place |
-| `-p PASSWORD` | Password (not recommended — visible in shell history) |
+| `--rekey FILE` | Change password in-place |
+| `-p PASSWORD` | Password (shell history risk) |
 | `-f FILE` | Read password from file |
 | `-o PATH` | Output file or directory |
-| `-R NAME_OR_FILE` | Add a recipient (repeatable) — contact name or `.key` file path |
-| `-i KEY_FILE` | Identity file to try for decryption (repeatable) |
-| `--kem-level 768|1024` | ML-KEM security level for new keyslots |
+| `-R NAME_OR_FILE` | Add recipient (repeatable) |
+| `-i KEY_FILE` | Identity file for decryption (repeatable) |
+| `--kem-level 768|1024` | ML-KEM security level |
 | `--strength interactive|sensitive` | Argon2id preset |
 | `--hdr-cipher CIPHER` | Header cipher: `deoxys-ii`, `xchacha20`, `aes-gcm-siv` |
-| `--pld-cipher CIPHER` | Payload cipher: `deoxys-ii`, `xchacha20`, `aes-gcm-siv` |
+| `--pld-cipher CIPHER` | Payload cipher |
+| `--armor` / `-a` | ASCII-armor encrypted output |
+| `--compress [LEVEL]` | zstd compression (level 1–22, default 3) |
 | `--bench` | Benchmark all cipher combinations |
 
 ---
 
 ## Key Management
 
-Keys are stored in `{config}/cryptyrust/keys/` and shared between the GUI and CLI.
-
 ```bash
-# Generate an encryption keypair (X25519 + ML-KEM-768, all in one .key file)
-cryptyrust keygen -n alice --store
-
-# Generate keypair saved to a specific file
-cryptyrust keygen -n alice -o alice.key
-
-# Generate with ML-KEM-1024 support
+cryptyrust keygen -n alice --store           # save to shared keystore
+cryptyrust keygen -n alice -o alice.key      # save to file
 cryptyrust keygen -n alice --store --kem-level 1024
-
-# List all stored keypairs
 cryptyrust keygen --list
-
-# Show the public key of a .key file
-cryptyrust keygen -y alice.key
+cryptyrust keygen -y alice.key               # show public key
 ```
 
 ---
@@ -143,17 +122,26 @@ cryptyrust keygen -y alice.key
 ## Recipient Management
 
 ```bash
-# List keyslots in a file (probes keystore to identify owners)
 cryptyrust recipients list file.txt.arsn
-
-# Add a recipient to an existing file (requires symmetric password)
 cryptyrust recipients add file.txt.arsn -R alice -p "passphrase"
-
-# Remove a recipient by identity file
 cryptyrust recipients remove file.txt.arsn -i alice.key -p "passphrase"
-
-# Remove a recipient by slot index
 cryptyrust recipients remove file.txt.arsn --slot 0 -p "passphrase"
+```
+
+---
+
+## Passphrase Slot Management
+
+```bash
+# Count extra passphrase slots
+cryptyrust passphrase list file.txt.arsn
+
+# Add an extra passphrase (any existing password authenticates)
+cryptyrust passphrase add file.txt.arsn -p "existing" --new-pass "extra"
+cryptyrust passphrase add file.txt.arsn --new-pass-file extra_pw.txt
+
+# Remove an extra passphrase (primary password required for HeaderMAC)
+cryptyrust passphrase remove file.txt.arsn -p "primary" --remove-pass "extra"
 ```
 
 ---
@@ -188,5 +176,5 @@ cryptyrust/src/
 └── ui/
     ├── mod.rs       Main rendering dispatch
     ├── layouts.rs   Menu bar, action bar, central panel, status banners
-    └── components.rs Tables, popups, key manager, contact management
+    └── components.rs Tables, popups, key manager, About window
 ```

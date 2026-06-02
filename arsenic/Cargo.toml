@@ -19,6 +19,7 @@ deoxys = "0.1"
 
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 ml-kem  = { version = "0.3", features = ["zeroize"] }
+zstd    = "0.13"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

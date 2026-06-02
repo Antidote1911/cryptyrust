@@ -4,6 +4,7 @@ use std::io::{self, Read};
 use std::path::{Path, PathBuf};
 
 const ARSENIC_MAGIC: [u8; 4] = [0x41, 0x52, 0x53, 0x4E]; // "ARSN"
+const ARMOR_HEADER: &[u8] = b"-----BEGIN ARSENIC";
 
 #[derive(PartialEq, Clone, Copy, Debug)]
 pub enum Mode {
@@ -11,13 +12,16 @@ pub enum Mode {
     Decrypt,
 }
 
+/// Returns true if the file is an Arsenic encrypted file — either binary (.arsn)
+/// or ASCII-armored (.arsn.armor).
 pub fn is_cryptyrust_file(path: &Path) -> bool {
-    let Ok(mut f) = File::open(path) else {
-        return false;
-    };
-    let mut magic = [0u8; 4];
-    f.read_exact(&mut magic).is_ok() && magic == ARSENIC_MAGIC
+    let Ok(mut f) = File::open(path) else { return false };
+    let mut buf = [0u8; 18]; // enough to match both magic and armor header
+    let n = f.read(&mut buf).unwrap_or(0);
+    let bytes = &buf[..n];
+    bytes.starts_with(&ARSENIC_MAGIC) || bytes.starts_with(ARMOR_HEADER)
 }
+
 
 pub fn detect_mode(files: &[PathBuf]) -> Option<Mode> {
     if files.is_empty() {

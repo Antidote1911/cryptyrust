@@ -33,12 +33,16 @@ use arsenic::{
     arsenic_list_recipients,
     arsenic_main_routine, arsenic_main_routine_with_key, arsenic_rekey,
     arsenic_remove_recipient, decrypt_arsenic, decrypt_arsenic_with_key,
+    decrypt_block_at, decrypt_block_at_with_key,
     encode_privkey, encode_pubkey, decode_privkey, decode_pubkey,
     encode_mlkem_pubkey, decode_mlkem_pubkey,
     encrypt_arsenic, generate_x25519_keypair, hybrid_encapsulation_key,
     mlkem_seed_from_x25519, mlkem_encapsulation_key_768,
     is_arsenic_file, pubkey_from_privkey,
     bench_cipher_combinations,
+    armor, dearmor,
+    arsenic_add_passphrase, arsenic_remove_passphrase, arsenic_list_passphrases,
+    arsenic_read_sender_info,
     ArsenicParams, ArsenicStrength, CipherId, CoreErr, Direction, Secret, Ui,
 };
 
@@ -188,17 +192,27 @@ pub unsafe extern "C" fn arsenic_free_pubkey_array(arr: *mut ArsPubKeyArray) {
 /// **`strength`** — Argon2id cost preset:
 /// - `0` Interactive  (256 MiB, ~1–3 s)
 /// - `1` Sensitive    (1 GiB,  ~10–30 s)
+///
+/// **`compress_level`** — zstd compression level:
+/// - `0`    disabled (default)
+/// - `1–22` enabled (1 = fast, 22 = max; 3 is a good default)
+///
+/// **Warning:** compression leaks plaintext entropy via ciphertext size.
+/// Disable for size-sensitive data.
 #[repr(C)]
 pub struct ArsParams {
-    pub hdr_cipher: u8,
-    pub pld_cipher: u8,
-    pub strength:   u8,
+    pub hdr_cipher:     u8,
+    pub pld_cipher:     u8,
+    pub strength:       u8,
+    /// zstd compression level. 0 = disabled, 1–22 = enabled.
+    pub compress_level: i8,
 }
 
-/// Returns default parameters: Deoxys-II-256 header · XChaCha20-Poly1305 payload · Interactive.
+/// Returns default parameters: Deoxys-II-256 header · XChaCha20-Poly1305 payload ·
+/// Interactive strength · no compression.
 #[no_mangle]
 pub extern "C" fn arsenic_default_params() -> ArsParams {
-    ArsParams { hdr_cipher: 0x02, pld_cipher: 0x03, strength: 0 }
+    ArsParams { hdr_cipher: 0x02, pld_cipher: 0x03, strength: 0, compress_level: 0 }
 }
 
 fn to_core_params(p: &ArsParams, recipients: Vec<arsenic::HybridRecipient>) -> Result<ArsenicParams, i32> {
@@ -209,7 +223,13 @@ fn to_core_params(p: &ArsParams, recipients: Vec<arsenic::HybridRecipient>) -> R
         1 => ArsenicStrength::Sensitive,
         _ => return Err(ARSENIC_ERR_PARAMS),
     };
-    Ok(ArsenicParams { hdr_cipher: hdr, pld_cipher: pld, recipients, ..ArsenicParams::from(strength) })
+    let compress = if p.compress_level > 0 {
+        if p.compress_level > 22 { return Err(ARSENIC_ERR_PARAMS); }
+        Some(p.compress_level as i32)
+    } else {
+        None
+    };
+    Ok(ArsenicParams { hdr_cipher: hdr, pld_cipher: pld, recipients, compress, ..ArsenicParams::from(strength) })
 }
 
 // ── KDF params from file ──────────────────────────────────────────────────────
@@ -1009,6 +1029,240 @@ pub unsafe extern "C" fn arsenic_bench_best_combo(
     if arr.results.is_null() || arr.count == 0 { return; }
     let best_id = unsafe { (*arr.results).cipher_id };
     unsafe { *hdr_out = best_id; *pld_out = best_id; }
+}
+
+// ── ASCII Armor ───────────────────────────────────────────────────────────────
+
+/// Encode a binary Arsenic ciphertext as ASCII armor (base64 with BEGIN/END headers).
+///
+/// On success writes the UTF-8 armored text to `*out` (null-terminated, but also
+/// carries a byte count in `out->len`).  Free with `arsenic_free_buffer`.
+///
+/// Returns `ARSENIC_OK` on success.
+///
+/// # Safety
+/// `data` must point to `data_len` readable bytes; `out` must be non-null.
+#[no_mangle]
+pub unsafe extern "C" fn arsenic_armor(
+    data:     *const u8,
+    data_len: usize,
+    out:      *mut ArsBuffer,
+) -> i32 {
+    if out.is_null() { set_last_error("out is null"); return ARSENIC_ERR_NULL_PTR; }
+    unsafe { *out = ArsBuffer::null() };
+    if data.is_null() { set_last_error("data is null"); return ARSENIC_ERR_NULL_PTR; }
+    let bytes = unsafe { std::slice::from_raw_parts(data, data_len) };
+    let armored = armor(bytes);
+    unsafe { *out = ArsBuffer::from_vec(armored.into_bytes()) };
+    ARSENIC_OK
+}
+
+/// Decode ASCII armor back to binary.
+///
+/// `armored` must be a null-terminated UTF-8 string starting with
+/// `-----BEGIN ARSENIC ENCRYPTED FILE-----`.
+///
+/// On success writes the binary ciphertext to `*out`. Free with `arsenic_free_buffer`.
+///
+/// # Safety
+/// `armored` must be a valid null-terminated C string; `out` must be non-null.
+#[no_mangle]
+pub unsafe extern "C" fn arsenic_dearmor(
+    armored: *const c_char,
+    out:     *mut ArsBuffer,
+) -> i32 {
+    if out.is_null() { set_last_error("out is null"); return ARSENIC_ERR_NULL_PTR; }
+    unsafe { *out = ArsBuffer::null() };
+    let s = match unsafe { cstr_to_string(armored, "armored") } { Ok(s) => s, Err(c) => return c };
+    match dearmor(&s) {
+        Ok(bytes) => { unsafe { *out = ArsBuffer::from_vec(bytes) }; ARSENIC_OK }
+        Err(e) => { set_last_error(&e); ARSENIC_ERR_DECRYPT }
+    }
+}
+
+// ── Partial / random-access block decryption ──────────────────────────────────
+
+/// Decrypt a single block by index from an in-memory ciphertext, using a password.
+///
+/// # Security contract
+/// Only the block's AEAD tag is verified — the Merkle root is **not** checked.
+/// Returns `ARSENIC_ERR_PARAMS` if the file uses compression (random access
+/// requires uncompressed files).
+///
+/// # Safety
+/// All pointer arguments must be valid for the described lengths.
+#[no_mangle]
+pub unsafe extern "C" fn arsenic_decrypt_block(
+    ciphertext:     *const u8,
+    ciphertext_len: usize,
+    password:       *const c_char,
+    block_index:    u64,
+    progress_fn:    ArsProgressFn,
+    user_data:      *mut c_void,
+    out:            *mut ArsBuffer,
+) -> i32 {
+    if out.is_null() { set_last_error("out is null"); return ARSENIC_ERR_NULL_PTR; }
+    unsafe { *out = ArsBuffer::null() };
+    if ciphertext.is_null() { set_last_error("ciphertext is null"); return ARSENIC_ERR_NULL_PTR; }
+    let pwd = match unsafe { cstr_to_string(password, "password") } { Ok(s) => s, Err(c) => return c };
+    let data = unsafe { std::slice::from_raw_parts(ciphertext, ciphertext_len) };
+    let mut cursor = Cursor::new(data);
+    let ui = FfiUi { cb: progress_fn, user_data };
+    match decrypt_block_at(&mut cursor, &Secret::new(pwd), block_index, &ui) {
+        Ok(block) => { unsafe { *out = ArsBuffer::from_vec(block) }; ARSENIC_OK }
+        Err(e) => { set_last_error(&e); core_err_code(&e) }
+    }
+}
+
+/// Decrypt a single block by index from an in-memory ciphertext, using a private key.
+///
+/// Same security contract as `arsenic_decrypt_block` — AEAD only, no Merkle.
+///
+/// # Safety
+/// `privkey` must point to exactly 32 readable bytes.
+#[no_mangle]
+pub unsafe extern "C" fn arsenic_decrypt_block_with_key(
+    ciphertext:     *const u8,
+    ciphertext_len: usize,
+    privkey:        *const u8,
+    block_index:    u64,
+    progress_fn:    ArsProgressFn,
+    user_data:      *mut c_void,
+    out:            *mut ArsBuffer,
+) -> i32 {
+    if out.is_null() { set_last_error("out is null"); return ARSENIC_ERR_NULL_PTR; }
+    unsafe { *out = ArsBuffer::null() };
+    if ciphertext.is_null() || privkey.is_null() {
+        set_last_error("null pointer argument"); return ARSENIC_ERR_NULL_PTR;
+    }
+    let pk: [u8; 32] = unsafe { std::slice::from_raw_parts(privkey, 32) }.try_into().expect("32 bytes");
+    let data = unsafe { std::slice::from_raw_parts(ciphertext, ciphertext_len) };
+    let mut cursor = Cursor::new(data);
+    let ui = FfiUi { cb: progress_fn, user_data };
+    let mlkem_seed = mlkem_seed_from_x25519(&pk);
+    match decrypt_block_at_with_key(&mut cursor, &Secret::new(pk), &mlkem_seed, block_index, &ui) {
+        Ok(block) => { unsafe { *out = ArsBuffer::from_vec(block) }; ARSENIC_OK }
+        Err(e) => { set_last_error(&e); core_err_code(&e) }
+    }
+}
+
+// ── Passphrase slot management ────────────────────────────────────────────────
+
+/// Return the number of **extra** passphrase slots in the file (0 = primary slot only).
+///
+/// No password is required — the count is visible in the public header.
+/// Returns -1 on parse error.
+///
+/// # Safety
+/// `path` must be a valid null-terminated C string.
+#[no_mangle]
+pub unsafe extern "C" fn arsenic_passphrase_count_file(path: *const c_char) -> i32 {
+    let Ok(s) = (unsafe { cstr_to_string(path, "path") }) else { return -1 };
+    match arsenic_list_passphrases(Path::new(&s)) {
+        Ok(n) => n as i32,
+        Err(e) => { set_last_error(&e); -1 }
+    }
+}
+
+/// Add an extra passphrase slot to a file.
+///
+/// `existing_password` must authenticate via any existing slot.
+/// On success the file can be decrypted with either password.
+///
+/// Maximum 15 extra slots. Returns `ARSENIC_ERR_PARAMS` if the limit is reached.
+///
+/// # Safety
+/// All pointer arguments must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn arsenic_add_passphrase_file(
+    path:             *const c_char,
+    existing_password: *const c_char,
+    new_password:      *const c_char,
+    progress_fn:       ArsProgressFn,
+    user_data:         *mut c_void,
+) -> i32 {
+    let path_s   = match unsafe { cstr_to_string(path,              "path")             } { Ok(s) => s, Err(c) => return c };
+    let exist_pw = match unsafe { cstr_to_string(existing_password, "existing_password") } { Ok(s) => s, Err(c) => return c };
+    let new_pw   = match unsafe { cstr_to_string(new_password,      "new_password")      } { Ok(s) => s, Err(c) => return c };
+    let ui = FfiUi { cb: progress_fn, user_data };
+    match arsenic_add_passphrase(Path::new(&path_s), &Secret::new(exist_pw), &Secret::new(new_pw), &ui) {
+        Ok(()) => ARSENIC_OK,
+        Err(e) => { set_last_error(&e); core_err_code(&e) }
+    }
+}
+
+/// Remove an extra passphrase slot from a file.
+///
+/// `primary_password` authenticates the operation (HeaderMAC check).
+/// `password_to_remove` identifies the extra slot to drop.
+/// The primary slot cannot be removed — returns `ARSENIC_ERR_DECRYPT` if attempted.
+///
+/// # Safety
+/// All pointer arguments must be valid null-terminated C strings.
+#[no_mangle]
+pub unsafe extern "C" fn arsenic_remove_passphrase_file(
+    path:               *const c_char,
+    primary_password:   *const c_char,
+    password_to_remove: *const c_char,
+    progress_fn:        ArsProgressFn,
+    user_data:          *mut c_void,
+) -> i32 {
+    let path_s  = match unsafe { cstr_to_string(path,               "path")               } { Ok(s) => s, Err(c) => return c };
+    let prim_pw = match unsafe { cstr_to_string(primary_password,   "primary_password")   } { Ok(s) => s, Err(c) => return c };
+    let rm_pw   = match unsafe { cstr_to_string(password_to_remove, "password_to_remove") } { Ok(s) => s, Err(c) => return c };
+    let ui = FfiUi { cb: progress_fn, user_data };
+    match arsenic_remove_passphrase(Path::new(&path_s), &Secret::new(prim_pw), &Secret::new(rm_pw), &ui) {
+        Ok(()) => ARSENIC_OK,
+        Err(e) => { set_last_error(&e); core_err_code(&e) }
+    }
+}
+
+// ── Sender identity ───────────────────────────────────────────────────────────
+
+/// Read the sender identity embedded in the public (unencrypted) header of a file.
+///
+/// No password or private key is required.
+///
+/// On success:
+/// - `name_buf` receives the UTF-8 sender name (null-terminated, up to `name_buf_len` bytes)
+/// - `x25519_pk_out` receives 32 bytes (X25519 public key)
+/// - `mlkem_pk_out`  receives 1184 bytes (ML-KEM-768 encapsulation key)
+///
+/// Returns `ARSENIC_OK` if sender info is present, `ARSENIC_ERR_BAD_MAGIC` if absent
+/// (or if the file cannot be parsed).
+///
+/// # Safety
+/// `path` must be a valid null-terminated C string; all output buffers must have
+/// at least the documented capacity.
+#[no_mangle]
+pub unsafe extern "C" fn arsenic_read_sender_info_file(
+    path:          *const c_char,
+    name_buf:      *mut c_char,
+    name_buf_len:  usize,
+    x25519_pk_out: *mut u8,
+    mlkem_pk_out:  *mut u8,
+) -> i32 {
+    let Ok(path_s) = (unsafe { cstr_to_string(path, "path") }) else { return ARSENIC_ERR_NULL_PTR };
+    match arsenic_read_sender_info(Path::new(&path_s)) {
+        None => { set_last_error("no sender info in file"); ARSENIC_ERR_BAD_MAGIC }
+        Some(info) => {
+            if !name_buf.is_null() && name_buf_len > 0 {
+                let bytes = info.name.as_bytes();
+                let n = bytes.len().min(name_buf_len - 1);
+                unsafe {
+                    std::ptr::copy_nonoverlapping(bytes.as_ptr().cast::<c_char>(), name_buf, n);
+                    *name_buf.add(n) = 0;
+                }
+            }
+            if !x25519_pk_out.is_null() {
+                unsafe { std::ptr::copy_nonoverlapping(info.x25519_pk.as_ptr(), x25519_pk_out, 32) };
+            }
+            if !mlkem_pk_out.is_null() {
+                unsafe { std::ptr::copy_nonoverlapping(info.mlkem_pk.as_ptr(), mlkem_pk_out, 1184) };
+            }
+            ARSENIC_OK
+        }
+    }
 }
 
 // ── Tests ─────────────────────────────────────────────────────────────────────

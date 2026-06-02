@@ -7,16 +7,39 @@ pub mod keystore;
 mod secret;
 
 pub use crate::arsenic::bench::{bench_cipher_combinations, best_combination, CipherBenchResult};
-pub use crate::arsenic::header::{MAX_ASYM_KEYSLOTS, MAX_T_COST, MAX_P_COST};
+pub use crate::arsenic::header::{
+    MAX_ASYM_KEYSLOTS, MAX_T_COST, MAX_P_COST,
+    MAX_EXTRA_PASSPHRASE_SLOTS, COMPRESS_ZSTD,
+};
 pub use crate::arsenic::MAX_ARGON2_RAM_KB;
 pub use crate::arsenic::{
     ArsenicParams, ArsenicStrength, CipherId, EnvelopeMetadata,
     HybridKeyslot, HybridKeyslot1024, HybridRecipient, HybridPrivKey, KemLevel,
+    ExtraPassSlot,
     decrypt_arsenic, decrypt_arsenic_with_key, encrypt_arsenic,
+    encrypt_arsenic_to_writer,
+    decrypt_block_at, decrypt_block_at_with_key,
     find_decrypting_key, find_slot_for_privkey, list_recipients, rekey_arsenic,
+    armor, dearmor,
     BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE,
 };
 pub use crate::arsenic::header::SenderInfo;
+
+/// Armor encoding reveals the exact ciphertext length, which leaks a lower
+/// bound on the plaintext size.  For size-sensitive data, transport the raw
+/// `.arsn` binary instead.
+pub const ARMOR_LEAKS_SIZE: &str =
+    "ASCII armor reveals ciphertext length — leaks plaintext size lower bound.";
+
+/// Enabling zstd compression leaks plaintext entropy via ciphertext size.
+///
+/// An observer can infer characteristics of the plaintext (language, structure,
+/// partial content) from the compression ratio.  This is analogous to the
+/// CRIME/BREACH attacks against TLS compression.  Only enable compression when
+/// plaintext size confidentiality is not required.
+pub const COMPRESSION_LEAKS_SIZE: &str =
+    "zstd compression leaks plaintext entropy via ciphertext size — \
+     disable for size-sensitive data.";
 pub use crate::config::{Direction, Ui};
 pub use crate::keyfmt::{
     decode_mlkem_pubkey, decode_privkey, decode_pubkey,
@@ -148,6 +171,7 @@ pub fn arsenic_read_params(path: &std::path::Path) -> Option<ArsenicParams> {
         recipients: vec![],
         kem_level: arsenic::KemLevel::L768,
         sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
+        compress: None,
     })
 }
 
@@ -453,4 +477,81 @@ pub fn arsenic_main_routine(
     }
 
     Ok(start.elapsed().as_secs_f64())
+}
+
+// ── Feature 4: extra passphrase slot management ──────────────────────────────
+
+/// Add an extra passphrase keyslot to an Arsenic file.
+///
+/// `existing_password` authenticates via any existing slot.
+/// On success, the file can be decrypted with either password.
+///
+/// # Limits
+/// At most `MAX_EXTRA_PASSPHRASE_SLOTS` (15) extra slots.
+///
+/// # DoS note
+/// Extra slots do not benefit from HeaderMAC fast-fail — wrong password
+/// attempts pay the full Argon2id cost for each extra slot.
+pub fn arsenic_add_passphrase(
+    path: &std::path::Path,
+    existing_password: &Secret<String>,
+    new_password: &Secret<String>,
+    ui: &dyn Ui,
+) -> Result<(), CoreErr> {
+    ui.output(0);
+    let (new_header, old_header_size) = {
+        let mut f = File::open(path)?;
+        arsenic::build_header_with_added_passphrase(&mut f, existing_password, new_password)?
+    };
+    rewrite_file_with_new_header(path, &new_header, old_header_size)?;
+    ui.output(100);
+    Ok(())
+}
+
+/// Remove an extra passphrase keyslot from an Arsenic file.
+///
+/// `primary_password` authenticates the operation (HeaderMAC check).
+/// `password_to_remove` identifies the extra slot to drop.
+/// The primary slot cannot be removed.
+pub fn arsenic_remove_passphrase(
+    path: &std::path::Path,
+    primary_password: &Secret<String>,
+    password_to_remove: &Secret<String>,
+    ui: &dyn Ui,
+) -> Result<(), CoreErr> {
+    ui.output(0);
+    let (new_header, old_header_size) = {
+        let mut f = File::open(path)?;
+        arsenic::build_header_with_removed_passphrase(&mut f, primary_password, password_to_remove)?
+    };
+    rewrite_file_with_new_header(path, &new_header, old_header_size)?;
+    ui.output(100);
+    Ok(())
+}
+
+/// Return the number of extra passphrase keyslots (0 = only primary slot).
+///
+/// Reads the public header without decryption — no password required.
+/// The extra-slot count is not security-sensitive (it is visible in the header).
+pub fn arsenic_list_passphrases(path: &std::path::Path) -> Result<usize, CoreErr> {
+    use arsenic::header::{parse_header_bytes, parse_envelope, MIN_HEADER_TOTAL_SIZE};
+    use crate::arsenic::MAX_HEADER_TOTAL_SIZE;
+
+    let mut f = File::open(path)?;
+    let mut prefix = [0u8; 13];
+    f.read_exact(&mut prefix)?;
+    let header_total_size =
+        u32::from_le_bytes([prefix[9], prefix[10], prefix[11], prefix[12]]) as usize;
+    if header_total_size < MIN_HEADER_TOTAL_SIZE
+        || header_total_size > MAX_HEADER_TOTAL_SIZE as usize
+    {
+        return Err(CoreErr::DecryptFail("Invalid header_total_size".into()));
+    }
+    let mut header_buf = vec![0u8; header_total_size];
+    header_buf[..13].copy_from_slice(&prefix);
+    f.read_exact(&mut header_buf[13..])?;
+
+    let (_, _, _, enc_env_region) = parse_header_bytes(&header_buf)?;
+    let envelope = parse_envelope(&enc_env_region)?;
+    Ok(envelope.extra_pass_slots.len())
 }

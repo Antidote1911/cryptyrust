@@ -64,16 +64,29 @@ pub const ASYM_1024_COUNT_LEN: usize = 4;
 pub const MAX_ASYM_KEYSLOTS: usize = 256;
 
 pub const MERKLE_V1: u8 = 0x01;
-pub const SENDER_PRESENT_LEN: usize = 1; // sender_present byte
+pub const SENDER_PRESENT_LEN: usize = 1;
+
+// ── Extra passphrase keyslots ─────────────────────────────────────────────────
+
+/// u32 LE count of extra passphrase slots in the envelope.
+pub const EXTRA_PASS_COUNT_LEN: usize = 4;
+/// Each extra slot = salt[16] + kek_nonce[12] + wrapped_dek[48] = 76 bytes.
+pub const EXTRA_PASS_SLOT_LEN: usize = 16 + 12 + WRAPPED_DEK_LEN;
+/// Hard limit on extra passphrase slots to bound Argon2id DoS.
+pub const MAX_EXTRA_PASSPHRASE_SLOTS: usize = 15;
+
+// ── Compression ───────────────────────────────────────────────────────────────
+pub const COMPRESS_ZSTD: u8 = 0x01;
 
 pub const META_TLV_MANDATORY_PT_LEN: usize = 50;
 
 /// Minimum total header size (0 keyslots, no sender, no optional metadata):
-///   PUB_HEADER_LEN(109) + WRAPPED_DEK_LEN(48) + ASYM_COUNT_LEN(4)
-///   + ASYM_1024_COUNT_LEN(4) + SENDER_PRESENT_LEN(1)
-///   + META_TLV_MANDATORY_PT_LEN(50) + GCM_TAG(16) = 232
+///   PUB_HEADER_LEN(109) + WRAPPED_DEK_LEN(48) + EXTRA_PASS_COUNT_LEN(4)
+///   + ASYM_COUNT_LEN(4) + ASYM_1024_COUNT_LEN(4) + SENDER_PRESENT_LEN(1)
+///   + META_TLV_MANDATORY_PT_LEN(50) + GCM_TAG(16) = 236
 pub const MIN_HEADER_TOTAL_SIZE: usize =
-    PUB_HEADER_LEN + WRAPPED_DEK_LEN + ASYM_COUNT_LEN + ASYM_1024_COUNT_LEN
+    PUB_HEADER_LEN + WRAPPED_DEK_LEN + EXTRA_PASS_COUNT_LEN
+    + ASYM_COUNT_LEN + ASYM_1024_COUNT_LEN
     + META_TLV_MANDATORY_PT_LEN + GCM_TAG + SENDER_PRESENT_LEN;
 
 // ── TLV tag identifiers ───────────────────────────────────────────────────────
@@ -81,9 +94,10 @@ pub const MIN_HEADER_TOTAL_SIZE: usize =
 pub mod tlv_tags {
     pub const MERKLE_ROOT: u8 = 0x02;
     pub const ORIGINAL_SIZE: u8 = 0x03;
-    // 0x04 (CompressedSize) removed — always equalled OriginalSize (no compression).
     pub const BLOCK_SIZE_ID: u8 = 0x05;
     pub const MERKLE_ALGO_ID: u8 = 0x06;
+    /// Compression algorithm (1 byte: 0x01 = zstd).  Absent = no compression.
+    pub const COMPRESS_ALGO_ID: u8 = 0x07;
     pub const FILENAME: u8 = 0x10;
     pub const COMMENT: u8 = 0x11;
     pub const TIMESTAMP_SECS: u8 = 0x12;
@@ -113,6 +127,38 @@ pub struct SenderInfo {
 /// Byte marker for the sender region: 0x00 = none, 0x01 = present.
 pub const SENDER_PRESENT_NONE: u8 = 0x00;
 pub const SENDER_PRESENT: u8 = 0x01;
+
+/// One extra passphrase keyslot — 76 bytes on disk.
+///
+/// KDF parameters (t_cost / m_cost / p_cost) are shared from the PublicHeader.
+/// Authentication relies solely on the AEAD tag of `wrapped_dek`; there is no
+/// HeaderMAC for extra slots.  A wrong password pays the full Argon2id cost.
+///
+/// Domain AAD used for wrapping: `"arsenic-v1-extra-pass-wrapped-dek"`.
+#[derive(Clone)]
+pub struct ExtraPassSlot {
+    pub salt:        [u8; 16],
+    pub kek_nonce:   [u8; 12],
+    pub wrapped_dek: [u8; WRAPPED_DEK_LEN],
+}
+
+impl ExtraPassSlot {
+    pub fn to_bytes(&self) -> [u8; EXTRA_PASS_SLOT_LEN] {
+        let mut buf = [0u8; EXTRA_PASS_SLOT_LEN];
+        buf[..16].copy_from_slice(&self.salt);
+        buf[16..28].copy_from_slice(&self.kek_nonce);
+        buf[28..].copy_from_slice(&self.wrapped_dek);
+        buf
+    }
+
+    pub fn from_bytes(b: &[u8; EXTRA_PASS_SLOT_LEN]) -> Self {
+        Self {
+            salt:        b[..16].try_into().unwrap(),
+            kek_nonce:   b[16..28].try_into().unwrap(),
+            wrapped_dek: b[28..].try_into().unwrap(),
+        }
+    }
+}
 
 /// One hybrid (X25519 + ML-KEM-768) keyslot — 1180 bytes on disk.
 ///
@@ -175,6 +221,8 @@ pub struct EnvelopeContent {
     pub original_size: u64,
     pub block_size_id: u8,
     pub merkle_algo_id: u8,
+    /// Compression algorithm stored in TLV 0x07.  `None` = no compression.
+    pub compress_algo: Option<u8>,
     pub filename: Option<String>,
     pub comment: Option<String>,
     pub timestamp_secs: Option<u64>,
@@ -223,11 +271,14 @@ impl HybridKeyslot1024 {
 
 /// Parsed envelope region (post-MAC).
 ///
-/// Layout:  sym_wrapped_dek(48) | asym_768_count(4) | keyslots_768(1180×N)
-///        | asym_1024_count(4)  | keyslots_1024(1660×M)
-///        | protected_meta(var) | sender_present(1) | [sender_region]
+/// Layout: wrapped_dek(48) | extra_pass_count(4) | extra_slots(76×K)
+///       | asym_768_count(4) | keyslots_768(1180×N)
+///       | asym_1024_count(4) | keyslots_1024(1660×M)
+///       | protected_meta(var) | sender_present(1) | [sender_region]
 pub struct ParsedEnvelope {
     pub wrapped_dek: [u8; WRAPPED_DEK_LEN],
+    /// Extra passphrase keyslots (0 = only primary slot).
+    pub extra_pass_slots: Vec<ExtraPassSlot>,
     pub hybrid_keyslots: Vec<HybridKeyslot>,
     pub hybrid_keyslots_1024: Vec<HybridKeyslot1024>,
     pub protected_meta: Vec<u8>,
@@ -257,6 +308,9 @@ pub fn serialize_meta_tlv(env: &EnvelopeContent) -> Vec<u8> {
     tlv_push(&mut buf, tlv_tags::ORIGINAL_SIZE, &env.original_size.to_le_bytes());
     tlv_push(&mut buf, tlv_tags::BLOCK_SIZE_ID, &[env.block_size_id]);
     tlv_push(&mut buf, tlv_tags::MERKLE_ALGO_ID, &[env.merkle_algo_id]);
+    if let Some(algo) = env.compress_algo {
+        tlv_push(&mut buf, tlv_tags::COMPRESS_ALGO_ID, &[algo]);
+    }
     if let Some(ref s) = env.filename {
         let b = s.as_bytes();
         if !b.is_empty() {
@@ -280,6 +334,7 @@ pub fn deserialize_meta_tlv(buf: &[u8], dek: [u8; 32]) -> Result<EnvelopeContent
     let mut original_size: Option<u64> = None;
     let mut block_size_id: Option<u8> = None;
     let mut merkle_algo_id: Option<u8> = None;
+    let mut compress_algo: Option<u8> = None;
     let mut filename: Option<String> = None;
     let mut comment: Option<String> = None;
     let mut timestamp_secs: Option<u64> = None;
@@ -323,6 +378,9 @@ pub fn deserialize_meta_tlv(buf: &[u8], dek: [u8; 32]) -> Result<EnvelopeContent
             tlv_tags::MERKLE_ALGO_ID if len == 1 && merkle_algo_id.is_none() => {
                 merkle_algo_id = Some(val[0]);
             }
+            tlv_tags::COMPRESS_ALGO_ID if len == 1 && compress_algo.is_none() => {
+                compress_algo = Some(val[0]);
+            }
             tlv_tags::FILENAME if filename.is_none() => {
                 filename = std::str::from_utf8(val).ok().map(str::to_owned);
             }
@@ -353,6 +411,7 @@ pub fn deserialize_meta_tlv(buf: &[u8], dek: [u8; 32]) -> Result<EnvelopeContent
         block_size_id: block_size_id
             .ok_or_else(|| CoreErr::DecryptFail("TLV: missing BlockSizeId".into()))?,
         merkle_algo_id,
+        compress_algo,
         filename,
         comment,
         timestamp_secs,
@@ -363,17 +422,38 @@ pub fn deserialize_meta_tlv(buf: &[u8], dek: [u8; 32]) -> Result<EnvelopeContent
 
 /// Parse the envelope region (post-MAC).
 ///
-/// Layout: wrapped_dek(48) | count_768(4) | keyslots_768(1180×N)
-///        | count_1024(4)  | keyslots_1024(1660×M)
-///        | protected_meta(var) | sender_present(1) | [sender_region]
+/// Layout: wrapped_dek(48) | extra_pass_count(4) | extra_slots(76×K)
+///       | count_768(4) | keyslots_768(1180×N)
+///       | count_1024(4) | keyslots_1024(1660×M)
+///       | protected_meta(var) | sender_present(1) | [sender_region]
 pub fn parse_envelope(enc_region: &[u8]) -> Result<ParsedEnvelope, CoreErr> {
-    let min = WRAPPED_DEK_LEN + ASYM_COUNT_LEN + ASYM_1024_COUNT_LEN;
+    let min = WRAPPED_DEK_LEN + EXTRA_PASS_COUNT_LEN + ASYM_COUNT_LEN + ASYM_1024_COUNT_LEN;
     if enc_region.len() < min {
         return Err(CoreErr::DecryptFail("Envelope region too short".into()));
     }
 
     let wrapped_dek: [u8; WRAPPED_DEK_LEN] = enc_region[..WRAPPED_DEK_LEN].try_into().unwrap();
     let mut pos = WRAPPED_DEK_LEN;
+
+    // Extra passphrase slots
+    let extra_count = u32::from_le_bytes(enc_region[pos..pos+4].try_into().unwrap()) as usize;
+    pos += 4;
+    if extra_count > MAX_EXTRA_PASSPHRASE_SLOTS {
+        return Err(CoreErr::DecryptFail(format!("too many extra passphrase slots: {extra_count}")));
+    }
+    let end_extra = pos.checked_add(extra_count * EXTRA_PASS_SLOT_LEN)
+        .ok_or_else(|| CoreErr::DecryptFail("extra passphrase slot overflow".into()))?;
+    if enc_region.len() < end_extra {
+        return Err(CoreErr::DecryptFail("Envelope too short for extra passphrase slots".into()));
+    }
+    let mut extra_pass_slots = Vec::with_capacity(extra_count);
+    for i in 0..extra_count {
+        let s = pos + i * EXTRA_PASS_SLOT_LEN;
+        extra_pass_slots.push(ExtraPassSlot::from_bytes(
+            enc_region[s..s+EXTRA_PASS_SLOT_LEN].try_into().unwrap()
+        ));
+    }
+    pos = end_extra;
 
     // ML-KEM-768 keyslots
     let count_768 = u32::from_le_bytes(enc_region[pos..pos+4].try_into().unwrap()) as usize;
@@ -463,6 +543,7 @@ pub fn parse_envelope(enc_region: &[u8]) -> Result<ParsedEnvelope, CoreErr> {
 
     Ok(ParsedEnvelope {
         wrapped_dek,
+        extra_pass_slots,
         hybrid_keyslots,
         hybrid_keyslots_1024,
         protected_meta: protected_meta_slice.to_vec(),
@@ -473,6 +554,7 @@ pub fn parse_envelope(enc_region: &[u8]) -> Result<ParsedEnvelope, CoreErr> {
 /// Serialize the envelope region.
 pub fn build_envelope_region(
     wrapped_dek: &[u8; WRAPPED_DEK_LEN],
+    extra_pass_slots: &[ExtraPassSlot],
     hybrid_keyslots: &[HybridKeyslot],
     hybrid_keyslots_1024: &[HybridKeyslot1024],
     protected_meta: &[u8],
@@ -480,6 +562,8 @@ pub fn build_envelope_region(
 ) -> Vec<u8> {
     let mut buf = Vec::new();
     buf.extend_from_slice(wrapped_dek);
+    buf.extend_from_slice(&(extra_pass_slots.len() as u32).to_le_bytes());
+    for slot in extra_pass_slots { buf.extend_from_slice(&slot.to_bytes()); }
     buf.extend_from_slice(&(hybrid_keyslots.len() as u32).to_le_bytes());
     for slot in hybrid_keyslots { buf.extend_from_slice(&slot.to_bytes()); }
     buf.extend_from_slice(&(hybrid_keyslots_1024.len() as u32).to_le_bytes());

@@ -86,6 +86,43 @@ pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bo
             ui.add_space(6.0);
             ui.separator();
 
+            // ── Compression (zstd) ────────────────────────────────────
+            ui.label(egui::RichText::new("Compression").strong());
+            ui.horizontal(|ui| {
+                let mut enabled = app.compress.is_some();
+                if ui.checkbox(&mut enabled, "zstd (encryption only)").changed() {
+                    app.compress = if enabled { Some(3) } else { None };
+                }
+            });
+            if let Some(ref mut level) = app.compress {
+                ui.horizontal(|ui| {
+                    ui.label("Level:");
+                    ui.add(egui::Slider::new(level, 1..=22).text("1=fast  22=max"));
+                });
+                ui.label(
+                    egui::RichText::new(
+                        "⚠ Compression leaks plaintext entropy via ciphertext size.\n\
+                         Disable for size-sensitive data.",
+                    )
+                    .small()
+                    .color(egui::Color32::from_rgb(220, 150, 40)),
+                );
+            }
+
+            ui.add_space(4.0);
+
+            // ── ASCII Armor ───────────────────────────────────────────
+            ui.label(egui::RichText::new("ASCII Armor").strong());
+            ui.checkbox(&mut app.armor, "Wrap output in armor (encrypt only)")
+                .on_hover_text(
+                    "Output is base64-encoded with BEGIN/END headers.\n\
+                     Safe for email and text channels.\n\
+                     Armor reveals the ciphertext size.",
+                );
+
+            ui.add_space(6.0);
+            ui.separator();
+
             if ui
                 .add_enabled(
                     !is_running && !app.bench_running,
@@ -567,7 +604,7 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
         ui.separator();
         ui.add_space(8.0);
 
-        // ── Colonne gauche : format Arsenic — Colonne droite : crypto ─────
+        // ── Colonne gauche : format — Colonne droite : crypto ────────────
         ui.columns(2, |cols| {
             // Colonne 1 — Format
             let ui = &mut cols[0];
@@ -583,6 +620,24 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
             );
             ui.label(egui::RichText::new("BLAKE3 Merkle tree").size(12.5));
             ui.label(egui::RichText::new("Streaming par blocs").size(12.5));
+            ui.add_space(4.0);
+            ui.label(egui::RichText::new("Fonctionnalités").size(13.0).strong());
+            ui.add_space(2.0);
+            let compress_txt = match app.compress {
+                None => "Compression : off".to_string(),
+                Some(l) => format!("Compression : zstd niveau {l}"),
+            };
+            ui.label(egui::RichText::new(compress_txt).size(12.0).weak());
+            ui.label(
+                egui::RichText::new(if app.armor { "Armor : activé" } else { "Armor : off" })
+                    .size(12.0)
+                    .weak(),
+            );
+            ui.label(
+                egui::RichText::new("Multi-passphrase · Accès bloc")
+                    .size(12.0)
+                    .weak(),
+            );
 
             // Colonne 2 — Crypto
             let ui = &mut cols[1];
@@ -601,11 +656,16 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
                     .color(pq_color),
             );
             ui.label(
-                egui::RichText::new("KEM hybride post-quantique")
-                    .size(11.5)
-                    .color(pq_color)
-                    .weak(),
+                egui::RichText::new(match app.kem_level {
+                    arsenic::KemLevel::L768  => "NIST level 3  (~180-bit quantum)",
+                    arsenic::KemLevel::L1024 => "NIST level 5  (~256-bit quantum)",
+                })
+                .size(11.5)
+                .color(pq_color)
+                .weak(),
             );
+            ui.add_space(2.0);
+            ui.label(egui::RichText::new("ASCII Armor — base64 transport").size(12.0).weak());
         });
 
         ui.add_space(8.0);
@@ -643,7 +703,7 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
         // ── Pied de page ───────────────────────────────────────────────────
         ui.horizontal(|ui| {
             ui.label(
-                egui::RichText::new("Rust • eframe / egui • NIST FIPS 203")
+                egui::RichText::new("Rust • eframe / egui • NIST FIPS 203 • zstd")
                     .size(11.5)
                     .weak(),
             );

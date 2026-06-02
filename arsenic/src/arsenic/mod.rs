@@ -1,4 +1,5 @@
 pub mod bench;
+pub mod armor;
 mod cipher_dispatch;
 mod crypto;
 pub(crate) mod header;
@@ -8,11 +9,21 @@ pub use crypto::{
     decrypt_arsenic, decrypt_arsenic_with_key, encrypt_arsenic, find_decrypting_key,
     find_slot_for_privkey, list_recipients, rekey_arsenic,
     build_header_with_added_recipient, build_header_with_removed_recipient,
+    build_header_with_added_passphrase, build_header_with_removed_passphrase,
+    encrypt_arsenic_to_writer,
+    decrypt_block_at, decrypt_block_at_with_key,
+    try_extra_passphrase_slots,
     HybridPrivKey,
 };
+pub use armor::{armor, dearmor};
 
 use crate::arsenic::hybrid_kem::EK_LEN as MLKEM_EK_LEN;
-pub use header::{HybridKeyslot, HybridKeyslot1024, EnvelopeMetadata, MIN_HEADER_TOTAL_SIZE, WRAPPED_DEK_LEN};
+pub use header::{
+    HybridKeyslot, HybridKeyslot1024, ExtraPassSlot,
+    EnvelopeMetadata, MIN_HEADER_TOTAL_SIZE, WRAPPED_DEK_LEN,
+    EXTRA_PASS_COUNT_LEN, EXTRA_PASS_SLOT_LEN, MAX_EXTRA_PASSPHRASE_SLOTS,
+    COMPRESS_ZSTD,
+};
 pub use header::{MAX_T_COST, MAX_P_COST};
 
 // Safety limits (DoS protection before running any KDF).
@@ -112,6 +123,12 @@ pub struct ArsenicParams {
     pub sender_x25519_pk: Option<[u8; 32]>,
     /// Sender's ML-KEM-768 encapsulation key (1184 bytes).
     pub sender_mlkem_pk: Option<[u8; 1184]>,
+    /// zstd compression level (1–22).  `None` = disabled.
+    ///
+    /// # Security warning
+    /// Enabling compression leaks plaintext entropy via ciphertext size.
+    /// See `COMPRESSION_LEAKS_SIZE` for details.
+    pub compress: Option<i32>,
 }
 
 impl Default for ArsenicParams {
@@ -130,8 +147,8 @@ impl From<ArsenicStrength> for ArsenicParams {
                 metadata: EnvelopeMetadata::default(),
                 recipients: vec![],
                 kem_level: KemLevel::L768,
-
                 sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
+                compress: None,
             },
             ArsenicStrength::Sensitive => Self {
                 t_cost: 12, m_cost: 1024 * 1024, p_cost: 4,
@@ -140,8 +157,8 @@ impl From<ArsenicStrength> for ArsenicParams {
                 metadata: EnvelopeMetadata::default(),
                 recipients: vec![],
                 kem_level: KemLevel::L768,
-
                 sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
+                compress: None,
             },
         }
     }

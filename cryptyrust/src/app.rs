@@ -41,6 +41,10 @@ pub struct CryptyApp {
     pub pld_cipher: CipherId,
     /// ML-KEM security level for asymmetric keyslots (L768 default / L1024).
     pub kem_level: KemLevel,
+    /// zstd compression level (None = disabled, 1–22 when enabled).
+    pub compress: Option<i32>,
+    /// Wrap encrypted output in ASCII armor.
+    pub armor: bool,
     /// Sender info extracted after decryption — offered as "Add to contacts?".
     pub pending_contact_from_file: Option<arsenic::keystore::ContactEntry>,
     pub show_about: bool,
@@ -114,6 +118,15 @@ impl CryptyApp {
             })
             .unwrap_or(KemLevel::L768);
 
+        let compress: Option<i32> = storage
+            .and_then(|s| s.get_string("compress_level"))
+            .and_then(|s| s.parse().ok());
+
+        let armor = storage
+            .and_then(|s| s.get_string("armor"))
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(false);
+
         Self {
             files: vec![],
             mode: Mode::Encrypt,
@@ -132,6 +145,8 @@ impl CryptyApp {
             hdr_cipher,
             pld_cipher,
             kem_level,
+            compress,
+            armor,
             pending_contact_from_file: None,
             show_about: false,
             dark_mode,
@@ -246,7 +261,8 @@ impl CryptyApp {
     pub fn open_popup_or_auto_decrypt(&mut self, ctx: &egui::Context) {
         if self.mode == Mode::Decrypt && !self.keys.is_empty() {
             if let Some(path) = self.files.first().cloned() {
-                if let Some(idx) = arsenic::arsenic_find_matching_key(&path, &self.keys) {
+                let matched = self.find_matching_key_any_format(&path);
+                if let Some(idx) = matched {
                     self.decrypt_key_index = Some(idx);
                     self.popup = PasswordPopup::Closed;
                     self.start_job(ctx.clone(), String::new());
@@ -255,6 +271,34 @@ impl CryptyApp {
             }
         }
         self.open_popup();
+    }
+
+    /// Probe a file for a matching keypair, handling both binary and armored formats.
+    fn find_matching_key_any_format(&self, path: &std::path::Path) -> Option<usize> {
+        use std::io::Cursor;
+        use arsenic::{HybridPrivKey, find_decrypting_key};
+
+        let hybrid_keys: Vec<HybridPrivKey<'_>> = self.keys.iter()
+            .map(|k| HybridPrivKey { x25519_sk: &k.private_key, mlkem_seed: &k.mlkem_seed })
+            .collect();
+
+        // Try binary first (fast path).
+        if let Ok(mut f) = std::fs::File::open(path) {
+            if let Ok(Some(idx)) = find_decrypting_key(&mut f, &hybrid_keys) {
+                return Some(idx);
+            }
+        }
+
+        // Try dearmoring (armored file path).
+        let data = std::fs::read(path).ok()?;
+        if data.starts_with(b"-----BEGIN ARSENIC") {
+            let s = std::str::from_utf8(&data).ok()?;
+            let ct = arsenic::dearmor(s).ok()?;
+            let mut cursor = Cursor::new(ct);
+            return find_decrypting_key(&mut cursor, &hybrid_keys).ok().flatten();
+        }
+
+        None
     }
 
     pub fn open_change_pw_popup(&mut self) {
@@ -550,13 +594,14 @@ impl CryptyApp {
             pld_cipher: self.pld_cipher,
             recipients,
             kem_level: self.kem_level,
+            compress: self.compress,
             sender_name: None,
             sender_x25519_pk: None,
             sender_mlkem_pk: None,
             ..ArsenicParams::from(self.arsenic_strength)
         };
         self.job
-            .start(self.files.clone(), self.mode, params, password, privkey, ctx);
+            .start(self.files.clone(), self.mode, params, self.armor, password, privkey, ctx);
     }
 }
 
@@ -577,6 +622,12 @@ impl eframe::App for CryptyApp {
             KemLevel::L768  => "768",
             KemLevel::L1024 => "1024",
         }.to_string());
+        if let Some(level) = self.compress {
+            storage.set_string("compress_level", level.to_string());
+        } else {
+            storage.set_string("compress_level", "none".to_string());
+        }
+        storage.set_string("armor", self.armor.to_string());
     }
 
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {

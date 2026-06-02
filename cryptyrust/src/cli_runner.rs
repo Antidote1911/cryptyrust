@@ -2,6 +2,8 @@ use arsenic::{
     arsenic_add_recipient, arsenic_find_matching_key, arsenic_find_slot_for_key,
     arsenic_list_recipients, arsenic_main_routine, arsenic_main_routine_with_key,
     arsenic_rekey, arsenic_remove_recipient, is_arsenic_file,
+    arsenic_add_passphrase, arsenic_remove_passphrase, arsenic_list_passphrases,
+    armor, dearmor,
     keystore::{
         load_identity_file, load_keystore, resolve_recipient, keys_dir, save_key, KeyEntry,
         serialize_identity, parse_identity,
@@ -9,9 +11,10 @@ use arsenic::{
     encode_pubkey,
     ArsenicParams, Direction, Secret, Ui,
     bench_cipher_combinations, best_combination, CipherId,
+    COMPRESSION_LEAKS_SIZE,
 };
 use clap::Parser;
-use crate::cli::{Cli, KeygenCli, RecipientsCli, RecipientsAction};
+use crate::cli::{Cli, KeygenCli, RecipientsCli, RecipientsAction, PassphraseCli, PassphraseAction};
 use std::{
     env,
     io::{self, BufRead, Write},
@@ -91,6 +94,18 @@ pub fn run() {
             .collect();
         let cli = KeygenCli::parse_from(argv);
         if let Err(e) = run_keygen(cli) {
+            eprintln!("\n{e}");
+            std::process::exit(1);
+        }
+        return;
+    }
+
+    if raw.get(1).map(|s| s.as_str()) == Some("passphrase") {
+        let argv: Vec<String> = std::iter::once("cryptyrust passphrase".to_string())
+            .chain(raw.into_iter().skip(2))
+            .collect();
+        let cli = PassphraseCli::parse_from(argv);
+        if let Err(e) = run_passphrase(cli) {
             eprintln!("\n{e}");
             std::process::exit(1);
         }
@@ -239,15 +254,23 @@ fn run_encrypt(
         get_password_for_encrypt(app)?
     };
 
+    if let Some(level) = app.compress() {
+        if !(1..=22).contains(&level) {
+            return Err(anyhow!("--compress level must be 1–22 (got {level})"));
+        }
+        eprintln!("⚠  {COMPRESSION_LEAKS_SIZE}");
+    }
+
     let params = ArsenicParams {
         hdr_cipher: app.hdr_cipher(),
         pld_cipher: app.pld_cipher(),
         recipients,
         kem_level: app.kem_level(),
+        compress: app.compress(),
         ..ArsenicParams::from(app.strength())
     };
 
-    arsenic_main_routine(
+    let elapsed = arsenic_main_routine(
         &Direction::Encrypt,
         filename,
         Some(out_str),
@@ -255,7 +278,22 @@ fn run_encrypt(
         ui,
         Some(params),
     )
-    .map_err(|e| anyhow!(e))
+    .map_err(|e| anyhow!(e))?;
+
+    // If --armor: read the encrypted file, armor it, write to <out_str>.armor
+    if app.armor() {
+        let ct = std::fs::read(out_str)
+            .with_context(|| format!("cannot read {out_str} for armoring"))?;
+        let armored = armor(&ct);
+        let armor_path = format!("{out_str}.armor");
+        std::fs::write(&armor_path, armored.as_bytes())
+            .with_context(|| format!("cannot write armor file {armor_path}"))?;
+        std::fs::remove_file(out_str)
+            .with_context(|| format!("cannot remove {out_str}"))?;
+        eprintln!("Armored output: {armor_path}");
+    }
+
+    Ok(elapsed)
 }
 
 // ── Decrypt ───────────────────────────────────────────────────────────────────
@@ -266,6 +304,17 @@ fn run_decrypt(
     out_str: &str,
     ui: Box<ProgressUpdater>,
 ) -> Result<f64> {
+    // Auto-detect ASCII armor: if the file starts with the armor header, dearmor
+    // to a memory buffer and decrypt from there.
+    let raw_bytes = std::fs::read(filename)
+        .with_context(|| format!("cannot read {filename}"))?;
+    if raw_bytes.starts_with(b"-----BEGIN ARSENIC") {
+        let armor_str = std::str::from_utf8(&raw_bytes)
+            .map_err(|_| anyhow!("armor file is not valid UTF-8"))?;
+        let ct = dearmor(armor_str).map_err(|e| anyhow!("dearmor failed: {e}"))?;
+        return decrypt_from_bytes(app, ct, out_str, ui);
+    }
+
     let path = Path::new(filename);
 
     let explicit_identities: Vec<_> = app
@@ -717,4 +766,106 @@ fn write_identity_file(path: &Path, content: &str) -> Result<()> {
     }
     std::fs::write(path, content)?;
     Ok(())
+}
+
+// ── Decrypt from an in-memory buffer (used for armored files) ─────────────────
+
+fn decrypt_from_bytes(
+    app: &Cli,
+    ct: Vec<u8>,
+    out_str: &str,
+    ui: Box<ProgressUpdater>,
+) -> Result<f64> {
+    use std::io::Cursor;
+    use arsenic::{decrypt_arsenic, decrypt_arsenic_with_key};
+
+    let filesize = ct.len() as u64;
+    let start = std::time::Instant::now();
+
+    // Try asymmetric keys first.
+    let explicit_identities: Vec<_> = app
+        .identities()
+        .iter()
+        .filter_map(|p| load_identity_file(Path::new(p)))
+        .collect();
+
+    if !explicit_identities.is_empty() {
+        for key in &explicit_identities {
+            let mut cur = Cursor::new(&ct);
+            let mut out = std::fs::File::create(out_str)?;
+            let privkey = Secret::new(key.private_key);
+            if decrypt_arsenic_with_key(&mut cur, &mut out, &privkey, &key.mlkem_seed, &*ui, filesize).is_ok() {
+                eprintln!("Decrypted with identity: {}", key.name);
+                return Ok(start.elapsed().as_secs_f64());
+            }
+        }
+        return Err(anyhow!("none of the provided identity files can decrypt this armored file"));
+    }
+
+    let keystore = load_keystore();
+    for key in &keystore {
+        let mut cur = Cursor::new(&ct);
+        let mut out = std::fs::File::create(out_str)?;
+        let privkey = Secret::new(key.private_key);
+        if decrypt_arsenic_with_key(&mut cur, &mut out, &privkey, &key.mlkem_seed, &*ui, filesize).is_ok() {
+            eprintln!("Decrypted with stored key: {}", key.name);
+            return Ok(start.elapsed().as_secs_f64());
+        }
+    }
+
+    let password = get_password_for_decrypt(app)?;
+    let mut cur = Cursor::new(&ct);
+    let mut out = std::fs::File::create(out_str)?;
+    decrypt_arsenic(&mut cur, &mut out, &password, &*ui, filesize)
+        .map_err(|e| anyhow!(e))?;
+    Ok(start.elapsed().as_secs_f64())
+}
+
+// ── Passphrase slot management ────────────────────────────────────────────────
+
+fn run_passphrase(cli: PassphraseCli) -> Result<()> {
+    struct SilentUi;
+    impl Ui for SilentUi { fn output(&self, _: i32) {} }
+
+    match cli.action {
+        PassphraseAction::List { file } => {
+            let count = arsenic_list_passphrases(Path::new(&file))
+                .map_err(|e| anyhow!(e))?;
+            println!("Extra passphrase slots: {count}  (+ 1 primary = {} total)", count + 1);
+        }
+
+        PassphraseAction::Add { file, password, passwordfile, new_pass, new_pass_file } => {
+            let existing_pw = resolve_password(password, passwordfile, "Existing password: ")?;
+            let new_pw = resolve_password(new_pass, new_pass_file, "New passphrase: ")?;
+            arsenic_add_passphrase(
+                Path::new(&file), &existing_pw, &new_pw, &SilentUi,
+            ).map_err(|e| anyhow!(e))?;
+            println!("✓ Extra passphrase slot added.");
+        }
+
+        PassphraseAction::Remove { file, password, passwordfile, remove_pass, remove_pass_file } => {
+            let primary_pw = resolve_password(password, passwordfile, "Primary password: ")?;
+            let rm_pw = resolve_password(remove_pass, remove_pass_file, "Passphrase to remove: ")?;
+            arsenic_remove_passphrase(
+                Path::new(&file), &primary_pw, &rm_pw, &SilentUi,
+            ).map_err(|e| anyhow!(e))?;
+            println!("✓ Passphrase slot removed.");
+        }
+    }
+    Ok(())
+}
+
+fn resolve_password(
+    inline: Option<String>,
+    file: Option<String>,
+    prompt: &str,
+) -> Result<Secret<String>> {
+    if let Some(p) = inline { return Ok(Secret::new(p)); }
+    if let Some(f) = file {
+        return Ok(Secret::new(
+            std::fs::read_to_string(&f)
+                .with_context(|| format!("cannot read password file: {f}"))?
+        ));
+    }
+    Ok(Secret::new(rpassword::prompt_password(prompt).context("could not read password")?))
 }
