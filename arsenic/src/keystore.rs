@@ -13,6 +13,7 @@ use crate::keyfmt::{encode_mlkem_seed, decode_mlkem_seed, encode_mldsa_vk, decod
     bech32_encode_upper, bech32_decode_lower};
 use ml_dsa::{MlDsa65, SigningKey as MlDsaSignKey, KeyExport, Keypair, Seed as MlDsaSeed};
 use std::path::{Path, PathBuf};
+use zeroize::Zeroizing;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -34,8 +35,8 @@ pub struct KeyEntry {
     pub public_key: [u8; 32],
     /// ML-KEM-768 encapsulation key (1184 bytes, derived from mlkem_seed).
     pub mlkem_public_key: Box<[u8; 1184]>,
-    /// ML-DSA-65 signing seed (32 bytes) — `None` for legacy key files.
-    pub signing_seed: Option<[u8; 32]>,
+    /// ML-DSA-65 signing seed (32 bytes), zeroized on drop — `None` for legacy key files.
+    pub signing_seed: Option<Zeroizing<[u8; 32]>>,
     /// ML-DSA-65 verifying key (1952 bytes) — `None` for legacy key files.
     pub signing_verifying_key: Option<Box<[u8; 1952]>>,
     /// Path of the `.key` file on disk (`None` before first save).
@@ -61,7 +62,7 @@ impl KeyEntry {
         vk_arr.copy_from_slice(vk_enc.as_slice());
         Self {
             name, private_key, mlkem_seed, public_key, mlkem_public_key,
-            signing_seed: Some(signing_seed),
+            signing_seed: Some(Zeroizing::new(signing_seed)),
             signing_verifying_key: Some(Box::new(vk_arr)),
             file_path: None,
         }
@@ -281,8 +282,8 @@ pub fn serialize_identity(entry: &KeyEntry) -> String {
          # mlkem-public-key: {mlkem_enc}\n# mlkem-seed: {seed_enc}\n",
         name = entry.name,
     );
-    if let (Some(sign_seed), Some(ref sign_vk)) = (entry.signing_seed, &entry.signing_verifying_key) {
-        let sign_seed_enc = format!("ARSENIC-SIGN-SEED-1{}", bech32_encode_upper(&sign_seed));
+    if let (Some(ref sign_seed), Some(ref sign_vk)) = (&entry.signing_seed, &entry.signing_verifying_key) {
+        let sign_seed_enc = format!("ARSENIC-SIGN-SEED-1{}", bech32_encode_upper(&**sign_seed));
         let sign_vk_enc   = encode_mldsa_vk(sign_vk);
         s.push_str(&format!("# sign-pub: {sign_vk_enc}\n# sign-seed: {sign_seed_enc}\n"));
     }
@@ -299,7 +300,7 @@ pub fn parse_identity(content: &str, path: PathBuf) -> Option<KeyEntry> {
     let mut public_key: Option<[u8; 32]> = None;
     let mut private_key: Option<[u8; 32]> = None;
     let mut mlkem_seed: Option<[u8; 64]> = None;
-    let mut signing_seed: Option<[u8; 32]> = None;
+    let mut signing_seed: Option<Zeroizing<[u8; 32]>> = None;
     let mut signing_vk: Option<[u8; 1952]> = None;
 
     for line in content.lines() {
@@ -316,7 +317,8 @@ pub fn parse_identity(content: &str, path: PathBuf) -> Option<KeyEntry> {
             let upper = rest.trim().to_uppercase();
             if let Some(inner) = upper.strip_prefix("ARSENIC-SIGN-SEED-1") {
                 signing_seed = bech32_decode_lower(&inner.to_lowercase())
-                    .and_then(|v| v.try_into().ok());
+                    .and_then(|v: Vec<u8>| v.try_into().ok())
+                    .map(Zeroizing::new);
             }
         } else if !line.starts_with('#') && !line.is_empty() {
             private_key = decode_privkey(line);
@@ -332,7 +334,7 @@ pub fn parse_identity(content: &str, path: PathBuf) -> Option<KeyEntry> {
     let (signing_seed, signing_verifying_key) = match signing_seed {
         Some(seed) => {
             let vk = signing_vk.unwrap_or_else(|| {
-                let arr: MlDsaSeed = seed.into();
+                let arr: MlDsaSeed = (*seed).into();
                 let sk = MlDsaSignKey::<MlDsa65>::from_seed(&arr);
                 let vk_enc = KeyExport::to_bytes(&Keypair::verifying_key(&sk));
                 let mut out = [0u8; 1952];
@@ -531,8 +533,8 @@ fn serialize_contacts(contacts: &[ContactEntry]) -> String {
 #[derive(Clone)]
 pub struct SigningKeyEntry {
     pub name: String,
-    /// ML-DSA-65 seed (32 bytes).
-    pub seed: [u8; 32],
+    /// ML-DSA-65 seed (32 bytes), zeroized on drop.
+    pub seed: Zeroizing<[u8; 32]>,
     /// ML-DSA-65 verifying key (1952 bytes), derived from `seed`.
     pub verifying_key: Box<[u8; 1952]>,
     pub file_path: Option<PathBuf>,
@@ -548,7 +550,7 @@ impl SigningKeyEntry {
         let vk_enc = vk.encode();
         let mut vk_arr = [0u8; 1952];
         vk_arr.copy_from_slice(vk_enc.as_slice());
-        Self { name, seed, verifying_key: Box::new(vk_arr), file_path: None }
+        Self { name, seed: Zeroizing::new(seed), verifying_key: Box::new(vk_arr), file_path: None }
     }
 }
 
@@ -563,7 +565,7 @@ pub fn serialize_signing_identity(entry: &SigningKeyEntry) -> String {
     
     let ts = utc_timestamp();
     // Encode seed as ARSENIC-SIGN-SEED-1{BECH32}
-    let seed_enc = format!("ARSENIC-SIGN-SEED-1{}", crate::keyfmt::bech32_encode_upper(&entry.seed));
+    let seed_enc = format!("ARSENIC-SIGN-SEED-1{}", crate::keyfmt::bech32_encode_upper(&*entry.seed));
     // Encode verifying key as ARSENIC-SIGN-PUB-1{BECH32}
     let vk_enc = format!("ARSENIC-SIGN-PUB-1{}", crate::keyfmt::bech32_encode_upper(entry.verifying_key.as_slice()));
     format!(
@@ -574,7 +576,7 @@ pub fn serialize_signing_identity(entry: &SigningKeyEntry) -> String {
 
 pub fn parse_signing_identity(content: &str, path: PathBuf) -> Option<SigningKeyEntry> {
     let mut name = String::new();
-    let mut seed: Option<[u8; 32]> = None;
+    let mut seed: Option<Zeroizing<[u8; 32]>> = None;
 
     for line in content.lines() {
         let line = line.trim();
@@ -584,14 +586,14 @@ pub fn parse_signing_identity(content: &str, path: PathBuf) -> Option<SigningKey
             let upper = line.to_uppercase();
             if let Some(inner) = upper.strip_prefix("ARSENIC-SIGN-SEED-1") {
                 if let Some(bytes) = crate::keyfmt::bech32_decode_lower(&inner.to_lowercase()) {
-                    seed = bytes.try_into().ok();
+                    seed = bytes.try_into().ok().map(Zeroizing::new);
                 }
             }
         }
     }
 
     let seed = seed?;
-    let seed_common: ml_dsa::Seed = seed.into();
+    let seed_common: ml_dsa::Seed = (*seed).into();
     let sk = ml_dsa::SigningKey::<ml_dsa::MlDsa65>::from_seed(&seed_common);
     let vk = <ml_dsa::SigningKey<ml_dsa::MlDsa65> as ml_dsa::Keypair>::verifying_key(&sk);
     let vk_enc = vk.encode();

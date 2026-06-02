@@ -45,28 +45,120 @@ pub enum SignatureStatus {
     Invalid,
 }
 
-/// Check a file's ML-DSA-65 signature status against the contact trust store.
+/// Compute a short fingerprint of a verifying key for out-of-band verification.
 ///
-/// Reads only the header — no decryption is performed.
+/// Returns the first 8 bytes of BLAKE3(vk) as colon-separated hex pairs,
+/// e.g. `"ab:12:cd:34:ef:56:78:90"`. The fingerprint is stable across sessions
+/// and can be read aloud or compared via Signal to confirm a first contact.
+pub fn vk_fingerprint(vk: &[u8; 1952]) -> String {
+    let hash = blake3::hash(vk);
+    hash.as_bytes()[..8]
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect::<Vec<_>>()
+        .join(":")
+}
+
+/// Cryptographically verify the ML-DSA-65 signature of a file and classify it
+/// against the contact trust store.
+///
+/// Unlike a simple VK lookup, this function **verifies the signature
+/// mathematically** — it reads the header, reconstructs the signed message
+/// (`pre_mac || sender_bytes`), and confirms the signature is valid before
+/// checking the trust store. Returns `Invalid` if the signature does not verify.
+///
+/// Also checks `own_keys` first so self-signed files are labelled "(you)".
+///
+/// Returns `(status, fingerprint)` where `fingerprint` is `Some(hex_string)`
+/// when a signature is present (valid or not), useful for out-of-band TOFU
+/// verification when `status == SignedByUnknown`.
 pub fn arsenic_check_signature(
     path: &std::path::Path,
+    own_keys: &[keystore::KeyEntry],
     contacts: &[keystore::ContactEntry],
-) -> SignatureStatus {
-    let vk = match arsenic_read_verifying_key(path) {
-        Some(v) => v,
-        None => return SignatureStatus::NotSigned,
+) -> (SignatureStatus, Option<String>) {
+    use arsenic::header::{parse_header_bytes, parse_envelope, MIN_HEADER_TOTAL_SIZE, sender_bytes_for_signing};
+    use crate::arsenic::MAX_HEADER_TOTAL_SIZE;
+    use ml_dsa::{MlDsa65, Verifier};
+
+    // ── Read header ───────────────────────────────────────────────────────────
+    let mut f = match File::open(path) {
+        Ok(f) => f,
+        Err(_) => return (SignatureStatus::NotSigned, None),
     };
-    // Validate the signature mathematically (reuse envelope parsing)
-    // If the header parses and the vk bytes are present, the verify already
-    // happened inside decrypt_arsenic. Here we just classify.
-    for c in contacts {
-        if let Some(ref trusted_vk) = c.signing_verifying_key {
-            if trusted_vk.as_slice() == vk.as_slice() {
-                return SignatureStatus::SignedByKnown(c.name.clone());
+    let mut prefix = [0u8; 13];
+    if f.read_exact(&mut prefix).is_err() {
+        return (SignatureStatus::NotSigned, None);
+    }
+    let header_total_size =
+        u32::from_le_bytes([prefix[9], prefix[10], prefix[11], prefix[12]]) as usize;
+    if header_total_size < MIN_HEADER_TOTAL_SIZE
+        || header_total_size > MAX_HEADER_TOTAL_SIZE as usize
+    {
+        return (SignatureStatus::NotSigned, None);
+    }
+    let mut header_buf = vec![0u8; header_total_size];
+    header_buf[..13].copy_from_slice(&prefix);
+    if f.read_exact(&mut header_buf[13..]).is_err() {
+        return (SignatureStatus::NotSigned, None);
+    }
+
+    let (_, pre_mac_bytes, _, enc_env_region) = match parse_header_bytes(&header_buf) {
+        Ok(x) => x,
+        Err(_) => return (SignatureStatus::NotSigned, None),
+    };
+    let envelope = match parse_envelope(&enc_env_region) {
+        Ok(e) => e,
+        Err(_) => return (SignatureStatus::NotSigned, None),
+    };
+
+    let mldsa = match envelope.mldsa_sig {
+        Some(ref s) => s,
+        None => return (SignatureStatus::NotSigned, None),
+    };
+
+    // ── Fingerprint (computed regardless of validity) ─────────────────────────
+    let fingerprint = Some(vk_fingerprint(&mldsa.verifying_key));
+
+    // ── Cryptographic verification ────────────────────────────────────────────
+    let vk_enc = match ml_dsa::EncodedVerifyingKey::<MlDsa65>::try_from(mldsa.verifying_key.as_slice()) {
+        Ok(x) => x,
+        Err(_) => return (SignatureStatus::Invalid, fingerprint),
+    };
+    let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(&vk_enc);
+    let sig = match ml_dsa::Signature::<MlDsa65>::try_from(mldsa.signature.as_slice()) {
+        Ok(x) => x,
+        Err(_) => return (SignatureStatus::Invalid, fingerprint),
+    };
+    let signed_msg: Vec<u8> = match &envelope.sender {
+        Some(s) => {
+            let mut m = pre_mac_bytes.to_vec();
+            m.extend_from_slice(&sender_bytes_for_signing(s));
+            m
+        }
+        None => pre_mac_bytes.to_vec(),
+    };
+    if vk.verify(&signed_msg, &sig).is_err() {
+        return (SignatureStatus::Invalid, fingerprint);
+    }
+
+    // ── Trust store lookup ────────────────────────────────────────────────────
+    let vk_bytes = mldsa.verifying_key.as_slice();
+    for key in own_keys {
+        if let Some(ref own_vk) = key.signing_verifying_key {
+            if own_vk.as_slice() == vk_bytes {
+                return (SignatureStatus::SignedByKnown(format!("{} (vous)", key.name)), fingerprint);
             }
         }
     }
-    SignatureStatus::SignedByUnknown
+    for c in contacts {
+        if let Some(ref trusted_vk) = c.signing_verifying_key {
+            if trusted_vk.as_slice() == vk_bytes {
+                return (SignatureStatus::SignedByKnown(c.name.clone()), fingerprint);
+            }
+        }
+    }
+    (SignatureStatus::SignedByUnknown, fingerprint)
 }
 
 /// Read sender identity embedded in the **public** (unencrypted) header region.

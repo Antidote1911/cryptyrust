@@ -12,6 +12,7 @@ pub use crypto::{
 };
 
 use crate::arsenic::hybrid_kem::EK_LEN as MLKEM_EK_LEN;
+use zeroize::Zeroizing;
 pub use header::{HybridKeyslot, HybridKeyslot1024, MlDsaSignature, EnvelopeMetadata, MIN_HEADER_TOTAL_SIZE, WRAPPED_DEK_LEN};
 pub use header::{MAX_T_COST, MAX_P_COST, MLDSA_VERIFYING_KEY_LEN, MLDSA_SIGNATURE_LEN};
 
@@ -105,9 +106,9 @@ pub struct ArsenicParams {
     pub recipients: Vec<HybridRecipient>,
     /// ML-KEM security level for new keyslots (default: L768).
     pub kem_level: KemLevel,
-    /// Optional ML-DSA-65 signing key seed (32 bytes).
+    /// Optional ML-DSA-65 signing key seed (32 bytes), zeroized on drop.
     /// If `Some`, the file is signed with this key during encryption.
-    pub signing_key: Option<[u8; 32]>,
+    pub signing_key: Option<Zeroizing<[u8; 32]>>,
     /// Sender's display name — embedded in ProtectedMetadata so the recipient
     /// can add the sender as a contact and encrypt back without a .pubkey exchange.
     pub sender_name: Option<String>,

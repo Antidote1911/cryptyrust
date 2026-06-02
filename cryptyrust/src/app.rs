@@ -47,6 +47,8 @@ pub struct CryptyApp {
     pub pending_contact_from_file: Option<arsenic::keystore::ContactEntry>,
     /// Signature status of the last decrypted file.
     pub last_sig_status: Option<SignatureStatus>,
+    /// BLAKE3 fingerprint (first 8 bytes, hex) of the signing VK of the last file.
+    pub last_vk_fingerprint: Option<String>,
     pub show_about: bool,
     pub dark_mode: bool,
     // Cipher benchmark state
@@ -139,6 +141,7 @@ impl CryptyApp {
             signing_key_index: None,
             pending_contact_from_file: None,
             last_sig_status: None,
+            last_vk_fingerprint: None,
             show_about: false,
             dark_mode,
             bench_running: false,
@@ -278,7 +281,7 @@ impl CryptyApp {
         if self.mode == Mode::Encrypt {
             let has_signing = self.signing_key_index
                 .and_then(|i| self.keys.get(i))
-                .and_then(|k| k.signing_seed)
+                .and_then(|k| k.signing_seed.as_ref())
                 .is_some();
             if !has_signing {
                 self.pw_error = Some(if self.keys.is_empty() {
@@ -524,24 +527,10 @@ impl CryptyApp {
 
     /// Check the signature on a file against own signing keys then the contact trust store.
     pub fn check_and_store_sig_status(&mut self, path: &std::path::Path) {
-        // Read the embedded verifying key first.
-        let vk = match arsenic::arsenic_read_verifying_key(path) {
-            Some(v) => v,
-            None    => { self.last_sig_status = Some(arsenic::SignatureStatus::NotSigned); return; }
-        };
-        // 1. Check own keypairs (self-signed files).
-        for key in &self.keys {
-            if let Some(ref own_vk) = key.signing_verifying_key {
-                if own_vk.as_slice() == vk.as_slice() {
-                    self.last_sig_status = Some(arsenic::SignatureStatus::SignedByKnown(
-                        format!("{} (you)", key.name),
-                    ));
-                    return;
-                }
-            }
-        }
-        // 2. Check trusted contacts.
-        self.last_sig_status = Some(arsenic::arsenic_check_signature(path, &self.contacts));
+        let (status, fingerprint) =
+            arsenic::arsenic_check_signature(path, &self.keys, &self.contacts);
+        self.last_sig_status = Some(status);
+        self.last_vk_fingerprint = fingerprint;
     }
 
     /// Export the public parts of keypair `index` as a `.pubkey` file.
@@ -618,7 +607,7 @@ impl CryptyApp {
         // ML-DSA-65 signing key seed — from the selected encryption keypair.
         let signing_key = self.signing_key_index
             .and_then(|i| self.keys.get(i))
-            .and_then(|k| k.signing_seed);
+            .and_then(|k| k.signing_seed.clone());
 
         // Embed sender identity so the recipient can add us as contact from the file.
         let (sender_name, sender_x25519_pk, sender_mlkem_pk) =
@@ -742,6 +731,7 @@ impl eframe::App for CryptyApp {
                 }
             } else {
                 self.last_sig_status = None;
+                self.last_vk_fingerprint = None;
                 self.pending_contact_from_file = None;
             }
             self.job = JobState::Completed {

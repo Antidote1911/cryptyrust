@@ -310,25 +310,26 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
                 // Signature status banner
                 if let Some(ref status) = app.last_sig_status {
                     ui.add_space(4.0);
+                    let fp = app.last_vk_fingerprint.as_deref().unwrap_or("");
                     let (icon, msg, color) = match status {
                         arsenic::SignatureStatus::SignedByKnown(name) => (
                             "✍",
-                            format!("Signed by: {name}  ✓"),
+                            format!("Signé par : {name}  ✓"),
                             egui::Color32::from_rgb(80, 200, 100),
                         ),
                         arsenic::SignatureStatus::SignedByUnknown => (
                             "⚠",
-                            "Signed by unknown key — import sender's .sigpub in Key Manager".into(),
+                            format!("Clé de signature inconnue — fingerprint : {fp}  (vérifier hors-bande)"),
                             egui::Color32::from_rgb(220, 180, 40),
                         ),
                         arsenic::SignatureStatus::Invalid => (
                             "✗",
-                            "Signature INVALID — file may have been tampered with".into(),
+                            "Signature INVALIDE — le fichier a peut-être été falsifié".into(),
                             egui::Color32::from_rgb(220, 60, 60),
                         ),
                         arsenic::SignatureStatus::NotSigned => (
                             "—",
-                            "Not signed".into(),
+                            "Non signé".into(),
                             ui.visuals().weak_text_color(),
                         ),
                     };
@@ -341,28 +342,29 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
                 let sender_banner = app.pending_contact_from_file.as_ref().map(|p| p.name.clone());
                 if let Some(sender_name) = sender_banner {
                     ui.add_space(4.0);
-                    // Sender region is authenticated only when the file is signed
-                    // (the signature covers pre_mac || sender_bytes).
-                    // Without a valid signature the public keys could have been swapped by an attacker.
-                    let sig_ok = matches!(
-                        app.last_sig_status,
-                        Some(arsenic::SignatureStatus::SignedByKnown(_))
-                            | Some(arsenic::SignatureStatus::SignedByUnknown)
-                    );
-                    let (color, note) = if sig_ok {
-                        (egui::Color32::from_rgb(80, 160, 220), "")
-                    } else {
-                        (egui::Color32::from_rgb(220, 140, 40), " ⚠ non signé — identité non vérifiée")
+                    // Three tiers of trust:
+                    //   SignedByKnown → blue   (identity verified against trust store)
+                    //   SignedByUnknown → amber (signature valid but signer not in contacts)
+                    //   anything else → orange  (unsigned, public keys unauthenticated)
+                    let (color, note) = match &app.last_sig_status {
+                        Some(arsenic::SignatureStatus::SignedByKnown(_)) =>
+                            (egui::Color32::from_rgb(80, 160, 220), ""),
+                        Some(arsenic::SignatureStatus::SignedByUnknown) =>
+                            (egui::Color32::from_rgb(220, 180, 40),
+                             " ⚠ clé inconnue — vérifier le fingerprint avant d'ajouter"),
+                        _ =>
+                            (egui::Color32::from_rgb(220, 100, 40),
+                             " ⚠ non signé — identité non vérifiée"),
                     };
                     let mut do_add = false;
                     let mut do_dismiss = false;
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(format!("📨 From: {sender_name}  — add to contacts?{note}"))
+                            egui::RichText::new(format!("📨 De : {sender_name}  — ajouter aux contacts ?{note}"))
                                 .color(color),
                         );
-                        if ui.button("Add").clicked() { do_add = true; }
-                        if ui.button("✕").clicked()  { do_dismiss = true; }
+                        if ui.button("Ajouter").clicked() { do_add = true; }
+                        if ui.button("✕").clicked()       { do_dismiss = true; }
                     });
                     if do_add     { app.confirm_add_contact_from_file(); }
                     if do_dismiss { app.pending_contact_from_file = None; }

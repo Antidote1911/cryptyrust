@@ -243,7 +243,7 @@ fn run_encrypt(
     // Optional ML-DSA-65 signing key seed.
     let signing_key = if let Some(spec) = app.signing_key() {
         match resolve_signing_key(spec) {
-            Some(entry) => Some(entry.seed),
+            Some(entry) => Some(entry.seed), // Zeroizing<[u8;32]> — moved out of owned entry
             None => return Err(anyhow!("Cannot find signing key '{spec}'")),
         }
     } else {

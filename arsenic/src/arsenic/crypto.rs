@@ -724,7 +724,7 @@ where
     //                = pre_mac[77]                  (if no sender — backward compatible)
     // Including the sender region in the signed message prevents silently swapping
     // the sender's public keys without invalidating the signature.
-    let mldsa_sig = if let Some(seed) = params.signing_key {
+    let mldsa_sig = if let Some(ref seed) = params.signing_key {
         let signed_msg: Vec<u8> = match &sender_info {
             Some(s) => {
                 let mut m = pre_mac_bytes.to_vec();
@@ -733,7 +733,7 @@ where
             }
             None => pre_mac_bytes.to_vec(),
         };
-        let seed_common: MlDsaSeed = seed.into();
+        let seed_common: MlDsaSeed = (**seed).into();
         let sk = MlDsaSigningKey::<MlDsa65>::from_seed(&seed_common);
         let vk = sk.verifying_key(); // via Keypair trait
         let sig: ml_dsa::Signature<MlDsa65> = sk.sign(&signed_msg);
