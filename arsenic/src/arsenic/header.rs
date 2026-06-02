@@ -564,13 +564,7 @@ pub fn build_envelope_region(
 }
 
 /// Serialize the sender region bytes for inclusion in the ML-DSA-65 signed message.
-///
-/// When a sender is present the signed message is `pre_mac[77] || sender_bytes_for_signing(s)`.
-/// When no sender is present the signed message is just `pre_mac[77]` — backward compatible with
-/// files produced before sender-identity support was added.
-///
-/// This ensures that stripping or swapping the sender region invalidates the signature.
-pub fn sender_bytes_for_signing(sender: &SenderInfo) -> Vec<u8> {
+pub(crate) fn sender_bytes_for_signing(sender: &SenderInfo) -> Vec<u8> {
     let name_bytes = sender.name.as_bytes();
     let name_len = name_bytes.len().min(255) as u16;
     let mut buf = Vec::with_capacity(name_len as usize + 2 + 32 + 1184 + 1);
@@ -580,6 +574,33 @@ pub fn sender_bytes_for_signing(sender: &SenderInfo) -> Vec<u8> {
     buf.extend_from_slice(&sender.mlkem_pk);
     buf.push(SENDER_PRESENT);
     buf
+}
+
+/// Build the complete ML-DSA-65 signed message (single source of truth).
+///
+/// ```text
+/// signed_message = pre_mac[77]
+///               || protected_meta_ct          ← binds payload content via Merkle root
+///               || sender_bytes               ← if sender present
+/// ```
+///
+/// Covering the ProtectedMetadata ciphertext prevents a legitimate recipient
+/// (who has the DEK) from modifying the payload while keeping a valid signature:
+/// any change to the payload → new Merkle root → different ciphertext → invalid signature.
+/// The ciphertext is in the public header, so verification requires no decryption.
+pub fn build_signed_message(
+    pre_mac: &[u8; PRE_MAC_LEN],
+    protected_meta_ct: &[u8],
+    sender: Option<&SenderInfo>,
+) -> Vec<u8> {
+    let sender_len = sender.map_or(0, |s| s.name.as_bytes().len().min(255) + 2 + 32 + 1184 + 1);
+    let mut msg = Vec::with_capacity(PRE_MAC_LEN + protected_meta_ct.len() + sender_len);
+    msg.extend_from_slice(pre_mac);
+    msg.extend_from_slice(protected_meta_ct);
+    if let Some(s) = sender {
+        msg.extend_from_slice(&sender_bytes_for_signing(s));
+    }
+    msg
 }
 
 // ── Public header serialization ───────────────────────────────────────────────

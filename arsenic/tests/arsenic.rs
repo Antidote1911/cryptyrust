@@ -1098,3 +1098,35 @@ fn no_sender_still_verifies_correctly() {
     let ct = do_encrypt_with(data, PASSWORD, params, &[]);
     assert_eq!(do_decrypt(&ct, PASSWORD).unwrap(), data);
 }
+
+#[test]
+fn tampered_payload_invalidates_signature() {
+    // A recipient who has the DEK must NOT be able to modify the payload
+    // and keep a valid signature.  The signed message covers
+    // pre_mac || ProtectedMetadata_ciphertext, so any payload change
+    // (→ different Merkle root → different metadata ciphertext) invalidates the sig.
+    let data = b"original confidential content";
+    let params = params_with_sender_and_signing();
+
+    // Encrypt with a hybrid recipient so we can retrieve the DEK.
+    let (priv_bob, pub_bob) = gen_x25519_keypair();
+    let ct = do_encrypt_with(data, PASSWORD, params, &[pub_bob]);
+
+    // Confirm the original file decrypts and verifies correctly.
+    assert_eq!(do_decrypt_with_privkey(&ct, &priv_bob).unwrap(), data);
+
+    // Flip one byte in the payload region (after the header).
+    let hdr_size = u32::from_le_bytes(ct[9..13].try_into().unwrap()) as usize;
+    let mut tampered = ct.clone();
+    tampered[hdr_size + 10] ^= 0xFF;
+
+    // Decryption must fail: either Merkle mismatch or signature verification fails.
+    assert!(
+        do_decrypt_with_privkey(&tampered, &priv_bob).is_err(),
+        "tampered payload must be rejected"
+    );
+    assert!(
+        do_decrypt(&tampered, PASSWORD).is_err(),
+        "tampered payload must also be rejected on symmetric path"
+    );
+}

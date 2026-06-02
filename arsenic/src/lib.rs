@@ -77,7 +77,7 @@ pub fn arsenic_check_signature(
     own_keys: &[keystore::KeyEntry],
     contacts: &[keystore::ContactEntry],
 ) -> (SignatureStatus, Option<String>) {
-    use arsenic::header::{parse_header_bytes, parse_envelope, MIN_HEADER_TOTAL_SIZE, sender_bytes_for_signing};
+    use arsenic::header::{parse_header_bytes, parse_envelope, build_signed_message, MIN_HEADER_TOTAL_SIZE};
     use crate::arsenic::MAX_HEADER_TOTAL_SIZE;
     use ml_dsa::{MlDsa65, Verifier};
 
@@ -130,14 +130,7 @@ pub fn arsenic_check_signature(
         Ok(x) => x,
         Err(_) => return (SignatureStatus::Invalid, fingerprint),
     };
-    let signed_msg: Vec<u8> = match &envelope.sender {
-        Some(s) => {
-            let mut m = pre_mac_bytes.to_vec();
-            m.extend_from_slice(&sender_bytes_for_signing(s));
-            m
-        }
-        None => pre_mac_bytes.to_vec(),
-    };
+    let signed_msg = build_signed_message(&pre_mac_bytes, &envelope.protected_meta, envelope.sender.as_ref());
     if vk.verify(&signed_msg, &sig).is_err() {
         return (SignatureStatus::Invalid, fingerprint);
     }

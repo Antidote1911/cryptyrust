@@ -13,7 +13,7 @@ use super::cipher_dispatch;
 use super::header::{
     build_envelope_region, build_header_bytes, compute_header_mac,
     deserialize_meta_tlv, parse_envelope, parse_header_bytes, serialize_meta_tlv,
-    serialize_pre_mac, sender_bytes_for_signing, verify_header_mac,
+    serialize_pre_mac, build_signed_message, verify_header_mac,
     HybridKeyslot, HybridKeyslot1024, MlDsaSignature, EnvelopeContent, EnvelopeMetadata,
     ParsedEnvelope, PublicHeader, SenderInfo,
     ASYM_COUNT_LEN, ASYM_KEYSLOT_LEN, ASYM_1024_COUNT_LEN, ASYM_1024_KEYSLOT_LEN, GCM_TAG,
@@ -720,19 +720,15 @@ where
     let pre_mac_bytes = serialize_pre_mac(&pub_header);
 
     // Optional ML-DSA-65 signature.
-    // Signed message = pre_mac[77] || sender_bytes  (if sender present)
-    //                = pre_mac[77]                  (if no sender — backward compatible)
-    // Including the sender region in the signed message prevents silently swapping
-    // the sender's public keys without invalidating the signature.
+    // Signed message = pre_mac[77] || protected_meta_ct || sender_bytes (if sender)
+    //                = pre_mac[77] || protected_meta_ct                  (no sender)
+    //
+    // Covering ProtectedMetadata binds the signature to the Merkle root, which covers
+    // the entire payload.  A recipient who has the DEK cannot modify the payload and
+    // keep a valid signature: any payload change → new Merkle root → different
+    // ProtectedMetadata ciphertext → signature verification fails.
     let mldsa_sig = if let Some(ref seed) = params.signing_key {
-        let signed_msg: Vec<u8> = match &sender_info {
-            Some(s) => {
-                let mut m = pre_mac_bytes.to_vec();
-                m.extend_from_slice(&sender_bytes_for_signing(s));
-                m
-            }
-            None => pre_mac_bytes.to_vec(),
-        };
+        let signed_msg = build_signed_message(&pre_mac_bytes, &protected_meta, sender_info.as_ref());
         let seed_common: MlDsaSeed = (**seed).into();
         let sk = MlDsaSigningKey::<MlDsa65>::from_seed(&seed_common);
         let vk = sk.verifying_key(); // via Keypair trait
@@ -821,22 +817,14 @@ where
     let envelope = parse_envelope(&enc_env_region)?;
 
     // Verify ML-DSA signature if present.
-    // Signed message = pre_mac[77] || sender_bytes  (if sender present)
-    //                = pre_mac[77]                  (no sender — backward compatible)
+    // signed_message = pre_mac[77] || protected_meta_ct || sender_bytes (if sender)
     if let Some(ref mldsa) = envelope.mldsa_sig {
         let vk_enc = ml_dsa::EncodedVerifyingKey::<MlDsa65>::try_from(mldsa.verifying_key.as_slice())
             .map_err(|_| CoreErr::DecryptFail("Malformed ML-DSA verifying key".into()))?;
         let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(&vk_enc);
         let sig = ml_dsa::Signature::<MlDsa65>::try_from(mldsa.signature.as_slice())
             .map_err(|_| CoreErr::DecryptFail("Malformed ML-DSA signature".into()))?;
-        let signed_msg: Vec<u8> = match &envelope.sender {
-            Some(s) => {
-                let mut m = pre_mac_bytes.to_vec();
-                m.extend_from_slice(&sender_bytes_for_signing(s));
-                m
-            }
-            None => pre_mac_bytes.to_vec(),
-        };
+        let signed_msg = build_signed_message(&pre_mac_bytes, &envelope.protected_meta, envelope.sender.as_ref());
         vk.verify(&signed_msg, &sig)
             .map_err(|_| CoreErr::DecryptFail("ML-DSA signature verification failed — file may be forged".into()))?;
     }
@@ -927,20 +915,14 @@ where
     let envelope = parse_envelope(&enc_env_region)?;
 
     // Verify ML-DSA signature if present (same logic as symmetric path).
+    // signed_message = pre_mac[77] || protected_meta_ct || sender_bytes (if sender)
     if let Some(ref mldsa) = envelope.mldsa_sig {
         let vk_enc = ml_dsa::EncodedVerifyingKey::<MlDsa65>::try_from(mldsa.verifying_key.as_slice())
             .map_err(|_| CoreErr::DecryptFail("Malformed ML-DSA verifying key".into()))?;
         let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(&vk_enc);
         let sig = ml_dsa::Signature::<MlDsa65>::try_from(mldsa.signature.as_slice())
             .map_err(|_| CoreErr::DecryptFail("Malformed ML-DSA signature".into()))?;
-        let signed_msg: Vec<u8> = match &envelope.sender {
-            Some(s) => {
-                let mut m = pre_mac_bytes.to_vec();
-                m.extend_from_slice(&sender_bytes_for_signing(s));
-                m
-            }
-            None => pre_mac_bytes.to_vec(),
-        };
+        let signed_msg = build_signed_message(&pre_mac_bytes, &envelope.protected_meta, envelope.sender.as_ref());
         vk.verify(&signed_msg, &sig)
             .map_err(|_| CoreErr::DecryptFail("ML-DSA signature verification failed — file may be forged".into()))?;
     }
