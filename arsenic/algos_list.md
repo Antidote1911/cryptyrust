@@ -1,5 +1,3 @@
-> [Version française](algos_list_fr.md)
-
 # Cryptographic Algorithms Used in Arsenic
 
 This document lists and explains every cryptographic algorithm used in the `arsenic` library. Algorithms are grouped by functional role.
@@ -148,12 +146,12 @@ Uses in Arsenic:
 | `"Arsenic V1 Meta Nonce"` | `DEK[32]` | `MetaNonce[12]` |
 | `"Arsenic V1 Merkle Leaf v1"` | encrypted block | `leaf_i[32]` |
 | `"Arsenic V1 Merkle Node v1"` | `left[32] \|\| right[32]` | `node[32]` |
-| `"Arsenic V1 KEK Nonce XChaCha20"` | `kek_nonce[12] \|\| 0×20` | extended nonce [24] |
-| `"Arsenic V1 KEK Nonce DeoxysII256"` | `kek_nonce[12] \|\| 0×20` | extended nonce [15] |
-| `"Arsenic V2 X25519 Wrapping Key"` | `shared_secret_x25519[32]` | `wrapping_key[32]` |
-| `"Arsenic Hybrid KEM"` | see §5 | `wrapping_key[32]` |
-| `"Arsenic ML-KEM d"` | `x25519_sk[32]` | `d[32]` (ML-KEM seed) |
-| `"Arsenic ML-KEM z"` | `x25519_sk[32]` | `z[32]` (ML-KEM seed) |
+| `"Arsenic V1 KEK Nonce XChaCha20"` | `kek_nonce[12]` | extended nonce [24] |
+| `"Arsenic V1 KEK Nonce DeoxysII256"` | `kek_nonce[12]` | extended nonce [15] |
+| `"Arsenic Hybrid KEM"` | see §5 | `wrapping_key[32]` (ML-KEM-768) |
+| `"Arsenic Hybrid KEM 1024"` | see §5 | `wrapping_key[32]` (ML-KEM-1024) |
+| `"Arsenic ML-KEM d"` | `x25519_sk[32]` | `d[32]` (ML-KEM seed, legacy) |
+| `"Arsenic ML-KEM z"` | `x25519_sk[32]` | `z[32]` (ML-KEM seed, legacy) |
 
 **Why BLAKE3 rather than HKDF-SHA256 or SHA3-KDF?**
 - Speed: BLAKE3 is ~3–5× faster than SHA-256 on modern CPUs,
@@ -205,7 +203,7 @@ hybrid keyslots).
 
 **Nonce handling for envelope:**
 The 12-byte `kek_nonce` stored in the header is extended to 15 bytes via
-`BLAKE3_derive_key("Arsenic V1 KEK Nonce DeoxysII256", kek_nonce || 0×20)`.
+`BLAKE3_derive_key("Arsenic V1 KEK Nonce DeoxysII256", kek_nonce)`.
 
 For payload blocks, the 24-byte `block_nonce_i` is truncated to 15:
 `block_nonce_i[0..15]`.
@@ -243,7 +241,7 @@ nonce (IETF draft).
 
 **Nonce handling for envelope:**
 The 12-byte `kek_nonce` is extended to 24 via
-`BLAKE3_derive_key("Arsenic V1 KEK Nonce XChaCha20", kek_nonce || 0×20)`.
+`BLAKE3_derive_key("Arsenic V1 KEK Nonce XChaCha20", kek_nonce)`.
 
 For blocks, `block_nonce_i[0..24]` is used directly (24 bytes).
 
@@ -327,46 +325,27 @@ confidential because `eph_sk` is never stored.
 
 ---
 
-### 5b. ML-KEM-768 (CRYSTALS-Kyber)
+### 5b. ML-KEM-768 / ML-KEM-1024 (CRYSTALS-Kyber)
 
 **Standard:** NIST FIPS 203 (August 2024) — the first post-quantum
 KEM algorithm standardised by NIST.
 
 **Characteristics:**
 
-| Property | Value |
-|---|---|
-| Type | Key Encapsulation Mechanism (KEM) over module lattices |
-| Security level | NIST level 3 (≈ AES-192) |
-| Encapsulation key (public) | 1 184 bytes |
-| Decapsulation key (secret) | 2 400 bytes (seed: 64 bytes) |
-| Ciphertext | 1 088 bytes |
-| Shared secret | 32 bytes |
-| Security assumption | Module-LWE (Module Learning With Errors) |
-| Post-quantum security | ✓ (Shor does not apply to lattices) |
+| Property | ML-KEM-768 | ML-KEM-1024 |
+|---|---|---|
+| Type | KEM over module lattices | KEM over module lattices |
+| Security level | NIST level 3 (≈ AES-192) | NIST level 5 (≈ AES-256) |
+| Encapsulation key | 1 184 bytes | 1 568 bytes |
+| Ciphertext | 1 088 bytes | 1 568 bytes |
+| Shared secret | 32 bytes | 32 bytes |
+| Quantum security | ~180 bits | ~256 bits |
+| Security assumption | Module-LWE | Module-LWE |
 
-**Difference from X25519 — KEM API vs. Key Agreement:**
+**Independent seed storage:**
 
-```
-X25519 (ECDH):
-  Alice: (eph_sk, eph_pk) ← KeyGen()
-  Alice → Bob: eph_pk
-  Bob:   ss ← ECDH(bob_sk, eph_pk)
-  Alice: ss ← ECDH(eph_sk, bob_pk)
-  → identical ss on both sides
-
-ML-KEM-768 (KEM):
-  Bob has: (dk, ek) ← KeyGen()
-  Alice: (ct, ss) ← Encaps(ek)   ← only Alice knows ss before sending
-  Alice → Bob: ct
-  Bob:   ss ← Decaps(dk, ct)
-  → identical ss on both sides
-```
-
-**Independent seed storage (since v1.5.0):**
-
-The ML-KEM seed is generated independently from the X25519 private key —
-each is produced by the OS CSPRNG separately. The `.key` file stores both:
+The ML-KEM seed is generated independently from the X25519 private key.
+The `.key` file stores both:
 
 ```
 x25519_sk[32]   ← OS CSPRNG  (encoded as ARSENIC-SECRET-KEY-1…)
@@ -381,10 +360,6 @@ from the X25519 seed, so no weakness in one component can propagate to the other
 
 Legacy key files (without `# mlkem-seed:`) derive the ML-KEM seed from the
 X25519 key via BLAKE3 for backward compatibility.
-
-**Deterministic encapsulation:**
-`m ← OS CSPRNG [32]` is provided by the caller; Arsenic uses
-`encapsulate_deterministic(m)` internally.
 
 ---
 
@@ -556,7 +531,6 @@ Header protected by: BLAKE3_keyed_hash(KEK, public_header[77 bytes])
 | ML-KEM-768 keyslot | ML-KEM-768 (NIST level 3) | ✓ | FIPS 203, ~180-bit quantum security |
 | ML-KEM-1024 keyslot | ML-KEM-1024 (NIST level 5) | ✓ | FIPS 203, ~256-bit quantum security |
 | **Hybrid keyslot** | **X25519 + ML-KEM-768/1024** | **✓** | Secure if either holds |
-| ML-DSA-65 signature | ML-DSA-65 (NIST FIPS 204) | ✓ | ~192-bit quantum security, sender auth |
 
 The only classically vulnerable component is X25519, and it is **always
 paired with ML-KEM** in the hybrid keyslot. If a sufficiently powerful

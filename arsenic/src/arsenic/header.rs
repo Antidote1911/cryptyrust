@@ -4,12 +4,6 @@ type ParsedHeader = (PublicHeader, [u8; PRE_MAC_LEN], [u8; 32], Vec<u8>);
 pub const MAGIC: [u8; 4] = [0x41, 0x52, 0x53, 0x4E]; // "ARSN"
 pub const VERSION: [u8; 2] = [0x00, 0x01];
 pub const KDF_ID_ARGON2ID: u8 = 0x01;
-#[allow(dead_code)]
-pub const HDR_CIPHER_DEOXYS_II: u8 = 0x02;
-#[allow(dead_code)]
-pub const PLD_CIPHER_XCHACHA20: u8 = 0x03;
-#[allow(dead_code)]
-pub const CIPHER_AES256_GCM_SIV: u8 = 0x04;
 
 /// Hard upper bounds on Argon2id parameters accepted during decryption.
 /// Reject headers with forged extreme values before running any KDF.
@@ -67,30 +61,20 @@ pub const ASYM_1024_KEYSLOT_LEN: usize =
 /// Number of ML-KEM-1024 keyslots field (u32 LE).
 pub const ASYM_1024_COUNT_LEN: usize = 4;
 
-// ── ML-DSA-65 signature region (optional, at end of header) ──────────────────
-/// Byte marker: 0x00 = no signature, 0x01 = ML-DSA-65 signature present.
-pub const SIG_PRESENT_LEN: usize = 1;
-/// ML-DSA-65 verifying key size.
-pub const MLDSA_VERIFYING_KEY_LEN: usize = 1952;
-/// ML-DSA-65 signature size (NIST FIPS 204).
-pub const MLDSA_SIGNATURE_LEN: usize = 3309;
-
 pub const MAX_ASYM_KEYSLOTS: usize = 256;
 
 pub const MERKLE_V1: u8 = 0x01;
-pub const SIG_PRESENT_NONE: u8 = 0x00;
-pub const SIG_PRESENT_MLDSA65: u8 = 0x01;
 pub const SENDER_PRESENT_LEN: usize = 1; // sender_present byte
 
 pub const META_TLV_MANDATORY_PT_LEN: usize = 50;
 
-/// Minimum total header size (0 keyslots, no signature, no sender, no optional metadata):
+/// Minimum total header size (0 keyslots, no sender, no optional metadata):
 ///   PUB_HEADER_LEN(109) + WRAPPED_DEK_LEN(48) + ASYM_COUNT_LEN(4)
-///   + ASYM_1024_COUNT_LEN(4) + SIG_PRESENT_LEN(1) + SENDER_PRESENT_LEN(1)
-///   + META_TLV_MANDATORY_PT_LEN(50) + GCM_TAG(16) = 233
+///   + ASYM_1024_COUNT_LEN(4) + SENDER_PRESENT_LEN(1)
+///   + META_TLV_MANDATORY_PT_LEN(50) + GCM_TAG(16) = 232
 pub const MIN_HEADER_TOTAL_SIZE: usize =
     PUB_HEADER_LEN + WRAPPED_DEK_LEN + ASYM_COUNT_LEN + ASYM_1024_COUNT_LEN
-    + META_TLV_MANDATORY_PT_LEN + GCM_TAG + SIG_PRESENT_LEN + SENDER_PRESENT_LEN;
+    + META_TLV_MANDATORY_PT_LEN + GCM_TAG + SENDER_PRESENT_LEN;
 
 // ── TLV tag identifiers ───────────────────────────────────────────────────────
 
@@ -237,27 +221,16 @@ impl HybridKeyslot1024 {
     }
 }
 
-/// Optional ML-DSA-65 signature attached at the end of the header.
-/// `sig_msg` = pre_mac[77] (authenticated header parameters).
-#[derive(Clone)]
-pub struct MlDsaSignature {
-    /// ML-DSA-65 verifying (public) key — 1952 bytes.
-    pub verifying_key: Box<[u8; MLDSA_VERIFYING_KEY_LEN]>,
-    /// ML-DSA-65 signature — 3293 bytes.
-    pub signature: Box<[u8; MLDSA_SIGNATURE_LEN]>,
-}
-
 /// Parsed envelope region (post-MAC).
 ///
 /// Layout:  sym_wrapped_dek(48) | asym_768_count(4) | keyslots_768(1180×N)
 ///        | asym_1024_count(4)  | keyslots_1024(1660×M)
-///        | protected_meta(var) | sig_present(1) | [sig_region]
+///        | protected_meta(var) | sender_present(1) | [sender_region]
 pub struct ParsedEnvelope {
     pub wrapped_dek: [u8; WRAPPED_DEK_LEN],
     pub hybrid_keyslots: Vec<HybridKeyslot>,
     pub hybrid_keyslots_1024: Vec<HybridKeyslot1024>,
     pub protected_meta: Vec<u8>,
-    pub mldsa_sig: Option<MlDsaSignature>,
     /// Sender identity — stored in the public header, readable without decryption.
     pub sender: Option<SenderInfo>,
 }
@@ -392,9 +365,9 @@ pub fn deserialize_meta_tlv(buf: &[u8], dek: [u8; 32]) -> Result<EnvelopeContent
 ///
 /// Layout: wrapped_dek(48) | count_768(4) | keyslots_768(1180×N)
 ///        | count_1024(4)  | keyslots_1024(1660×M)
-///        | protected_meta(var) | sig_present(1) | [mldsa_vk(1952) | mldsa_sig(3293)]
+///        | protected_meta(var) | sender_present(1) | [sender_region]
 pub fn parse_envelope(enc_region: &[u8]) -> Result<ParsedEnvelope, CoreErr> {
-    let min = WRAPPED_DEK_LEN + ASYM_COUNT_LEN + ASYM_1024_COUNT_LEN + SIG_PRESENT_LEN;
+    let min = WRAPPED_DEK_LEN + ASYM_COUNT_LEN + ASYM_1024_COUNT_LEN;
     if enc_region.len() < min {
         return Err(CoreErr::DecryptFail("Envelope region too short".into()));
     }
@@ -456,22 +429,20 @@ pub fn parse_envelope(enc_region: &[u8]) -> Result<ParsedEnvelope, CoreErr> {
     //   [sender_region] sig_present[1] [sig_data?]
     // We scan from the end: first peel off the sender region, then the signature.
 
-    // ── Sender region (outermost, at the very end) ──
+    // ── Sender region (at the very end) ──
     // Format: sender_present[1] [name_len[2 LE] + name[N] + x25519[32] + mlkem[1184]]
-    let sender;
-    let after_sender;
-    let sender_min = 1usize; // just the sender_present byte
-    if remaining.len() < sender_min {
+    if remaining.is_empty() {
         return Err(CoreErr::DecryptFail("Envelope missing sender_present byte".into()));
     }
+    let sender;
+    let protected_meta_slice;
     let last = remaining[remaining.len() - 1];
     if last == SENDER_PRESENT {
-        // Parse sender: [name_len[2 LE] + name[N] + x25519[32] + mlkem[1184]] + SENDER_PRESENT
         let fixed_tail = 1 + 2 + 32 + 1184; // sender_present + name_len + x25519 + mlkem
         if remaining.len() < fixed_tail {
             return Err(CoreErr::DecryptFail("Envelope sender region too short".into()));
         }
-        let sp = remaining.len() - 1; // index of sender_present byte
+        let sp = remaining.len() - 1;
         let mlkem_start = sp - 1184;
         let x25519_start = mlkem_start - 32;
         let name_len_start = x25519_start - 2;
@@ -480,38 +451,14 @@ pub fn parse_envelope(enc_region: &[u8]) -> Result<ParsedEnvelope, CoreErr> {
             return Err(CoreErr::DecryptFail("Envelope sender name overruns".into()));
         }
         let name_start = name_len_start - name_len;
-        let name = std::str::from_utf8(&remaining[name_start..name_start+name_len])
-            .unwrap_or("").to_string();
+        let name = String::from_utf8_lossy(&remaining[name_start..name_start+name_len]).into_owned();
         let x25519_pk: [u8; 32] = remaining[x25519_start..x25519_start+32].try_into().unwrap();
         let mlkem_pk: [u8; 1184] = remaining[mlkem_start..mlkem_start+1184].try_into().unwrap();
         sender = Some(SenderInfo { name, x25519_pk, mlkem_pk });
-        after_sender = &remaining[..name_start];
+        protected_meta_slice = &remaining[..name_start];
     } else {
-        // SENDER_PRESENT_NONE: just the one byte
         sender = None;
-        after_sender = &remaining[..remaining.len() - 1];
-    }
-
-    // ── Signature region ──
-    let mldsa_sig;
-    let protected_meta_slice;
-    let sig_total = SIG_PRESENT_LEN + MLDSA_VERIFYING_KEY_LEN + MLDSA_SIGNATURE_LEN;
-    if after_sender.len() >= sig_total && after_sender[after_sender.len() - sig_total] == SIG_PRESENT_MLDSA65 {
-        let sig_start = after_sender.len() - sig_total;
-        protected_meta_slice = &after_sender[..sig_start];
-        let vk_start = sig_start + SIG_PRESENT_LEN;
-        let s_start = vk_start + MLDSA_VERIFYING_KEY_LEN;
-        let vk: Box<[u8; MLDSA_VERIFYING_KEY_LEN]> =
-            Box::new(after_sender[vk_start..vk_start+MLDSA_VERIFYING_KEY_LEN].try_into().unwrap());
-        let sig: Box<[u8; MLDSA_SIGNATURE_LEN]> =
-            Box::new(after_sender[s_start..s_start+MLDSA_SIGNATURE_LEN].try_into().unwrap());
-        mldsa_sig = Some(MlDsaSignature { verifying_key: vk, signature: sig });
-    } else {
-        if after_sender.is_empty() {
-            return Err(CoreErr::DecryptFail("Envelope missing sig_present byte".into()));
-        }
-        protected_meta_slice = &after_sender[..after_sender.len() - SIG_PRESENT_LEN];
-        mldsa_sig = None;
+        protected_meta_slice = &remaining[..remaining.len() - 1];
     }
 
     Ok(ParsedEnvelope {
@@ -519,7 +466,6 @@ pub fn parse_envelope(enc_region: &[u8]) -> Result<ParsedEnvelope, CoreErr> {
         hybrid_keyslots,
         hybrid_keyslots_1024,
         protected_meta: protected_meta_slice.to_vec(),
-        mldsa_sig,
         sender,
     })
 }
@@ -530,7 +476,6 @@ pub fn build_envelope_region(
     hybrid_keyslots: &[HybridKeyslot],
     hybrid_keyslots_1024: &[HybridKeyslot1024],
     protected_meta: &[u8],
-    mldsa_sig: Option<&MlDsaSignature>,
     sender: Option<&SenderInfo>,
 ) -> Vec<u8> {
     let mut buf = Vec::new();
@@ -540,14 +485,6 @@ pub fn build_envelope_region(
     buf.extend_from_slice(&(hybrid_keyslots_1024.len() as u32).to_le_bytes());
     for slot in hybrid_keyslots_1024 { buf.extend_from_slice(&slot.to_bytes()); }
     buf.extend_from_slice(protected_meta);
-    // Signature region
-    if let Some(sig) = mldsa_sig {
-        buf.push(SIG_PRESENT_MLDSA65);
-        buf.extend_from_slice(sig.verifying_key.as_slice());
-        buf.extend_from_slice(sig.signature.as_slice());
-    } else {
-        buf.push(SIG_PRESENT_NONE);
-    }
     // Sender region (public — readable without decryption)
     if let Some(s) = sender {
         let name_bytes = s.name.as_bytes();
@@ -561,46 +498,6 @@ pub fn build_envelope_region(
         buf.push(SENDER_PRESENT_NONE);
     }
     buf
-}
-
-/// Serialize the sender region bytes for inclusion in the ML-DSA-65 signed message.
-pub(crate) fn sender_bytes_for_signing(sender: &SenderInfo) -> Vec<u8> {
-    let name_bytes = sender.name.as_bytes();
-    let name_len = name_bytes.len().min(255) as u16;
-    let mut buf = Vec::with_capacity(name_len as usize + 2 + 32 + 1184 + 1);
-    buf.extend_from_slice(&name_bytes[..name_len as usize]);
-    buf.extend_from_slice(&name_len.to_le_bytes());
-    buf.extend_from_slice(&sender.x25519_pk);
-    buf.extend_from_slice(&sender.mlkem_pk);
-    buf.push(SENDER_PRESENT);
-    buf
-}
-
-/// Build the complete ML-DSA-65 signed message (single source of truth).
-///
-/// ```text
-/// signed_message = pre_mac[77]
-///               || protected_meta_ct          ← binds payload content via Merkle root
-///               || sender_bytes               ← if sender present
-/// ```
-///
-/// Covering the ProtectedMetadata ciphertext prevents a legitimate recipient
-/// (who has the DEK) from modifying the payload while keeping a valid signature:
-/// any change to the payload → new Merkle root → different ciphertext → invalid signature.
-/// The ciphertext is in the public header, so verification requires no decryption.
-pub fn build_signed_message(
-    pre_mac: &[u8; PRE_MAC_LEN],
-    protected_meta_ct: &[u8],
-    sender: Option<&SenderInfo>,
-) -> Vec<u8> {
-    let sender_len = sender.map_or(0, |s| s.name.as_bytes().len().min(255) + 2 + 32 + 1184 + 1);
-    let mut msg = Vec::with_capacity(PRE_MAC_LEN + protected_meta_ct.len() + sender_len);
-    msg.extend_from_slice(pre_mac);
-    msg.extend_from_slice(protected_meta_ct);
-    if let Some(s) = sender {
-        msg.extend_from_slice(&sender_bytes_for_signing(s));
-    }
-    msg
 }
 
 // ── Public header serialization ───────────────────────────────────────────────
@@ -670,6 +567,9 @@ pub fn parse_header_bytes(bytes: &[u8]) -> Result<ParsedHeader, CoreErr> {
     }
     if bytes[4..6] != VERSION {
         return Err(CoreErr::BadHeaderVersion);
+    }
+    if bytes[6] != KDF_ID_ARGON2ID {
+        return Err(CoreErr::DecryptFail(format!("Unknown KDF ID: {:#x}", bytes[6])));
     }
 
     let pre_mac: [u8; PRE_MAC_LEN] = bytes[..PRE_MAC_LEN].try_into().expect("PRE_MAC_LEN");

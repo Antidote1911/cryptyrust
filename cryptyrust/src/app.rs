@@ -1,6 +1,6 @@
 use arsenic::{
     bench_cipher_combinations, ArsenicParams, ArsenicStrength, CipherBenchResult, CipherId,
-    KemLevel, SignatureStatus, Ui,
+    KemLevel, Ui,
 };
 use eframe::egui;
 use std::path::PathBuf;
@@ -41,14 +41,8 @@ pub struct CryptyApp {
     pub pld_cipher: CipherId,
     /// ML-KEM security level for asymmetric keyslots (L768 default / L1024).
     pub kem_level: KemLevel,
-    /// Index into `signing_keys` of the active signing key (None = no signature).
-    pub signing_key_index: Option<usize>,
     /// Sender info extracted after decryption — offered as "Add to contacts?".
     pub pending_contact_from_file: Option<arsenic::keystore::ContactEntry>,
-    /// Signature status of the last decrypted file.
-    pub last_sig_status: Option<SignatureStatus>,
-    /// BLAKE3 fingerprint (first 8 bytes, hex) of the signing VK of the last file.
-    pub last_vk_fingerprint: Option<String>,
     pub show_about: bool,
     pub dark_mode: bool,
     // Cipher benchmark state
@@ -138,10 +132,7 @@ impl CryptyApp {
             hdr_cipher,
             pld_cipher,
             kem_level,
-            signing_key_index: None,
             pending_contact_from_file: None,
-            last_sig_status: None,
-            last_vk_fingerprint: None,
             show_about: false,
             dark_mode,
             bench_running: false,
@@ -277,25 +268,6 @@ impl CryptyApp {
     }
 
     pub fn validate_and_start(&mut self, ctx: &egui::Context) {
-        // Signing is mandatory for encryption.
-        if self.mode == Mode::Encrypt {
-            let has_signing = self.signing_key_index
-                .and_then(|i| self.keys.get(i))
-                .and_then(|k| k.signing_seed.as_ref())
-                .is_some();
-            if !has_signing {
-                self.pw_error = Some(if self.keys.is_empty() {
-                    "Signing is required — generate a keypair in Key Manager first.".into()
-                } else if self.signing_key_index.is_none() {
-                    "Signing is required — select your identity in the Config menu.".into()
-                } else {
-                    "Signing is required — this keypair is legacy (no signing key). \
-                     Regenerate it in Key Manager.".into()
-                });
-                return;
-            }
-        }
-
         let n_sel = self.pw_selected_own_keys.iter().filter(|&&s| s).count()
             + self.pw_selected_recipients.iter().filter(|&&s| s).count();
 
@@ -446,7 +418,6 @@ impl CryptyApp {
             name,
             public_key,
             mlkem_public_key: Box::new(mlkem_key),
-            signing_verifying_key: None,
         });
         save_contacts(&self.contacts);
         self.km_new_contact_name.clear();
@@ -473,47 +444,17 @@ impl CryptyApp {
         self.km_confirm_delete = None;
     }
 
-    /// Generate a new ML-DSA-65 signing key and save it to the signing-keys keystore.
-    /// Open a `.sigpub` file and attach its verifying key to the contact at `contact_index`.
-    pub fn km_import_sign_pubkey_for_contact(&mut self, contact_index: usize) {
-        let Some(path) = rfd::FileDialog::new()
-            .add_filter("Signing public key", &["sigpub"])
-            .set_title("Import signing public key for contact")
-            .pick_file()
-        else { return };
-
-        let content = match std::fs::read_to_string(&path) {
-            Ok(c)  => c,
-            Err(e) => { self.km_contact_error = Some(format!("Cannot read file: {e}")); return; }
-        };
-        let (_, vk) = match arsenic::keystore::parse_sign_pubkey_file(&content, path) {
-            Some(r) => r,
-            None    => { self.km_contact_error = Some("No valid signing key found in file.".into()); return; }
-        };
-        if let Some(c) = self.contacts.get_mut(contact_index) {
-            c.signing_verifying_key = Some(Box::new(vk));
-            save_contacts(&self.contacts);
-            self.km_contact_error = None;
-        }
-    }
-
     /// Read sender identity from the file and propose adding as contact if unknown.
     pub fn extract_sender_from_file(&mut self, path: &std::path::Path) {
         use arsenic::arsenic_read_sender_info;
         let Some(sender) = arsenic_read_sender_info(path) else { return };
         let (name, x25519_pk, mlkem_pk) = (sender.name, sender.x25519_pk, sender.mlkem_pk);
-        // Skip if already a known contact.
         if self.contacts.iter().any(|c| c.public_key == x25519_pk) { return; }
-        // Skip if it's ourselves.
         if self.keys.iter().any(|k| k.public_key == x25519_pk) { return; }
-        // Read verifying key from signature region to include in the proposed contact.
-        let sign_vk = arsenic::arsenic_read_verifying_key(path)
-            .map(|vk| Box::new(*vk));
         self.pending_contact_from_file = Some(arsenic::keystore::ContactEntry {
             name,
             public_key: x25519_pk,
             mlkem_public_key: Box::new(mlkem_pk),
-            signing_verifying_key: sign_vk,
         });
     }
 
@@ -523,14 +464,6 @@ impl CryptyApp {
             self.contacts.push(entry);
             save_contacts(&self.contacts);
         }
-    }
-
-    /// Check the signature on a file against own signing keys then the contact trust store.
-    pub fn check_and_store_sig_status(&mut self, path: &std::path::Path) {
-        let (status, fingerprint) =
-            arsenic::arsenic_check_signature(path, &self.keys, &self.contacts);
-        self.last_sig_status = Some(status);
-        self.last_vk_fingerprint = fingerprint;
     }
 
     /// Export the public parts of keypair `index` as a `.pubkey` file.
@@ -573,6 +506,14 @@ impl CryptyApp {
             Some(e) => e,
             None    => { self.km_contact_error = Some("No valid public key found in this file.".into()); return; }
         };
+        if self.keys.iter().any(|k| k.public_key == entry.public_key) {
+            self.km_contact_error = Some(format!("\"{}\" is one of your own keypairs.", entry.name));
+            return;
+        }
+        if self.contacts.iter().any(|c| c.public_key == entry.public_key) {
+            self.km_contact_error = Some(format!("A contact with this public key already exists."));
+            return;
+        }
         if self.contacts.iter().any(|c| c.name == entry.name) {
             self.km_contact_error = Some(format!("A contact named \"{}\" already exists.", entry.name));
             return;
@@ -604,31 +545,14 @@ impl CryptyApp {
             .and_then(|i| self.keys.get(i))
             .cloned();
 
-        // ML-DSA-65 signing key seed — from the selected encryption keypair.
-        let signing_key = self.signing_key_index
-            .and_then(|i| self.keys.get(i))
-            .and_then(|k| k.signing_seed.clone());
-
-        // Embed sender identity so the recipient can add us as contact from the file.
-        let (sender_name, sender_x25519_pk, sender_mlkem_pk) =
-            self.signing_key_index
-                .and_then(|i| self.keys.get(i))
-                .map(|k| (
-                    Some(k.name.clone()),
-                    Some(k.public_key),
-                    Some(*k.mlkem_public_key),
-                ))
-                .unwrap_or((None, None, None));
-
         let params = ArsenicParams {
             hdr_cipher: self.hdr_cipher,
             pld_cipher: self.pld_cipher,
             recipients,
             kem_level: self.kem_level,
-            signing_key,
-            sender_name,
-            sender_x25519_pk,
-            sender_mlkem_pk,
+            sender_name: None,
+            sender_x25519_pk: None,
+            sender_mlkem_pk: None,
             ..ArsenicParams::from(self.arsenic_strength)
         };
         self.job
@@ -723,15 +647,11 @@ impl eframe::App for CryptyApp {
         }
 
         if let Some((files, statuses, success_label)) = job_completed {
-            // After decrypt, check signature and extract sender identity.
             if self.mode == Mode::Decrypt {
                 if let Some(path) = files.first() {
-                    self.check_and_store_sig_status(path);
                     self.extract_sender_from_file(path);
                 }
             } else {
-                self.last_sig_status = None;
-                self.last_vk_fingerprint = None;
                 self.pending_contact_from_file = None;
             }
             self.job = JobState::Completed {

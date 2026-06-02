@@ -1,10 +1,8 @@
-> [Version française](FORMAT_fr.md)
-
 # Arsenic V1 File Format — Complete Specification
 
-> **Format version**: `[0x00, 0x01]`  
-> **Magic**: `41 52 53 4E` ("ARSN")  
-> **Usual extension**: `.arsn`  
+> **Format version**: `[0x00, 0x01]`
+> **Magic**: `41 52 53 4E` ("ARSN")
+> **Usual extension**: `.arsn`
 > All multi-byte values are **little-endian** unless stated otherwise.
 
 ---
@@ -109,10 +107,6 @@ with absurd parameters is rejected immediately at zero cost.
 ├──────────────────────────────────────────────────────────────┤
 │  ProtectedMetadata             variable   (TLV_len + 16)     │
 ├──────────────────────────────────────────────────────────────┤
-│  sig_present                    1 byte    0x00 or 0x01       │
-│  [ML-DSA-65 verifying key]   1 952 bytes  ┐ present only     │
-│  [ML-DSA-65 signature]       3 309 bytes  ┘ if sig=0x01      │
-├──────────────────────────────────────────────────────────────┤
 │  sender_present                 1 byte    0x00 or 0x01       │
 │  [sender name]               1–255 bytes  ┐ present only     │
 │  [name_len]                    2 bytes    │ if sender=0x01   │
@@ -135,8 +129,8 @@ WrappedDEK = AEAD_hdr( KEK[32], nonce_env(kek_nonce),
 
 ### 5.2 Counters (4 bytes each)
 
-`hybrid_768_count` (u32 LE): number N of ML-KEM-768 keyslots.  
-`hybrid_1024_count` (u32 LE): number M of ML-KEM-1024 keyslots.  
+`hybrid_768_count` (u32 LE): number N of ML-KEM-768 keyslots.
+`hybrid_1024_count` (u32 LE): number M of ML-KEM-1024 keyslots.
 Both are 0 if no asymmetric recipients.
 
 ### 5.3 ML-KEM-768 Hybrid Keyslot — 1 180 bytes each
@@ -177,7 +171,7 @@ Decryption:
   DEK          ← AEAD_hdr_decrypt(wrapping_key, kek_nonce, wrapped_dek)
 ```
 
-**Independent key seeds (since v1.5.0):**
+**Independent key seeds:**
 
 The recipient's X25519 and ML-KEM-768 seeds are **independent**: the `.key`
 file stores a 32-byte X25519 seed and a separate 64-byte ML-KEM seed
@@ -227,8 +221,6 @@ ProtectedMetadata = AEAD_hdr( MetaKey, nonce_env(MetaNonce),
 | `0x05` | 1      | BlockSizeId               |
 | `0x06` | 1      | MerkleAlgoId = `0x01`     |
 
-Tag `0x04` (CompressedSize) was removed — it always equalled OriginalSize.
-
 **Optional TLV fields:**
 
 | Tag    | Max  | Value                  |
@@ -237,38 +229,7 @@ Tag `0x04` (CompressedSize) was removed — it always equalled OriginalSize.
 | `0x11` | 255  | Comment (UTF-8)        |
 | `0x12` | 8    | TimestampSecs (u64 LE) |
 
-### 5.6 Signature Region (variable size)
-
-The signature region appears immediately after ProtectedMetadata.
-
-```
-sig_present[1]       0x00 = no signature
-                     0x01 = ML-DSA-65 signature follows
-
-[if sig_present == 0x01]:
-  verifying_key[1952]  ML-DSA-65 verifying (public) key
-  signature[3309]      ML-DSA-65 signature
-
-Signed message:
-  pre_mac[77] || sender_bytes   if sender_present == 0x01
-  pre_mac[77]                   if sender_present == 0x00  (no sender)
-```
-
-Including the sender region in the signed message prevents an attacker from
-silently swapping the sender's public keys (key-substitution / TOFU poisoning
-attack). Stripping the sender region or modifying any byte of it causes the
-signature verification to fail, which is a hard error.
-
-The no-sender path (`pre_mac[77]` only) is backward-compatible with files
-produced before sender-identity support was introduced.
-
-The signature is verified automatically during decryption; a mismatch is a
-hard error on both the symmetric (`decrypt_arsenic`) and asymmetric
-(`decrypt_arsenic_with_key`) paths. The signing seed is a 32-byte value
-embedded in the sender's `.key` file (since v1.5.0) or in a separate `.sigkey`
-file.
-
-### 5.7 Sender Identity Region (variable size)
+### 5.6 Sender Identity Region (variable size)
 
 The sender region is the **last** bytes of the header, parsed from the end.
 It is stored **in plaintext** — no decryption is needed to read it. This
@@ -287,7 +248,7 @@ sender_present[1]       0x00 = no sender info
   name[name_len]              Sender display name (UTF-8)
 ```
 
-Serialization order (appended after signature region):
+Serialization order (appended after ProtectedMetadata):
 ```
 name_bytes[N] || name_len[2 LE] || x25519_pk[32] || mlkem_pk[1184] || sender_present[1]
 ```
@@ -295,16 +256,9 @@ name_bytes[N] || name_len[2 LE] || x25519_pk[32] || mlkem_pk[1184] || sender_pre
 Parsers read from the tail: peel `sender_present[1]`, then `mlkem_pk[1184]`,
 `x25519_pk[32]`, `name_len[2]`, then `name[name_len]`.
 
-**Authentication:** the sender region is covered by the ML-DSA-65 signature
-(when a signature is present). Any modification — including replacing the
-public keys with an attacker's keys — invalidates the signature and causes
-a hard decryption error. When no signature is present, the sender region
-is unauthenticated and must be treated as advisory only.
-
-**Privacy note:** the sender's display name and public keys are visible to
-any party in possession of the file. This is intentional — the dead-drop
-model requires the recipient to identify the sender without an online
-channel. The public keys are non-secret; the name is explicitly shared.
+**Note:** the sender region is unauthenticated — it is advisory information
+only. Any party in possession of the file can observe or modify it.
+The public keys and name are explicitly shared in the dead-drop model.
 
 ---
 
@@ -316,20 +270,17 @@ header_total_size = PUB_HEADER_LEN(109)
                   + ASYM_768_COUNT_LEN(4)  + N × KEYSLOT_768_LEN(1180)
                   + ASYM_1024_COUNT_LEN(4) + M × KEYSLOT_1024_LEN(1660)
                   + len(meta_tlv) + GCM_TAG(16)
-                  + SIG_PRESENT_LEN(1)
-                  [+ MLDSA_VK_LEN(1952) + MLDSA_SIG_LEN(3309)  if signed]
                   + SENDER_PRESENT_LEN(1)
                   [+ name_len_field(2) + len(name) + X25519_PK(32) + MLKEM_PK(1184)  if sender]
 ```
 
 | Configuration                                   | Header size        |
 |-------------------------------------------------|--------------------|
-| Minimum (0 keyslots, no signature, no sender)   | **233 bytes**      |
-| 1 ML-KEM-768 recipient, no signature            | 1 413 bytes        |
-| N ML-KEM-768 recipients, no signature           | 233 + N × 1 180    |
-| 1 ML-KEM-1024 recipient, no signature           | 1 893 bytes        |
-| M ML-KEM-1024 recipients, no signature          | 233 + M × 1 660    |
-| Any recipients + ML-DSA-65 signature            | + 5 261 bytes      |
+| Minimum (0 keyslots, no sender)                 | **232 bytes**      |
+| 1 ML-KEM-768 recipient, no sender               | 1 412 bytes        |
+| N ML-KEM-768 recipients, no sender              | 232 + N × 1 180    |
+| 1 ML-KEM-1024 recipient, no sender              | 1 892 bytes        |
+| M ML-KEM-1024 recipients, no sender             | 232 + M × 1 660    |
 | Sender present (name = "alice", 5 bytes)        | + 1 223 bytes      |
 | Maximum (256 keyslots)                          | ~303 KiB           |
 
@@ -452,18 +403,12 @@ OS random → DEK[32]
 
 [optional — if sender info provided]:
   sender_bytes = name[N] || name_len[2 LE] || x25519_pk[32] || mlkem_pk[1184] || 0x01
-              → plaintext sender region (appended after signature region)
-
-[optional — if signing_key provided]:
-  signed_msg = pre_mac[77] || sender_bytes   (sender present)
-             = pre_mac[77]                   (no sender)
-  ML-DSA-65.Sign(signing_key_seed[32], signed_msg)          → signature[3309]
-  + verifying_key[1952] appended to header (before sender region)
+              → plaintext sender region (appended after ProtectedMetadata)
 ```
 
 ---
 
-## 11. Complete Diagram — Minimal File (0 keyslots, no signature, no sender)
+## 11. Complete Diagram — Minimal File (0 keyslots, no sender)
 
 ```
 Offset     Size  Content
@@ -473,7 +418,7 @@ Offset     Size  Content
 0x000006     1   kdf_id             : 01
 0x000007     1   hdr_cipher_id      : e.g. 02
 0x000008     1   pld_cipher_id      : e.g. 03
-0x000009     4   header_total_size  : E9 00 00 00  (233, u32 LE)
+0x000009     4   header_total_size  : E8 00 00 00  (232, u32 LE)
 0x00000D    16   salt               : [16 random bytes]
 0x00001D     4   t_cost             : 04 00 00 00
 0x000021     4   m_cost             : 00 00 04 00  (262 144 KiB)
@@ -487,10 +432,9 @@ Offset     Size  Content
 0x00009D     4   hybrid_768_count   : 00 00 00 00
 0x0000A1     4   hybrid_1024_count  : 00 00 00 00
 0x0000A5    66   ProtectedMetadata  : AEAD_hdr(MetaKey, "arsenic-v1-protected-meta", TLV[50])
-0x0000E7     1   sig_present        : 00  (no signature)
-0x0000E8     1   sender_present     : 00  (no sender)
-──────── end header: 233 bytes ──────────────────────────────────────────────
-0x0000E9     ∞   Payload (consecutive blocks)
+0x0000E7     1   sender_present     : 00  (no sender)
+──────── end header: 232 bytes ──────────────────────────────────────────────
+0x0000E8     ∞   Payload (consecutive blocks)
 ─────────────────────────────────────────────────────────────────────────────
 ```
 
@@ -508,7 +452,6 @@ The following fields change; everything else is preserved unchanged:
 | `WrappedDEK` | Re-encrypted under new KEK |
 | Hybrid keyslots | **Unchanged** |
 | `ProtectedMetadata` | **Unchanged** |
-| Signature region | **Unchanged** |
 | Sender region | **Unchanged** |
 | Payload blocks | **Unchanged** |
 
@@ -533,32 +476,16 @@ restored from the backup on next open.
 | ML-KEM seed (`d\|\|z`)        | 64 bytes    | `# mlkem-seed: ARSENIC-MLKEM-SEED-1{bech32}` |
 | X25519 public key              | 32 bytes    | `# public key: arsenic1{bech32}`       |
 | ML-KEM-768 encapsulation key   | 1 184 bytes | `# mlkem-public-key: arsenic1m{bech32}` |
-| ML-DSA-65 signing seed         | 32 bytes    | `# sign-seed: ARSENIC-SIGN-SEED-1{bech32}` |
-| ML-DSA-65 verifying key        | 1 952 bytes | `# sign-pub: ARSENIC-SIGN-PUB-1{bech32}` |
 | ML-KEM-768 decapsulation key   | 2 400 bytes | Computed in RAM, never stored          |
 | ML-KEM-1024 encapsulation key  | 1 568 bytes | Derived from the same 64-byte ML-KEM seed |
 | ML-KEM-1024 decapsulation key  | 3 168 bytes | Computed in RAM, never stored          |
 
-The X25519, ML-KEM, and ML-DSA-65 seeds are **all independent** — each is
-generated from the OS CSPRNG separately. A single `.key` file is sufficient
-for encryption, decryption, and signing at all KEM levels.
+The X25519 and ML-KEM seeds are **independent** — each is generated from the
+OS CSPRNG separately. A single `.key` file is sufficient for encryption and
+decryption at all KEM levels.
 
 Legacy key files (without `# mlkem-seed:`) derive the ML-KEM seed via BLAKE3
-for backward compatibility. Legacy files (without `# sign-seed:`) have no
-signing capability and appear as "legacy" in the GUI.
-
-### Standalone signing keypair (`.sigkey` file, CLI only)
-
-For CLI workflows where signing keys are managed separately:
-
-| Component                      | Size        | Storage                                      |
-|--------------------------------|-------------|----------------------------------------------|
-| ML-DSA-65 seed                 | 32 bytes    | `ARSENIC-SIGN-SEED-1{bech32}` line           |
-| ML-DSA-65 verifying key        | 1 952 bytes | `# verifying-key: ARSENIC-SIGN-PUB-1{bech32}` |
-| ML-DSA-65 signing key          | 4 032 bytes | Reconstructed from seed, never stored         |
-
-The `.sigkey` format is used by `cryptyrust keygen --sign` (CLI). The GUI
-uses the signing seed embedded in `.key` files instead.
+for backward compatibility.
 
 ---
 
@@ -579,9 +506,8 @@ uses the signing seed embedded in `.key` files instead.
 | Quantum resistance — keyslots L5  | ML-KEM-1024 (NIST level 5, ~256-bit quantum) resists Shor        |
 | Defence in depth                  | Hybrid X25519+ML-KEM: a flaw in one does not compromise the other |
 | Harvest-now-decrypt-later         | ML-KEM protects files encrypted today                            |
-| Sender authentication             | Optional ML-DSA-65 signature over pre\_mac (NIST FIPS 204)       |
-| Sender identification             | Plaintext sender region: name + X25519 + ML-KEM-768 EK; authenticated by ML-DSA-65 signature when signed |
-| Independent key entropy           | X25519, ML-KEM, and ML-DSA-65 seeds generated independently      |
+| Sender identification             | Plaintext sender region: name + X25519 + ML-KEM-768 EK (advisory) |
+| Independent key entropy           | X25519 and ML-KEM seeds generated independently                  |
 | Recipient anonymity               | Keyslots do not reveal the recipient's public key               |
 | Merkle domain separation          | BLAKE3_derive_key with distinct contexts                        |
 | Memory erasure                    | `Secret<T>` calls `zeroize` on drop                             |

@@ -13,12 +13,11 @@ use super::cipher_dispatch;
 use super::header::{
     build_envelope_region, build_header_bytes, compute_header_mac,
     deserialize_meta_tlv, parse_envelope, parse_header_bytes, serialize_meta_tlv,
-    serialize_pre_mac, build_signed_message, verify_header_mac,
-    HybridKeyslot, HybridKeyslot1024, MlDsaSignature, EnvelopeContent, EnvelopeMetadata,
+    serialize_pre_mac, verify_header_mac,
+    HybridKeyslot, HybridKeyslot1024, EnvelopeContent, EnvelopeMetadata,
     ParsedEnvelope, PublicHeader, SenderInfo,
     ASYM_COUNT_LEN, ASYM_KEYSLOT_LEN, ASYM_1024_COUNT_LEN, ASYM_1024_KEYSLOT_LEN, GCM_TAG,
     MERKLE_V1, META_TLV_MANDATORY_PT_LEN, MIN_HEADER_TOTAL_SIZE, PUB_HEADER_LEN, WRAPPED_DEK_LEN,
-    SIG_PRESENT_LEN, MLDSA_VERIFYING_KEY_LEN, MLDSA_SIGNATURE_LEN,
 };
 use super::hybrid_kem;
 use super::{
@@ -26,7 +25,6 @@ use super::{
     BLOCK_ID_32MB, BLOCK_ID_4MB, BLOCK_SIZE_32MB, BLOCK_SIZE_4MB,
     LARGE_FILE_THRESHOLD, MAX_ARGON2_RAM_KB, MAX_HEADER_TOTAL_SIZE, MAX_T_COST, MAX_P_COST,
 };
-use ml_dsa::{MlDsa65, SigningKey as MlDsaSigningKey, Signer, Verifier, Keypair, Seed as MlDsaSeed};
 
 // ── KDF parameter validation ──────────────────────────────────────────────────
 
@@ -585,12 +583,6 @@ where
         KemLevel::L1024 => ([].as_slice(), params.recipients.as_slice()),
     };
 
-    let sig_region_len = if params.signing_key.is_some() {
-        SIG_PRESENT_LEN + MLDSA_VERIFYING_KEY_LEN + MLDSA_SIGNATURE_LEN
-    } else {
-        SIG_PRESENT_LEN
-    };
-
     let sender_info: Option<SenderInfo> = match (&params.sender_name, &params.sender_x25519_pk, &params.sender_mlkem_pk) {
         (Some(name), Some(x25519), Some(mlkem)) => Some(SenderInfo {
             name: name.clone(),
@@ -609,7 +601,6 @@ where
         + ASYM_COUNT_LEN + recipients_768.len() * ASYM_KEYSLOT_LEN
         + ASYM_1024_COUNT_LEN + recipients_1024.len() * ASYM_1024_KEYSLOT_LEN
         + protected_meta_enc_len
-        + sig_region_len
         + sender_region_len;
     if header_total_size > MAX_HEADER_TOTAL_SIZE as usize {
         return Err(CoreErr::EncryptFail("Header too large (too many recipients or metadata)".into()));
@@ -719,36 +710,8 @@ where
 
     let pre_mac_bytes = serialize_pre_mac(&pub_header);
 
-    // Optional ML-DSA-65 signature.
-    // Signed message = pre_mac[77] || protected_meta_ct || sender_bytes (if sender)
-    //                = pre_mac[77] || protected_meta_ct                  (no sender)
-    //
-    // Covering ProtectedMetadata binds the signature to the Merkle root, which covers
-    // the entire payload.  A recipient who has the DEK cannot modify the payload and
-    // keep a valid signature: any payload change → new Merkle root → different
-    // ProtectedMetadata ciphertext → signature verification fails.
-    let mldsa_sig = if let Some(ref seed) = params.signing_key {
-        let signed_msg = build_signed_message(&pre_mac_bytes, &protected_meta, sender_info.as_ref());
-        let seed_common: MlDsaSeed = (**seed).into();
-        let sk = MlDsaSigningKey::<MlDsa65>::from_seed(&seed_common);
-        let vk = sk.verifying_key(); // via Keypair trait
-        let sig: ml_dsa::Signature<MlDsa65> = sk.sign(&signed_msg);
-        let vk_enc = vk.encode();
-        let sig_enc = sig.encode();
-        let mut vk_arr = [0u8; MLDSA_VERIFYING_KEY_LEN];
-        vk_arr.copy_from_slice(vk_enc.as_slice());
-        let mut sig_arr = [0u8; MLDSA_SIGNATURE_LEN];
-        sig_arr.copy_from_slice(sig_enc.as_slice());
-        Some(MlDsaSignature {
-            verifying_key: Box::new(vk_arr),
-            signature: Box::new(sig_arr),
-        })
-    } else {
-        None
-    };
-
     let enc_envelope = build_envelope_region(
-        &wrapped_dek, &hybrid_keyslots, &hybrid_keyslots_1024, &protected_meta, mldsa_sig.as_ref(), sender_info.as_ref(),
+        &wrapped_dek, &hybrid_keyslots, &hybrid_keyslots_1024, &protected_meta, sender_info.as_ref(),
     );
 
     let mac = compute_header_mac(kek.expose(), &pre_mac_bytes);
@@ -815,19 +778,6 @@ where
     }
 
     let envelope = parse_envelope(&enc_env_region)?;
-
-    // Verify ML-DSA signature if present.
-    // signed_message = pre_mac[77] || protected_meta_ct || sender_bytes (if sender)
-    if let Some(ref mldsa) = envelope.mldsa_sig {
-        let vk_enc = ml_dsa::EncodedVerifyingKey::<MlDsa65>::try_from(mldsa.verifying_key.as_slice())
-            .map_err(|_| CoreErr::DecryptFail("Malformed ML-DSA verifying key".into()))?;
-        let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(&vk_enc);
-        let sig = ml_dsa::Signature::<MlDsa65>::try_from(mldsa.signature.as_slice())
-            .map_err(|_| CoreErr::DecryptFail("Malformed ML-DSA signature".into()))?;
-        let signed_msg = build_signed_message(&pre_mac_bytes, &envelope.protected_meta, envelope.sender.as_ref());
-        vk.verify(&signed_msg, &sig)
-            .map_err(|_| CoreErr::DecryptFail("ML-DSA signature verification failed — file may be forged".into()))?;
-    }
 
     let env =
         decrypt_envelope_symmetric(hdr_cipher, kek.expose(), &pub_hdr.kek_nonce, &envelope)?;
@@ -903,7 +853,7 @@ where
     }
 
     let header_buf = read_header(input)?;
-    let (pub_hdr, pre_mac_bytes, _stored_mac, enc_env_region) = parse_header_bytes(&header_buf)?;
+    let (pub_hdr, _pre_mac_bytes, _stored_mac, enc_env_region) = parse_header_bytes(&header_buf)?;
 
     let hdr_cipher = CipherId::from_byte(pub_hdr.hdr_cipher_id)?;
     let pld_cipher = CipherId::from_byte(pub_hdr.pld_cipher_id)?;
@@ -913,19 +863,6 @@ where
     }
 
     let envelope = parse_envelope(&enc_env_region)?;
-
-    // Verify ML-DSA signature if present (same logic as symmetric path).
-    // signed_message = pre_mac[77] || protected_meta_ct || sender_bytes (if sender)
-    if let Some(ref mldsa) = envelope.mldsa_sig {
-        let vk_enc = ml_dsa::EncodedVerifyingKey::<MlDsa65>::try_from(mldsa.verifying_key.as_slice())
-            .map_err(|_| CoreErr::DecryptFail("Malformed ML-DSA verifying key".into()))?;
-        let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(&vk_enc);
-        let sig = ml_dsa::Signature::<MlDsa65>::try_from(mldsa.signature.as_slice())
-            .map_err(|_| CoreErr::DecryptFail("Malformed ML-DSA signature".into()))?;
-        let signed_msg = build_signed_message(&pre_mac_bytes, &envelope.protected_meta, envelope.sender.as_ref());
-        vk.verify(&signed_msg, &sig)
-            .map_err(|_| CoreErr::DecryptFail("ML-DSA signature verification failed — file may be forged".into()))?;
-    }
 
     // Try 768 keyslots first, then 1024.
     let dek = unwrap_dek_hybrid(hdr_cipher, x25519_privkey.expose(), mlkem_seed, &envelope.hybrid_keyslots)
@@ -1051,7 +988,7 @@ where
 
     // Preserve all asymmetric keyslots, ProtectedMetadata, and sender region unchanged.
     let new_enc_envelope =
-        build_envelope_region(&new_wrapped_dek, &envelope.hybrid_keyslots, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.mldsa_sig.as_ref(), envelope.sender.as_ref());
+        build_envelope_region(&new_wrapped_dek, &envelope.hybrid_keyslots, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.sender.as_ref());
 
     let new_pub_hdr = PublicHeader {
 
@@ -1147,7 +1084,7 @@ pub fn build_header_with_added_recipient<R: Read + Seek>(
     new_asym.push(new_slot);
 
     let new_enc_envelope =
-        build_envelope_region(&envelope.wrapped_dek, &new_asym, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.mldsa_sig.as_ref(), envelope.sender.as_ref());
+        build_envelope_region(&envelope.wrapped_dek, &new_asym, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.sender.as_ref());
     let new_header_size = PUB_HEADER_LEN + new_enc_envelope.len();
 
     if new_header_size > MAX_HEADER_TOTAL_SIZE as usize {
@@ -1216,7 +1153,7 @@ pub fn build_header_with_removed_recipient<R: Read + Seek>(
     new_asym.remove(index);
 
     let new_enc_envelope =
-        build_envelope_region(&envelope.wrapped_dek, &new_asym, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.mldsa_sig.as_ref(), envelope.sender.as_ref());
+        build_envelope_region(&envelope.wrapped_dek, &new_asym, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.sender.as_ref());
     let new_header_size = PUB_HEADER_LEN + new_enc_envelope.len();
 
     let new_pub_hdr = PublicHeader {

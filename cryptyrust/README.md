@@ -1,5 +1,3 @@
-> [Version française](README_fr.md)
-
 # cryptyrust
 
 Dual-mode binary: launches the native GUI when called without arguments, or runs as a CLI tool when arguments are supplied.
@@ -15,11 +13,9 @@ Built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/e
 - **Multi-file parallel encryption** via Rayon
 - **Individual cancellation** of each in-progress operation
 - **Post-quantum hybrid encryption** — X25519 + ML-KEM-768 or ML-KEM-1024 (NIST FIPS 203)
-- **ML-DSA-65 signatures** (NIST FIPS 204) — sign during encryption, auto-verified on decryption
 - **Sender identity embedding** — sender's public keys embedded in the file header (plaintext); recipient auto-prompted to add sender as a contact after decryption
 - **Automatic key-based decryption** — if a keystore key matches the file, no password is requested
-- **Key manager** — generate hybrid keypairs (X25519 + ML-KEM + ML-DSA-65), manage contacts
-- **Contact trust store** — verify ML-DSA-65 signatures against known contacts
+- **Key manager** — generate hybrid keypairs (X25519 + ML-KEM), manage contacts
 - **Built-in benchmark** of AEAD ciphers
 - **In-place password change** (rekey)
 - **Recipient management** — add or remove asymmetric keyslots from an existing file
@@ -42,26 +38,12 @@ Built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/e
 3. Click **Encrypt** → select recipients in the popup
 4. The password becomes optional if at least one recipient is selected
 
-### Signing
-
-Each keypair generated with **⚡ Generate** includes an ML-DSA-65 signing key automatically.
-
-1. In **Config** → **Signing key**, select the identity to sign with
-2. Encrypt normally — the file is signed with the selected identity
-3. On decryption the signature is verified automatically:
-   - Green banner: "Signed by: alice ✓" (known contact)
-   - Yellow banner: "Signed by unknown key" (valid but not in trust store)
-   - Red banner: "Signature INVALID" (tampered file)
-
-Signing also authenticates the sender identity region: an attacker who intercepts the file cannot replace the sender's public keys without invalidating the signature.
-
 ### Decryption
 
 - **With stored key**: if a keystore key matches the file, decryption starts immediately without a popup
 - **With password**: if no key matches, the popup asks for the password
 - **Sender identity**: if the file contains sender info, a banner appears after decryption:
-  - Blue "📨 From: alice — add to contacts?" when the file is signed (identity authenticated)
-  - Orange "📨 From: alice — add to contacts? ⚠ non signé — identité non vérifiée" when unsigned
+  **"📨 From: alice — add to contacts?"** — click **Add** to register them automatically
 
 ---
 
@@ -74,7 +56,6 @@ Signing also authenticates the sender identity region: an attacker who intercept
 | Argon2id strength | Interactive (256 MiB, ~1-3 s) · Sensitive (1 GiB, ~10-30 s) | Interactive |
 | Header cipher | Deoxys-II-256 · AES-256-GCM-SIV · XChaCha20-Poly1305 | Deoxys-II-256 |
 | Payload cipher | XChaCha20-Poly1305 · AES-256-GCM-SIV · Deoxys-II-256 | XChaCha20-Poly1305 |
-| Signing key | Select identity from keystore | None |
 | Benchmark | ⏱ Benchmark ciphers… | — |
 
 Settings are persisted between sessions via eframe storage.
@@ -99,12 +80,6 @@ cryptyrust -e file.txt -R alice -R bob
 
 # Encrypt with ML-KEM-1024 (NIST Level 5, ~256-bit quantum security)
 cryptyrust -e file.txt -R alice --kem-level 1024
-
-# Encrypt + sign with an ML-DSA-65 signing key
-cryptyrust -e file.txt -S alice
-
-# Encrypt for recipients + sign
-cryptyrust -e file.txt -R alice -S alice
 
 # Decrypt (auto-tries all keystore keys, then prompts for password)
 cryptyrust -d file.txt.arsn
@@ -134,7 +109,6 @@ cryptyrust --help
 | `-o PATH` | Output file or directory |
 | `-R NAME_OR_FILE` | Add a recipient (repeatable) — contact name or `.key` file path |
 | `-i KEY_FILE` | Identity file to try for decryption (repeatable) |
-| `-S NAME_OR_FILE` | Sign with this ML-DSA-65 signing key (name or `.sigkey` file) |
 | `--kem-level 768|1024` | ML-KEM security level for new keyslots |
 | `--strength interactive|sensitive` | Argon2id preset |
 | `--hdr-cipher CIPHER` | Header cipher: `deoxys-ii`, `xchacha20`, `aes-gcm-siv` |
@@ -148,7 +122,7 @@ cryptyrust --help
 Keys are stored in `{config}/cryptyrust/keys/` and shared between the GUI and CLI.
 
 ```bash
-# Generate an encryption keypair (X25519 + ML-KEM-768 + ML-DSA-65 signing key, all in one file)
+# Generate an encryption keypair (X25519 + ML-KEM-768, all in one .key file)
 cryptyrust keygen -n alice --store
 
 # Generate keypair saved to a specific file
@@ -162,18 +136,7 @@ cryptyrust keygen --list
 
 # Show the public key of a .key file
 cryptyrust keygen -y alice.key
-
-# Generate a standalone ML-DSA-65 signing key (for use with -S in CLI)
-cryptyrust keygen --sign -n alice --store
-cryptyrust keygen --sign -n alice -o alice.sigkey
-
-# List stored standalone signing keys
-cryptyrust keygen --list-sign
 ```
-
-> **Note on signing keys:** the GUI uses the ML-DSA-65 seed embedded in `.key` files (generated
-> by `⚡ Generate`). The CLI uses standalone `.sigkey` files (generated by `keygen --sign`).
-> Both produce the same format on disk — the seed is the same type in both cases.
 
 ---
 

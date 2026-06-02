@@ -84,44 +84,6 @@ pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bo
                 "ML-KEM-1024  (NIST level 5, ~256-bit quantum)");
 
             ui.add_space(6.0);
-
-            // ── ML-DSA-65 signing key ─────────────────────────────────
-            let sig_color = if app.signing_key_index.is_none() {
-                egui::Color32::from_rgb(220, 100, 60) // red-orange if none set
-            } else {
-                ui.visuals().text_color()
-            };
-            ui.label(egui::RichText::new("Signing key  (ML-DSA-65)").strong().color(sig_color));
-            ui.label(
-                egui::RichText::new("required — must be set to encrypt")
-                    .small()
-                    .color(sig_color),
-            );
-            ui.separator();
-            ui.selectable_value(&mut app.signing_key_index, None, "— None —");
-            let n = app.keys.len();
-            for i in 0..n {
-                let key = &app.keys[i];
-                let has_sign = key.signing_seed.is_some();
-                let label = if has_sign {
-                    format!("✍ {}", key.name)
-                } else {
-                    format!("⚠ {} (legacy — no signing key)", key.name)
-                };
-                let selected = app.signing_key_index == Some(i);
-                let btn = egui::Button::selectable(selected, label);
-                if ui.add_enabled(has_sign, btn).clicked() && has_sign {
-                    app.signing_key_index = Some(i);
-                }
-            }
-            if n == 0 {
-                ui.label(
-                    egui::RichText::new("No keypairs — generate one in Key Manager")
-                        .small().weak().italics()
-                );
-            }
-
-            ui.add_space(6.0);
             ui.separator();
 
             if ui
@@ -368,7 +330,14 @@ pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
                             }
                         }
                         // ── Contacts ──────────────────────────────────────
-                        if !app.contacts.is_empty() {
+                        // Exclude contacts whose key is already one of the user's own keypairs.
+                        let visible_contacts: Vec<usize> = (0..app.contacts.len())
+                            .filter(|&i| {
+                                let pk = app.contacts[i].public_key;
+                                !app.keys.iter().any(|k| k.public_key == pk)
+                            })
+                            .collect();
+                        if !visible_contacts.is_empty() {
                             if !app.keys.is_empty() {
                                 ui.add_space(4.0);
                             }
@@ -378,7 +347,7 @@ pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
                                     .strong()
                                     .weak(),
                             );
-                            for i in 0..app.contacts.len() {
+                            for i in visible_contacts {
                                 let short = pubkey_short(&app.contacts[i].public_key);
                                 let label =
                                     format!("{}   {}", app.contacts[i].name, short);
@@ -715,8 +684,6 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
     let mut do_confirm_delete_contact: Option<usize> = None;
     let mut do_delete_contact: Option<usize> = None;
     let mut cancel_confirm_contact = false;
-    let do_export_sign_pubkey: Option<usize> = None;
-    let mut do_import_sign_pubkey_for: Option<usize> = None;
 
     egui::ScrollArea::vertical().show(ui, |ui| {
 
@@ -747,22 +714,10 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
                         let short     = pubkey_short(&key.public_key);
                         let full_pub  = encode_pubkey(&key.public_key);
                         let pending   = app.km_confirm_delete == Some(i);
-                        let has_sign  = key.signing_seed.is_some();
-                        let is_active = app.signing_key_index == Some(i);
 
                         body.row(30.0, |mut row| {
                             row.col(|ui| {
-                                ui.horizontal(|ui| {
-                                    ui.label(&key.name);
-                                    let (icon, color, tip) = if is_active {
-                                        ("✍", egui::Color32::from_rgb(80,200,100), "Active identity — used to sign encrypted files")
-                                    } else if has_sign {
-                                        ("✍", ui.visuals().weak_text_color(), "Has signing key — set active in Config to use")
-                                    } else {
-                                        ("⚠", egui::Color32::from_rgb(220,160,40), "Legacy key — no signing key. Regenerate to enable signing.")
-                                    };
-                                    ui.label(egui::RichText::new(icon).color(color).small()).on_hover_text(tip);
-                                });
+                                ui.label(&key.name);
                             });
                             row.col(|ui| {
                                 ui.label(egui::RichText::new(&short).monospace().weak())
@@ -854,13 +809,10 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
                 .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
                 .column(Column::initial(120.0).at_least(60.0).clip(true))
                 .column(Column::initial(130.0).at_least(80.0).clip(true))
-                .column(Column::initial(50.0))
                 .column(Column::remainder().at_least(160.0))
                 .header(24.0, |mut h| {
                     h.col(|ui| { ui.label(egui::RichText::new("Name").small().strong()); });
                     h.col(|ui| { ui.label(egui::RichText::new("Public key").small().strong()); });
-                    h.col(|ui| { ui.label(egui::RichText::new("Sig ✓").small().strong())
-                        .on_hover_text("Whether a trusted ML-DSA-65 signing key is attached"); });
                     h.col(|ui| { ui.label(egui::RichText::new("Actions").small().strong()); });
                 })
                 .body(|mut body| {
@@ -868,7 +820,6 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
                         let c = &app.contacts[i];
                         let short    = pubkey_short(&c.public_key);
                         let full_pub = encode_pubkey(&c.public_key);
-                        let has_sig  = c.signing_verifying_key.is_some();
                         let pending  = app.km_confirm_delete_contact == Some(i);
 
                         body.row(30.0, |mut row| {
@@ -878,25 +829,9 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
                                     .on_hover_text(egui::RichText::new(&full_pub).monospace());
                             });
                             row.col(|ui| {
-                                let (icon, color, tip) = if has_sig {
-                                    ("✓", egui::Color32::from_rgb(80, 200, 100), "Signing key trusted — can verify signatures from this contact")
-                                } else {
-                                    ("—", ui.visuals().weak_text_color(), "No signing key — import a .sigpub to verify their signatures")
-                                };
-                                ui.label(egui::RichText::new(icon).color(color)).on_hover_text(tip);
-                            });
-                            row.col(|ui| {
                                 ui.horizontal(|ui| {
                                     if ui.button("📋 Copy").on_hover_text("Copy X25519 public key").clicked() {
                                         copy_text = Some(full_pub.clone());
-                                        cancel_confirm_contact = true;
-                                    }
-                                    let sig_btn = if has_sig { "🔑 Update sig key" } else { "🔑 Add sig key" };
-                                    if ui.button(sig_btn)
-                                        .on_hover_text("Import a .sigpub file to trust this contact's signatures")
-                                        .clicked()
-                                    {
-                                        do_import_sign_pubkey_for = Some(i);
                                         cancel_confirm_contact = true;
                                     }
                                     if pending {
@@ -947,7 +882,6 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
         ui.add_space(6.0);
 
         // ════════════════════════════════════════════════════════
-        // (Signing keys are now embedded in each keypair — no separate section needed.)
 
         // ── Storage paths + security warning ─────────────────────────────
         let keys_label = keys_dir()
@@ -986,8 +920,6 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
     if let Some(i) = do_confirm_delete_contact { app.km_confirm_delete_contact = Some(i); app.km_contact_error = None; }
     if let Some(i) = do_delete_contact         { app.km_delete_contact(i); }
     if let Some(i) = open_privkey_popup        { app.km_show_privkey = Some(i); }
-    if let Some(i) = do_export_sign_pubkey     { app.km_export_key(i); }
-    if let Some(i) = do_import_sign_pubkey_for { app.km_import_sign_pubkey_for_contact(i); }
 }
 
 /// Secret key reveal popup.  Call every frame when `app.km_show_privkey` is Some.

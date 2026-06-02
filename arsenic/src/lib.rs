@@ -26,133 +26,11 @@ pub use crate::keyfmt::{
 pub use crate::constants::*;
 pub use crate::errors::CoreErr;
 pub use crate::secret::*;
-pub use crate::keyfmt::{encode_mldsa_vk, decode_mldsa_vk};
 
 use std::fs::{remove_file, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::time::Instant;
 
-/// Result of checking a file's ML-DSA-65 signature against the contact trust store.
-#[derive(Debug, Clone)]
-pub enum SignatureStatus {
-    /// The file contains no ML-DSA-65 signature.
-    NotSigned,
-    /// Signature is cryptographically valid and the verifying key matches a trusted contact.
-    SignedByKnown(String),
-    /// Signature is cryptographically valid but the verifying key is not in the trust store.
-    SignedByUnknown,
-    /// A signature region is present but the signature is cryptographically invalid.
-    Invalid,
-}
-
-/// Compute a short fingerprint of a verifying key for out-of-band verification.
-///
-/// Returns the first 8 bytes of BLAKE3(vk) as colon-separated hex pairs,
-/// e.g. `"ab:12:cd:34:ef:56:78:90"`. The fingerprint is stable across sessions
-/// and can be read aloud or compared via Signal to confirm a first contact.
-pub fn vk_fingerprint(vk: &[u8; 1952]) -> String {
-    let hash = blake3::hash(vk);
-    hash.as_bytes()[..8]
-        .iter()
-        .map(|b| format!("{b:02x}"))
-        .collect::<Vec<_>>()
-        .join(":")
-}
-
-/// Cryptographically verify the ML-DSA-65 signature of a file and classify it
-/// against the contact trust store.
-///
-/// Unlike a simple VK lookup, this function **verifies the signature
-/// mathematically** — it reads the header, reconstructs the signed message
-/// (`pre_mac || sender_bytes`), and confirms the signature is valid before
-/// checking the trust store. Returns `Invalid` if the signature does not verify.
-///
-/// Also checks `own_keys` first so self-signed files are labelled "(you)".
-///
-/// Returns `(status, fingerprint)` where `fingerprint` is `Some(hex_string)`
-/// when a signature is present (valid or not), useful for out-of-band TOFU
-/// verification when `status == SignedByUnknown`.
-pub fn arsenic_check_signature(
-    path: &std::path::Path,
-    own_keys: &[keystore::KeyEntry],
-    contacts: &[keystore::ContactEntry],
-) -> (SignatureStatus, Option<String>) {
-    use arsenic::header::{parse_header_bytes, parse_envelope, build_signed_message, MIN_HEADER_TOTAL_SIZE};
-    use crate::arsenic::MAX_HEADER_TOTAL_SIZE;
-    use ml_dsa::{MlDsa65, Verifier};
-
-    // ── Read header ───────────────────────────────────────────────────────────
-    let mut f = match File::open(path) {
-        Ok(f) => f,
-        Err(_) => return (SignatureStatus::NotSigned, None),
-    };
-    let mut prefix = [0u8; 13];
-    if f.read_exact(&mut prefix).is_err() {
-        return (SignatureStatus::NotSigned, None);
-    }
-    let header_total_size =
-        u32::from_le_bytes([prefix[9], prefix[10], prefix[11], prefix[12]]) as usize;
-    if header_total_size < MIN_HEADER_TOTAL_SIZE
-        || header_total_size > MAX_HEADER_TOTAL_SIZE as usize
-    {
-        return (SignatureStatus::NotSigned, None);
-    }
-    let mut header_buf = vec![0u8; header_total_size];
-    header_buf[..13].copy_from_slice(&prefix);
-    if f.read_exact(&mut header_buf[13..]).is_err() {
-        return (SignatureStatus::NotSigned, None);
-    }
-
-    let (_, pre_mac_bytes, _, enc_env_region) = match parse_header_bytes(&header_buf) {
-        Ok(x) => x,
-        Err(_) => return (SignatureStatus::NotSigned, None),
-    };
-    let envelope = match parse_envelope(&enc_env_region) {
-        Ok(e) => e,
-        Err(_) => return (SignatureStatus::NotSigned, None),
-    };
-
-    let mldsa = match envelope.mldsa_sig {
-        Some(ref s) => s,
-        None => return (SignatureStatus::NotSigned, None),
-    };
-
-    // ── Fingerprint (computed regardless of validity) ─────────────────────────
-    let fingerprint = Some(vk_fingerprint(&mldsa.verifying_key));
-
-    // ── Cryptographic verification ────────────────────────────────────────────
-    let vk_enc = match ml_dsa::EncodedVerifyingKey::<MlDsa65>::try_from(mldsa.verifying_key.as_slice()) {
-        Ok(x) => x,
-        Err(_) => return (SignatureStatus::Invalid, fingerprint),
-    };
-    let vk = ml_dsa::VerifyingKey::<MlDsa65>::decode(&vk_enc);
-    let sig = match ml_dsa::Signature::<MlDsa65>::try_from(mldsa.signature.as_slice()) {
-        Ok(x) => x,
-        Err(_) => return (SignatureStatus::Invalid, fingerprint),
-    };
-    let signed_msg = build_signed_message(&pre_mac_bytes, &envelope.protected_meta, envelope.sender.as_ref());
-    if vk.verify(&signed_msg, &sig).is_err() {
-        return (SignatureStatus::Invalid, fingerprint);
-    }
-
-    // ── Trust store lookup ────────────────────────────────────────────────────
-    let vk_bytes = mldsa.verifying_key.as_slice();
-    for key in own_keys {
-        if let Some(ref own_vk) = key.signing_verifying_key {
-            if own_vk.as_slice() == vk_bytes {
-                return (SignatureStatus::SignedByKnown(format!("{} (vous)", key.name)), fingerprint);
-            }
-        }
-    }
-    for c in contacts {
-        if let Some(ref trusted_vk) = c.signing_verifying_key {
-            if trusted_vk.as_slice() == vk_bytes {
-                return (SignatureStatus::SignedByKnown(c.name.clone()), fingerprint);
-            }
-        }
-    }
-    (SignatureStatus::SignedByUnknown, fingerprint)
-}
 
 /// Read sender identity embedded in the **public** (unencrypted) header region.
 ///
@@ -183,33 +61,6 @@ pub fn arsenic_read_sender_info(path: &std::path::Path) -> Option<SenderInfo> {
     let (_, _, _, enc_env_region) = parse_header_bytes(&header_buf).ok()?;
     let envelope = parse_envelope(&enc_env_region).ok()?;
     envelope.sender
-}
-
-/// Read the ML-DSA-65 verifying key from a file's header without decrypting.
-///
-/// Returns `None` if the file has no signature, cannot be opened, or the
-/// header is malformed.
-pub fn arsenic_read_verifying_key(path: &std::path::Path) -> Option<Box<[u8; 1952]>> {
-    use arsenic::header::{parse_header_bytes, parse_envelope, MIN_HEADER_TOTAL_SIZE};
-    use crate::arsenic::MAX_HEADER_TOTAL_SIZE;
-
-    let mut f = File::open(path).ok()?;
-    let mut prefix = [0u8; 13];
-    f.read_exact(&mut prefix).ok()?;
-    let header_total_size =
-        u32::from_le_bytes([prefix[9], prefix[10], prefix[11], prefix[12]]) as usize;
-    if header_total_size < MIN_HEADER_TOTAL_SIZE
-        || header_total_size > MAX_HEADER_TOTAL_SIZE as usize
-    {
-        return None;
-    }
-    let mut header_buf = vec![0u8; header_total_size];
-    header_buf[..13].copy_from_slice(&prefix);
-    f.read_exact(&mut header_buf[13..]).ok()?;
-
-    let (_, _, _, enc_env_region) = parse_header_bytes(&header_buf).ok()?;
-    let envelope = parse_envelope(&enc_env_region).ok()?;
-    envelope.mldsa_sig.map(|sig| sig.verifying_key)
 }
 
 pub const fn get_version() -> &'static str {
@@ -296,7 +147,6 @@ pub fn arsenic_read_params(path: &std::path::Path) -> Option<ArsenicParams> {
         metadata: EnvelopeMetadata::default(),
         recipients: vec![],
         kem_level: arsenic::KemLevel::L768,
-        signing_key: None,
         sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
     })
 }

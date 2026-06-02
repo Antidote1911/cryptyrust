@@ -8,14 +8,11 @@ Arsenic file encryption — encrypts, decrypts, and manages keys.
 Key management:
   cryptyrust keygen -n alice --store               Generate keypair (X25519 + ML-KEM-768)
   cryptyrust keygen -n alice --store --kem-level 1024  Generate keypair (ML-KEM-1024)
-  cryptyrust keygen --sign -n alice --store        Generate ML-DSA-65 signing key
   cryptyrust keygen --list                         List stored keypairs
-  cryptyrust keygen --list-sign                    List stored signing keys
 
 Encryption / decryption:
   cryptyrust -e FILE                               Encrypt (password, interactive prompt)
   cryptyrust -e FILE -R alice                      Encrypt for recipient (passwordless)
-  cryptyrust -e FILE -S alice                      Encrypt + sign with ML-DSA-65 key
   cryptyrust -e FILE --kem-level 1024              Encrypt using ML-KEM-1024 keyslots
   cryptyrust -d FILE                               Decrypt (auto-tries keystore, then password)
   cryptyrust --rekey FILE                          Change password
@@ -91,9 +88,6 @@ pub struct Cli {
     #[clap(long = "kem-level", value_enum, value_name = "LEVEL", default_value = "768")]
     kem_level: KemLevelArg,
 
-    /// Sign the file with this ML-DSA-65 signing key (name or path to .sigkey file).
-    #[clap(short = 'S', long = "sign", value_name = "SIGN_KEY")]
-    signing_key: Option<String>,
 }
 
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
@@ -145,17 +139,9 @@ pub struct KeygenCli {
     #[clap(short = 'y', long = "to-public", value_name = "IDENTITY", num_args = 1..)]
     pub to_public: Vec<String>,
 
-    /// Generate an ML-DSA-65 signing key instead of an encryption keypair.
-    #[clap(long)]
-    pub sign: bool,
-
-    /// ML-KEM security level for new encryption keypairs (ignored with --sign).
+    /// ML-KEM security level for new encryption keypairs.
     #[clap(long = "kem-level", value_enum, value_name = "LEVEL", default_value = "768")]
     pub kem_level: KemLevelArg,
-
-    /// List stored ML-DSA-65 signing keys and exit.
-    #[clap(long = "list-sign")]
-    pub list_sign: bool,
 }
 
 // ── Recipient management sub-command ─────────────────────────────────────────
@@ -273,5 +259,4 @@ impl Cli {
             KemLevelArg::L1024 => KemLevel::L1024,
         }
     }
-    pub fn signing_key(&self) -> Option<&str> { self.signing_key.as_deref() }
 }

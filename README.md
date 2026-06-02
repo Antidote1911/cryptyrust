@@ -15,11 +15,10 @@ Pre-built binaries for Linux, macOS (universal) and Windows are available on the
 
 - **Arsenic V1** format (`.arsn`) — fully documented in [`arsenic/FORMAT.md`](arsenic/FORMAT.md)
 - **Post-quantum hybrid encryption** — X25519 + ML-KEM-768 or ML-KEM-1024 (NIST FIPS 203). Resistant to harvest-now-decrypt-later attacks
-- **ML-DSA-65 signatures** (NIST FIPS 204) — sign files during encryption; signature verified automatically on decryption
-- **Sender identity embedding** — sender's public keys stored unencrypted in the file header; authenticated by the ML-DSA-65 signature when present (key-substitution attack impossible); recipient is automatically prompted to add the sender as a contact after decryption (no separate `.pubkey` file exchange needed)
+- **Sender identity embedding** — sender's public keys stored unencrypted in the file header; recipient is automatically prompted to add the sender as a contact after decryption (no separate `.pubkey` file exchange needed)
 - **Drag-and-drop GUI** — drop files to encrypt or decrypt; mode auto-detected
 - **CLI** for scripting and automation — same binary, same keystore
-- **Integrated key management**: one keypair per identity (X25519 + ML-KEM + ML-DSA-65 signing), shared between GUI and CLI
+- **Integrated key management**: one keypair per identity (X25519 + ML-KEM), shared between GUI and CLI
 - Three independently selectable **AEAD ciphers** for header and payload
 - **Argon2id** key derivation (Interactive 256 MiB / Sensitive 1 GiB)
 - **Password change** without re-encrypting the payload
@@ -51,16 +50,11 @@ Pre-built binaries for Linux, macOS (universal) and Windows are available on the
 3. When encrypting, select recipients in the popup — the password becomes optional.
 4. The recipient decrypts with their private key, no password required.
 
-### Signing and contact trust
+### Sender identity
 
-Each keypair includes an ML-DSA-65 signing key. In **Config → Signing key**, select your identity.
-On decryption, the GUI shows a green ✓ banner if the signature matches a known contact, or a yellow
-warning if the signer is unknown.
-
-If the encrypted file contains sender identity info (embedded by the sender), a banner appears after
-decryption: **"📨 From: alice — add to contacts?"** — click **Add** to add them automatically.
-When the file is signed, the sender identity is cryptographically authenticated (covered by the
-ML-DSA-65 signature). Without a signature, an orange ⚠ warning is shown: the identity is advisory only.
+If the encrypted file contains sender identity info (embedded by the sender), a banner
+appears after decryption: **"📨 From: alice — add to contacts?"** — click **Add** to
+add them automatically.
 
 ### Configuration
 
@@ -86,9 +80,6 @@ cryptyrust -e document.pdf -R alice -R bob
 # Encrypt with ML-KEM-1024 (NIST Level 5, ~256-bit quantum security)
 cryptyrust -e document.pdf -R alice --kem-level 1024
 
-# Encrypt + sign with ML-DSA-65
-cryptyrust -e document.pdf -R alice -S alice
-
 # Decrypt (auto-tries stored keys, falls back to password prompt)
 cryptyrust -d document.pdf.arsn
 
@@ -107,7 +98,7 @@ cryptyrust --bench
 ## Key Management
 
 ```bash
-# Generate an encryption keypair (X25519 + ML-KEM-768 + ML-DSA-65, all in one .key file)
+# Generate an encryption keypair (X25519 + ML-KEM-768, all in one .key file)
 cryptyrust keygen -n alice --store           # save to shared keystore
 cryptyrust keygen -n alice -o alice.key      # save to specific file
 
@@ -116,21 +107,9 @@ cryptyrust keygen --list
 
 # Show public key of a .key file
 cryptyrust keygen -y alice.key
-
-# Generate a standalone ML-DSA-65 signing key (for CLI signing with -S)
-cryptyrust keygen --sign -n alice --store
-cryptyrust keygen --sign -n alice -o alice.sigkey
-
-# List stored standalone signing keys
-cryptyrust keygen --list-sign
 ```
 
 The keystore (`{config}/cryptyrust/keys/`) is shared between the GUI and CLI.
-
-### Signing key note
-
-- **GUI**: signing keys are embedded in `.key` files (generated with **⚡ Generate** in the key manager).
-- **CLI**: the `-S` flag uses standalone `.sigkey` files (generated with `keygen --sign`).
 
 ### Recipient management
 
@@ -189,5 +168,5 @@ If you encrypted for asymmetric recipients without a password, losing the `.key`
 
 ## Library and Format
 
-All cryptographic logic is in the [`arsenic`](arsenic/) crate.  
+All cryptographic logic is in the [`arsenic`](arsenic/) crate.
 See [`arsenic/README.md`](arsenic/README.md) for the API and [`arsenic/FORMAT.md`](arsenic/FORMAT.md) for the complete binary format specification of the Arsenic V1 format.

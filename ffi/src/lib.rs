@@ -546,14 +546,11 @@ pub unsafe extern "C" fn arsenic_decrypt_file_with_key(
 
     let mlkem_seed = mlkem_seed_from_x25519(&pk);
     let key = arsenic::keystore::KeyEntry {
-
         name: String::new(),
         private_key: pk,
         mlkem_seed,
         public_key: pubkey_from_privkey(&pk),
         mlkem_public_key: Box::new(mlkem_encapsulation_key_768(&mlkem_seed)),
-        signing_seed: None,
-        signing_verifying_key: None,
         file_path: None,
     };
     match arsenic_main_routine_with_key(Some(&in_s), Some(&out_s), &key, ui) {
@@ -708,8 +705,6 @@ pub unsafe extern "C" fn arsenic_find_matching_key_file(
                 mlkem_seed,
                 public_key: pubkey_from_privkey(&pk),
                 mlkem_public_key: Box::new(mlkem_encapsulation_key_768(&mlkem_seed)),
-                signing_seed: None,
-                signing_verifying_key: None,
                 file_path: None,
             }
         })

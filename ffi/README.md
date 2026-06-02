@@ -1,5 +1,3 @@
-> [Version française](README_fr.md)
-
 # arsenic_ffi
 
 C-compatible FFI layer for the `arsenic` library. Exposes all encryption, key management and benchmark operations through a stable C interface.

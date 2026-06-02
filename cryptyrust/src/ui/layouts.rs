@@ -105,28 +105,6 @@ pub fn render_bottom_bar(app: &CryptyApp, ui: &mut egui::Ui) {
                     cipher_short_label(app.hdr_cipher),
                     cipher_short_label(app.pld_cipher),
                 )));
-                ui.separator();
-                // Signing key indicator — red if none active
-                let (sign_icon, sign_label, sign_color) = match app.signing_key_index
-                    .and_then(|i| app.keys.get(i))
-                    .filter(|k| k.signing_seed.is_some())
-                {
-                    Some(k) => (
-                        "✍",
-                        k.name.clone(),
-                        egui::Color32::from_rgb(80, 200, 100),
-                    ),
-                    None => (
-                        "✍",
-                        "No signing key".into(),
-                        egui::Color32::from_rgb(220, 80, 60),
-                    ),
-                };
-                ui.label(
-                    egui::RichText::new(format!("{sign_icon} {sign_label}"))
-                        .color(sign_color)
-                        .size(13.0),
-                ).on_hover_text("Active signing key — set in Config menu");
             });
         });
 }
@@ -307,60 +285,16 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
                 success_label,
             } => {
                 completed_remove = render_completed_view(ui, files, statuses, success_label);
-                // Signature status banner
-                if let Some(ref status) = app.last_sig_status {
-                    ui.add_space(4.0);
-                    let fp = app.last_vk_fingerprint.as_deref().unwrap_or("");
-                    let (icon, msg, color) = match status {
-                        arsenic::SignatureStatus::SignedByKnown(name) => (
-                            "✍",
-                            format!("Signé par : {name}  ✓"),
-                            egui::Color32::from_rgb(80, 200, 100),
-                        ),
-                        arsenic::SignatureStatus::SignedByUnknown => (
-                            "⚠",
-                            format!("Clé de signature inconnue — fingerprint : {fp}  (vérifier hors-bande)"),
-                            egui::Color32::from_rgb(220, 180, 40),
-                        ),
-                        arsenic::SignatureStatus::Invalid => (
-                            "✗",
-                            "Signature INVALIDE — le fichier a peut-être été falsifié".into(),
-                            egui::Color32::from_rgb(220, 60, 60),
-                        ),
-                        arsenic::SignatureStatus::NotSigned => (
-                            "—",
-                            "Non signé".into(),
-                            ui.visuals().weak_text_color(),
-                        ),
-                    };
-                    ui.horizontal(|ui| {
-                        ui.label(egui::RichText::new(icon).size(16.0).color(color));
-                        ui.label(egui::RichText::new(&msg).color(color));
-                    });
-                }
                 // Sender identity banner — offer to add as contact
                 let sender_banner = app.pending_contact_from_file.as_ref().map(|p| p.name.clone());
                 if let Some(sender_name) = sender_banner {
                     ui.add_space(4.0);
-                    // Three tiers of trust:
-                    //   SignedByKnown → blue   (identity verified against trust store)
-                    //   SignedByUnknown → amber (signature valid but signer not in contacts)
-                    //   anything else → orange  (unsigned, public keys unauthenticated)
-                    let (color, note) = match &app.last_sig_status {
-                        Some(arsenic::SignatureStatus::SignedByKnown(_)) =>
-                            (egui::Color32::from_rgb(80, 160, 220), ""),
-                        Some(arsenic::SignatureStatus::SignedByUnknown) =>
-                            (egui::Color32::from_rgb(220, 180, 40),
-                             " ⚠ clé inconnue — vérifier le fingerprint avant d'ajouter"),
-                        _ =>
-                            (egui::Color32::from_rgb(220, 100, 40),
-                             " ⚠ non signé — identité non vérifiée"),
-                    };
+                    let color = egui::Color32::from_rgb(80, 160, 220);
                     let mut do_add = false;
                     let mut do_dismiss = false;
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(format!("📨 De : {sender_name}  — ajouter aux contacts ?{note}"))
+                            egui::RichText::new(format!("📨 De : {sender_name}  — ajouter aux contacts ?"))
                                 .color(color),
                         );
                         if ui.button("Ajouter").clicked() { do_add = true; }

@@ -12,9 +12,8 @@ pub use crypto::{
 };
 
 use crate::arsenic::hybrid_kem::EK_LEN as MLKEM_EK_LEN;
-use zeroize::Zeroizing;
-pub use header::{HybridKeyslot, HybridKeyslot1024, MlDsaSignature, EnvelopeMetadata, MIN_HEADER_TOTAL_SIZE, WRAPPED_DEK_LEN};
-pub use header::{MAX_T_COST, MAX_P_COST, MLDSA_VERIFYING_KEY_LEN, MLDSA_SIGNATURE_LEN};
+pub use header::{HybridKeyslot, HybridKeyslot1024, EnvelopeMetadata, MIN_HEADER_TOTAL_SIZE, WRAPPED_DEK_LEN};
+pub use header::{MAX_T_COST, MAX_P_COST};
 
 // Safety limits (DoS protection before running any KDF).
 // u32 header_total_size allows headers up to 64 MiB, supporting ~700 000 recipients.
@@ -106,10 +105,7 @@ pub struct ArsenicParams {
     pub recipients: Vec<HybridRecipient>,
     /// ML-KEM security level for new keyslots (default: L768).
     pub kem_level: KemLevel,
-    /// Optional ML-DSA-65 signing key seed (32 bytes), zeroized on drop.
-    /// If `Some`, the file is signed with this key during encryption.
-    pub signing_key: Option<Zeroizing<[u8; 32]>>,
-    /// Sender's display name — embedded in ProtectedMetadata so the recipient
+    /// Sender's display name — embedded in the public header so the recipient
     /// can add the sender as a contact and encrypt back without a .pubkey exchange.
     pub sender_name: Option<String>,
     /// Sender's X25519 public key (32 bytes).
@@ -134,7 +130,7 @@ impl From<ArsenicStrength> for ArsenicParams {
                 metadata: EnvelopeMetadata::default(),
                 recipients: vec![],
                 kem_level: KemLevel::L768,
-                signing_key: None,
+
                 sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
             },
             ArsenicStrength::Sensitive => Self {
@@ -144,7 +140,7 @@ impl From<ArsenicStrength> for ArsenicParams {
                 metadata: EnvelopeMetadata::default(),
                 recipients: vec![],
                 kem_level: KemLevel::L768,
-                signing_key: None,
+
                 sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
             },
         }

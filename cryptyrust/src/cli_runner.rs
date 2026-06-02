@@ -5,7 +5,6 @@ use arsenic::{
     keystore::{
         load_identity_file, load_keystore, resolve_recipient, keys_dir, save_key, KeyEntry,
         serialize_identity, parse_identity,
-        load_signing_keystore, save_signing_key, resolve_signing_key, SigningKeyEntry,
     },
     encode_pubkey,
     ArsenicParams, Direction, Secret, Ui,
@@ -240,22 +239,11 @@ fn run_encrypt(
         get_password_for_encrypt(app)?
     };
 
-    // Optional ML-DSA-65 signing key seed.
-    let signing_key = if let Some(spec) = app.signing_key() {
-        match resolve_signing_key(spec) {
-            Some(entry) => Some(entry.seed), // Zeroizing<[u8;32]> — moved out of owned entry
-            None => return Err(anyhow!("Cannot find signing key '{spec}'")),
-        }
-    } else {
-        None
-    };
-
     let params = ArsenicParams {
         hdr_cipher: app.hdr_cipher(),
         pld_cipher: app.pld_cipher(),
         recipients,
         kem_level: app.kem_level(),
-        signing_key,
         ..ArsenicParams::from(app.strength())
     };
 
@@ -487,47 +475,8 @@ fn cipher_arg(c: CipherId) -> &'static str {
 
 fn run_keygen(cli: KeygenCli) -> Result<()> {
     if cli.list { return keygen_list(); }
-    if cli.list_sign { return keygen_list_sign(); }
     if !cli.to_public.is_empty() { return keygen_to_public(&cli.to_public); }
-    if cli.sign { return keygen_generate_sign(cli); }
     keygen_generate(cli)
-}
-
-fn keygen_list_sign() -> Result<()> {
-    let keys = load_signing_keystore();
-    if keys.is_empty() {
-        println!("No ML-DSA-65 signing keys found.");
-        return Ok(());
-    }
-    println!("{:<20} {}", "Name", "File");
-    println!("{}", "─".repeat(60));
-    for k in &keys {
-        let path = k.file_path.as_ref().map(|p| p.display().to_string()).unwrap_or_default();
-        println!("{:<20} {}", k.name, path);
-    }
-    Ok(())
-}
-
-fn keygen_generate_sign(cli: KeygenCli) -> Result<()> {
-    if cli.store && cli.name.is_empty() {
-        return Err(anyhow!("--name is required when using --store"));
-    }
-    let mut entry = SigningKeyEntry::generate(cli.name.clone());
-    if cli.store {
-        save_signing_key(&mut entry).map_err(|e| anyhow!(e))?;
-        let path = entry.file_path.as_ref().unwrap();
-        eprintln!("ML-DSA-65 signing key written to: {}", path.display());
-    } else if let Some(path) = &cli.output {
-        use arsenic::keystore::serialize_signing_identity;
-        let content = serialize_signing_identity(&entry);
-        write_identity_file(path, &content)
-            .with_context(|| format!("cannot write to {}", path.display()))?;
-        eprintln!("ML-DSA-65 signing key written to: {}", path.display());
-    } else {
-        use arsenic::keystore::serialize_signing_identity;
-        print!("{}", serialize_signing_identity(&entry));
-    }
-    Ok(())
 }
 
 fn keygen_list() -> Result<()> {
