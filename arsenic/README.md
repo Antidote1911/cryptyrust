@@ -12,6 +12,7 @@ Used by the [`cryptyrust`](../cryptyrust) binary (GUI + CLI + key management) an
 
 - **Hybrid post-quantum asymmetric encryption** — X25519 + ML-KEM-768 or ML-KEM-1024 (NIST FIPS 203). Each recipient gets an independent keyslot; files stay decryptable by quantum computers *and* classical ones
 - **Optional ML-DSA-65 signatures** (NIST FIPS 204) — files can be signed during encryption; signature verified automatically on decryption
+- **Sender identity embedding** — the sender's public keys and display name can be stored unencrypted in the header. The recipient reads this without decrypting and can auto-add the sender as a contact
 - **Three selectable AEAD ciphers**, independently configurable for header and payload:
   - `Deoxys-II-256` — tweakable block cipher AEAD *(default header cipher)*
   - `XChaCha20-Poly1305` — 192-bit nonce, software-friendly *(default payload cipher)*
@@ -21,7 +22,7 @@ Used by the [`cryptyrust`](../cryptyrust) binary (GUI + CLI + key management) an
 - **BLAKE3 Merkle tree** — domain-separated integrity over all encrypted blocks; full-file verification before any plaintext is written
 - **Streaming block processing** — O(block_size + N_blocks × 32) memory regardless of file size; files of any size processed correctly
 - **Crash-safe rekey** — `.bak` backup written and fsynced (including parent-directory entry) before any in-place header write
-- **Shared keystore** — X25519 + ML-KEM keypairs stored in `{config}/cryptyrust/keys/` and shared by the GUI, CLI, and keygen tool
+- **Shared keystore** — X25519 + ML-KEM + ML-DSA-65 keys stored together in `{config}/cryptyrust/keys/` and shared by the GUI and CLI
 - **Key material erasure** — all sensitive values in `Secret<T>` wrappers (zeroized on drop)
 
 For the complete binary format specification see [`FORMAT.md`](FORMAT.md).
@@ -145,13 +146,18 @@ arsenic_rekey(
 | `arsenic_remove_recipient` | Remove a keyslot by index |
 | `arsenic_list_recipients` | List ephemeral X25519 keys of all keyslots |
 | `arsenic_find_matching_key` | Find which stored key can decrypt a file |
-| `ArsenicParams` | Cipher IDs, Argon2id cost, recipients |
+| `arsenic_check_signature` | Check ML-DSA-65 signature against contact trust store |
+| `arsenic_read_verifying_key` | Read ML-DSA-65 verifying key without decrypting |
+| `arsenic_read_sender_info` | Read sender identity from public header (no decryption) |
+| `ArsenicParams` | Cipher IDs, Argon2id cost, recipients, signing, sender |
 | `HybridRecipient` | Combined X25519 + ML-KEM-768 public key |
 | `hybrid_recipient_from_privkey` | Build a `HybridRecipient` from a private key |
 | `hybrid_encapsulation_key` | Derive ML-KEM EK from X25519 private key |
 | `ArsenicStrength` | `Interactive` (256 MiB) / `Sensitive` (1 GiB) |
 | `CipherId` | `DeoxysII256` · `XChaCha20Poly1305` · `Aes256GcmSiv` |
 | `EnvelopeMetadata` | Filename, comment, timestamp from decrypted header |
+| `SenderInfo` | Sender name + X25519 pk + ML-KEM-768 EK (from public header) |
+| `SignatureStatus` | `NotSigned` · `SignedByKnown(name)` · `SignedByUnknown` · `Invalid` |
 | `Secret<T>` | Zeroize-on-drop wrapper |
 | `Ui` | Progress callback trait (0–100 %) |
 | `bench_cipher_combinations` | Benchmark all ciphers, rank by throughput |
@@ -194,13 +200,15 @@ Two security levels are supported, selected per-file at encryption time:
 
 X25519 + ML-KEM are combined via BLAKE3 hybrid KEM binding — the hybrid is secure if either component holds.
 
-**Independent entropy:** since v1.5.0, the X25519 and ML-KEM seeds are generated independently from the OS CSPRNG. The `.key` file stores a 32-byte X25519 seed and a separate 64-byte ML-KEM seed (`d||z`). Old key files that only stored 32 bytes derive the ML-KEM seed via BLAKE3 (backward compat).
+**Independent entropy:** since v1.5.0, the X25519, ML-KEM, and ML-DSA-65 seeds are generated **independently** from the OS CSPRNG. The `.key` file stores a 32-byte X25519 seed, a separate 64-byte ML-KEM seed (`d||z`), and a 32-byte ML-DSA-65 signing seed. Old key files that only stored 32 bytes derive the ML-KEM seed via BLAKE3 (backward compat).
 
 ### ML-DSA-65 signatures
 
 Files can optionally be signed with an ML-DSA-65 key (NIST FIPS 204, ~192-bit quantum security). The signature covers the public header parameters (`pre_mac[77]`). Verification is automatic and mandatory during decryption if a signature is present.
 
-Signing keys are stored separately as `.sigkey` files.
+**GUI:** the signing key is embedded in each encryption keypair (`.key` file, generated with `⚡ Generate`). Select the signing identity in Config → Signing key.
+
+**CLI:** use a separate `.sigkey` file generated with `cryptyrust keygen --sign`. Pass `-S alice` to sign during encryption.
 
 ---
 
@@ -244,6 +252,9 @@ The following fields are readable by any party in possession of the file:
 - **`t_cost` / `m_cost` / `p_cost`** — KDF parameters must be in plaintext
   because they are required to derive the KEK before any decryption can
   occur. There is no practical alternative given the format's constraints.
+- **Sender region** — the sender's display name and public keys are plaintext
+  by design. This is required for the dead-drop model where the recipient
+  must identify the sender without an authenticated channel.
 
 These fields are covered by the HeaderMAC and cannot be silently tampered
 with, but their values are always observable.
@@ -263,23 +274,16 @@ access) always requires re-encrypting the payload with a new DEK.
 This is a fundamental property of any multi-recipient symmetric encryption
 scheme — LUKS, age, and Sequoia share the same constraint.
 
-**UX limitation:** `arsenic_list_recipients` returns the *ephemeral* X25519
-public keys of each keyslot, not the recipients' own public keys (which are
-not stored, for anonymity). To identify which slot belongs to a given
-contact, the caller must attempt decapsulation with the contact's private key
-(`arsenic_find_matching_key`). A future improvement would let the key manager
-map contact names to slot indices directly.
+### X25519, ML-KEM, and ML-DSA-65 entropy
 
-### X25519 and ML-KEM entropy
-
-Since v1.5.0, X25519 and ML-KEM seeds are generated **independently** from
+Since v1.5.0, all three key components are generated **independently** from
 the OS CSPRNG (`getrandom`). Each `.key` file stores:
 - A 32-byte X25519 private key seed
 - A separate 64-byte ML-KEM seed (`d[32] || z[32]`) in a `# mlkem-seed:` line
+- A separate 32-byte ML-DSA-65 signing seed in a `# sign-seed:` line
 
-This eliminates the shared root of trust that previously existed (ML-KEM
-derived from X25519 via BLAKE3). The two components now have fully independent
-entropy — a weakness in one cannot compromise the other.
+This eliminates any shared root of trust among the three components. A
+weakness in one cannot compromise the others.
 
 Legacy key files (without `# mlkem-seed:`) still derive the ML-KEM seed via
 BLAKE3 for backward compatibility.
@@ -290,17 +294,19 @@ BLAKE3 for backward compatibility.
 
 ```
 ┌──────────────────────────────────────────────┐  ← offset 0x00
-│  Section pré-MAC   77 bytes  (pre-MAC)        │  plaintext, integrity-protected
-│  HeaderMAC         32 bytes                   │  BLAKE3_keyed_hash(KEK, pre-MAC)
-│  WrappedDEK        48 bytes                   │  AEAD-encrypted DEK (symmetric keyslot)
-│  hybrid_768_count   4 bytes                   │  number of ML-KEM-768 keyslots
-│  Keyslot_768_0   1180 bytes  ┐               │  X25519+ML-KEM-768 wrapped DEK × N
-│  hybrid_1024_count  4 bytes  │               │  number of ML-KEM-1024 keyslots
-│  Keyslot_1024_0  1660 bytes  │               │  X25519+ML-KEM-1024 wrapped DEK × M
-│  ProtectedMeta    ≥66 bytes  │               │  AEAD-encrypted TLV (Merkle root, size…)
-│  sig_present        1 byte   ┘               │  0x00=none / 0x01=ML-DSA-65
-│  [verif_key+sig  5261 bytes]                 │  ML-DSA-65 verifying key + signature
-└──────────────────────────────────────────────┘  ← offset = header_total_size (≥232 bytes)
+│  Pre-MAC section    77 bytes  (pre-MAC)       │  plaintext, integrity-protected
+│  HeaderMAC          32 bytes                  │  BLAKE3_keyed_hash(KEK, pre-MAC)
+│  WrappedDEK         48 bytes                  │  AEAD-encrypted DEK (symmetric keyslot)
+│  hybrid_768_count    4 bytes                  │  number of ML-KEM-768 keyslots
+│  Keyslot_768_0    1180 bytes  ┐               │  X25519+ML-KEM-768 wrapped DEK × N
+│  hybrid_1024_count   4 bytes  │               │  number of ML-KEM-1024 keyslots
+│  Keyslot_1024_0   1660 bytes  │               │  X25519+ML-KEM-1024 wrapped DEK × M
+│  ProtectedMeta     ≥66 bytes  │               │  AEAD-encrypted TLV (Merkle root, size…)
+│  sig_present          1 byte  │               │  0x00=none / 0x01=ML-DSA-65
+│  [verif_key+sig   5261 bytes] ┘               │  ML-DSA-65 verifying key + signature
+│  sender_present       1 byte                  │  0x00=none / 0x01=sender present
+│  [name+len+x25519+mlkem_ek]                   │  Plaintext sender identity (≥1219 bytes)
+└──────────────────────────────────────────────┘  ← offset = header_total_size (≥233 bytes)
 ┌──────────────────────────────────────────────┐
 │  Block 0: ciphertext + 16-byte AEAD tag       │
 │  Block 1: ciphertext + 16-byte AEAD tag       │  blocks processed sequentially,
@@ -309,7 +315,7 @@ BLAKE3 for backward compatibility.
   ↓ BLAKE3 Merkle tree over all encrypted blocks (root stored in ProtectedMeta)
 ```
 
-Full specification: [`FORMAT.md`](FORMAT.md) · Rendered: [`FORMAT.html`](FORMAT.html).
+Full specification: [`FORMAT.md`](FORMAT.md).
 
 ---
 

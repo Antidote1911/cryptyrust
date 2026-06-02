@@ -108,6 +108,13 @@ pub struct ArsenicParams {
     /// Optional ML-DSA-65 signing key seed (32 bytes).
     /// If `Some`, the file is signed with this key during encryption.
     pub signing_key: Option<[u8; 32]>,
+    /// Sender's display name — embedded in ProtectedMetadata so the recipient
+    /// can add the sender as a contact and encrypt back without a .pubkey exchange.
+    pub sender_name: Option<String>,
+    /// Sender's X25519 public key (32 bytes).
+    pub sender_x25519_pk: Option<[u8; 32]>,
+    /// Sender's ML-KEM-768 encapsulation key (1184 bytes).
+    pub sender_mlkem_pk: Option<[u8; 1184]>,
 }
 
 impl Default for ArsenicParams {
@@ -126,7 +133,9 @@ impl From<ArsenicStrength> for ArsenicParams {
                 metadata: EnvelopeMetadata::default(),
                 recipients: vec![],
                 kem_level: KemLevel::L768,
-                signing_key: None,            },
+                signing_key: None,
+                sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
+            },
             ArsenicStrength::Sensitive => Self {
                 t_cost: 12, m_cost: 1024 * 1024, p_cost: 4,
                 hdr_cipher: CipherId::DeoxysII256,
@@ -134,7 +143,9 @@ impl From<ArsenicStrength> for ArsenicParams {
                 metadata: EnvelopeMetadata::default(),
                 recipients: vec![],
                 kem_level: KemLevel::L768,
-                signing_key: None,            },
+                signing_key: None,
+                sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
+            },
         }
     }
 }

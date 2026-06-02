@@ -43,6 +43,8 @@ pub struct CryptyApp {
     pub kem_level: KemLevel,
     /// Index into `signing_keys` of the active signing key (None = no signature).
     pub signing_key_index: Option<usize>,
+    /// Sender info extracted after decryption — offered as "Add to contacts?".
+    pub pending_contact_from_file: Option<arsenic::keystore::ContactEntry>,
     /// Signature status of the last decrypted file.
     pub last_sig_status: Option<SignatureStatus>,
     pub show_about: bool,
@@ -135,6 +137,7 @@ impl CryptyApp {
             pld_cipher,
             kem_level,
             signing_key_index: None,
+            pending_contact_from_file: None,
             last_sig_status: None,
             show_about: false,
             dark_mode,
@@ -491,6 +494,34 @@ impl CryptyApp {
         }
     }
 
+    /// Read sender identity from the file and propose adding as contact if unknown.
+    pub fn extract_sender_from_file(&mut self, path: &std::path::Path) {
+        use arsenic::arsenic_read_sender_info;
+        let Some(sender) = arsenic_read_sender_info(path) else { return };
+        let (name, x25519_pk, mlkem_pk) = (sender.name, sender.x25519_pk, sender.mlkem_pk);
+        // Skip if already a known contact.
+        if self.contacts.iter().any(|c| c.public_key == x25519_pk) { return; }
+        // Skip if it's ourselves.
+        if self.keys.iter().any(|k| k.public_key == x25519_pk) { return; }
+        // Read verifying key from signature region to include in the proposed contact.
+        let sign_vk = arsenic::arsenic_read_verifying_key(path)
+            .map(|vk| Box::new(*vk));
+        self.pending_contact_from_file = Some(arsenic::keystore::ContactEntry {
+            name,
+            public_key: x25519_pk,
+            mlkem_public_key: Box::new(mlkem_pk),
+            signing_verifying_key: sign_vk,
+        });
+    }
+
+    /// Confirm adding the pending contact extracted from the last decrypted file.
+    pub fn confirm_add_contact_from_file(&mut self) {
+        if let Some(entry) = self.pending_contact_from_file.take() {
+            self.contacts.push(entry);
+            save_contacts(&self.contacts);
+        }
+    }
+
     /// Check the signature on a file against own signing keys then the contact trust store.
     pub fn check_and_store_sig_status(&mut self, path: &std::path::Path) {
         // Read the embedded verifying key first.
@@ -589,12 +620,26 @@ impl CryptyApp {
             .and_then(|i| self.keys.get(i))
             .and_then(|k| k.signing_seed);
 
+        // Embed sender identity so the recipient can add us as contact from the file.
+        let (sender_name, sender_x25519_pk, sender_mlkem_pk) =
+            self.signing_key_index
+                .and_then(|i| self.keys.get(i))
+                .map(|k| (
+                    Some(k.name.clone()),
+                    Some(k.public_key),
+                    Some(*k.mlkem_public_key),
+                ))
+                .unwrap_or((None, None, None));
+
         let params = ArsenicParams {
             hdr_cipher: self.hdr_cipher,
             pld_cipher: self.pld_cipher,
             recipients,
             kem_level: self.kem_level,
             signing_key,
+            sender_name,
+            sender_x25519_pk,
+            sender_mlkem_pk,
             ..ArsenicParams::from(self.arsenic_strength)
         };
         self.job
@@ -689,13 +734,15 @@ impl eframe::App for CryptyApp {
         }
 
         if let Some((files, statuses, success_label)) = job_completed {
-            // After decrypt, check the signature on the first file against the trust store.
+            // After decrypt, check signature and extract sender identity.
             if self.mode == Mode::Decrypt {
                 if let Some(path) = files.first() {
                     self.check_and_store_sig_status(path);
+                    self.extract_sender_from_file(path);
                 }
             } else {
                 self.last_sig_status = None;
+                self.pending_contact_from_file = None;
             }
             self.job = JobState::Completed {
                 files,

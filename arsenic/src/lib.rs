@@ -16,6 +16,7 @@ pub use crate::arsenic::{
     find_decrypting_key, find_slot_for_privkey, list_recipients, rekey_arsenic,
     BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE,
 };
+pub use crate::arsenic::header::SenderInfo;
 pub use crate::config::{Direction, Ui};
 pub use crate::keyfmt::{
     decode_mlkem_pubkey, decode_privkey, decode_pubkey,
@@ -66,6 +67,37 @@ pub fn arsenic_check_signature(
         }
     }
     SignatureStatus::SignedByUnknown
+}
+
+/// Read sender identity embedded in the **public** (unencrypted) header region.
+///
+/// No password or private key is required — the sender region is intentionally
+/// stored in plaintext so the recipient can identify who sent the file before
+/// decrypting, and can automatically add the sender to their contact list.
+///
+/// Returns `None` if the file has no sender info, cannot be opened, or the
+/// header is malformed.
+pub fn arsenic_read_sender_info(path: &std::path::Path) -> Option<SenderInfo> {
+    use arsenic::header::{parse_header_bytes, parse_envelope, MIN_HEADER_TOTAL_SIZE};
+    use crate::arsenic::MAX_HEADER_TOTAL_SIZE;
+
+    let mut f = File::open(path).ok()?;
+    let mut prefix = [0u8; 13];
+    f.read_exact(&mut prefix).ok()?;
+    let header_total_size =
+        u32::from_le_bytes([prefix[9], prefix[10], prefix[11], prefix[12]]) as usize;
+    if header_total_size < MIN_HEADER_TOTAL_SIZE
+        || header_total_size > MAX_HEADER_TOTAL_SIZE as usize
+    {
+        return None;
+    }
+    let mut header_buf = vec![0u8; header_total_size];
+    header_buf[..13].copy_from_slice(&prefix);
+    f.read_exact(&mut header_buf[13..]).ok()?;
+
+    let (_, _, _, enc_env_region) = parse_header_bytes(&header_buf).ok()?;
+    let envelope = parse_envelope(&enc_env_region).ok()?;
+    envelope.sender
 }
 
 /// Read the ML-DSA-65 verifying key from a file's header without decrypting.
@@ -180,6 +212,7 @@ pub fn arsenic_read_params(path: &std::path::Path) -> Option<ArsenicParams> {
         recipients: vec![],
         kem_level: arsenic::KemLevel::L768,
         signing_key: None,
+        sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
     })
 }
 

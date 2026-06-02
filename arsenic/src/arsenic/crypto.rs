@@ -15,7 +15,7 @@ use super::header::{
     deserialize_meta_tlv, parse_envelope, parse_header_bytes, serialize_meta_tlv,
     serialize_pre_mac, verify_header_mac,
     HybridKeyslot, HybridKeyslot1024, MlDsaSignature, EnvelopeContent, EnvelopeMetadata,
-    ParsedEnvelope, PublicHeader,
+    ParsedEnvelope, PublicHeader, SenderInfo,
     ASYM_COUNT_LEN, ASYM_KEYSLOT_LEN, ASYM_1024_COUNT_LEN, ASYM_1024_KEYSLOT_LEN, GCM_TAG,
     MERKLE_V1, META_TLV_MANDATORY_PT_LEN, MIN_HEADER_TOTAL_SIZE, PUB_HEADER_LEN, WRAPPED_DEK_LEN,
     SIG_PRESENT_LEN, MLDSA_VERIFYING_KEY_LEN, MLDSA_SIGNATURE_LEN,
@@ -591,12 +591,26 @@ where
         SIG_PRESENT_LEN
     };
 
+    let sender_info: Option<SenderInfo> = match (&params.sender_name, &params.sender_x25519_pk, &params.sender_mlkem_pk) {
+        (Some(name), Some(x25519), Some(mlkem)) => Some(SenderInfo {
+            name: name.clone(),
+            x25519_pk: *x25519,
+            mlkem_pk: *mlkem,
+        }),
+        _ => None,
+    };
+    let sender_region_len = match &sender_info {
+        Some(s) => s.name.as_bytes().len().min(255) + 2 + 32 + 1184 + 1,
+        None => 1,
+    };
+
     let header_total_size = PUB_HEADER_LEN
         + WRAPPED_DEK_LEN
         + ASYM_COUNT_LEN + recipients_768.len() * ASYM_KEYSLOT_LEN
         + ASYM_1024_COUNT_LEN + recipients_1024.len() * ASYM_1024_KEYSLOT_LEN
         + protected_meta_enc_len
-        + sig_region_len;
+        + sig_region_len
+        + sender_region_len;
     if header_total_size > MAX_HEADER_TOTAL_SIZE as usize {
         return Err(CoreErr::EncryptFail("Header too large (too many recipients or metadata)".into()));
     }
@@ -726,7 +740,7 @@ where
     };
 
     let enc_envelope = build_envelope_region(
-        &wrapped_dek, &hybrid_keyslots, &hybrid_keyslots_1024, &protected_meta, mldsa_sig.as_ref(),
+        &wrapped_dek, &hybrid_keyslots, &hybrid_keyslots_1024, &protected_meta, mldsa_sig.as_ref(), sender_info.as_ref(),
     );
 
     let mac = compute_header_mac(kek.expose(), &pre_mac_bytes);
@@ -1011,9 +1025,9 @@ where
     let mut new_wrapped_dek = [0u8; WRAPPED_DEK_LEN];
     new_wrapped_dek.copy_from_slice(&new_wrapped_dek_vec);
 
-    // Preserve all asymmetric keyslots and ProtectedMetadata unchanged.
+    // Preserve all asymmetric keyslots, ProtectedMetadata, and sender region unchanged.
     let new_enc_envelope =
-        build_envelope_region(&new_wrapped_dek, &envelope.hybrid_keyslots, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.mldsa_sig.as_ref());
+        build_envelope_region(&new_wrapped_dek, &envelope.hybrid_keyslots, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.mldsa_sig.as_ref(), envelope.sender.as_ref());
 
     let new_pub_hdr = PublicHeader {
 
@@ -1109,7 +1123,7 @@ pub fn build_header_with_added_recipient<R: Read + Seek>(
     new_asym.push(new_slot);
 
     let new_enc_envelope =
-        build_envelope_region(&envelope.wrapped_dek, &new_asym, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.mldsa_sig.as_ref());
+        build_envelope_region(&envelope.wrapped_dek, &new_asym, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.mldsa_sig.as_ref(), envelope.sender.as_ref());
     let new_header_size = PUB_HEADER_LEN + new_enc_envelope.len();
 
     if new_header_size > MAX_HEADER_TOTAL_SIZE as usize {
@@ -1178,7 +1192,7 @@ pub fn build_header_with_removed_recipient<R: Read + Seek>(
     new_asym.remove(index);
 
     let new_enc_envelope =
-        build_envelope_region(&envelope.wrapped_dek, &new_asym, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.mldsa_sig.as_ref());
+        build_envelope_region(&envelope.wrapped_dek, &new_asym, &envelope.hybrid_keyslots_1024, &envelope.protected_meta, envelope.mldsa_sig.as_ref(), envelope.sender.as_ref());
     let new_header_size = PUB_HEADER_LEN + new_enc_envelope.len();
 
     let new_pub_hdr = PublicHeader {

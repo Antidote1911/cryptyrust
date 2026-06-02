@@ -337,6 +337,24 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
                         ui.label(egui::RichText::new(&msg).color(color));
                     });
                 }
+                // Sender identity banner — offer to add as contact
+                let sender_banner = app.pending_contact_from_file.as_ref().map(|p| p.name.clone());
+                if let Some(sender_name) = sender_banner {
+                    ui.add_space(4.0);
+                    let accent = egui::Color32::from_rgb(80, 160, 220);
+                    let mut do_add = false;
+                    let mut do_dismiss = false;
+                    ui.horizontal(|ui| {
+                        ui.label(
+                            egui::RichText::new(format!("📨 From: {sender_name}  — add to contacts?"))
+                                .color(accent),
+                        );
+                        if ui.button("Add").clicked() { do_add = true; }
+                        if ui.button("✕").clicked()  { do_dismiss = true; }
+                    });
+                    if do_add     { app.confirm_add_contact_from_file(); }
+                    if do_dismiss { app.pending_contact_from_file = None; }
+                }
             }
             JobState::Idle => {
                 if app.files.is_empty() {

@@ -1,8 +1,6 @@
 [![Cargo Build & Test](https://github.com/Antidote1911/cryptyrust/actions/workflows/ci.yml/badge.svg)](https://github.com/Antidote1911/cryptyrust/actions/workflows/ci.yml)
 [![License: GPL3](https://img.shields.io/badge/License-GPL3-green.svg)](https://opensource.org/licenses/GPL-3.0)
 
-> [Version française](README_fr.md)
-
 # Cryptyrust
 
 **Cross-platform file encryption — drag-and-drop GUI, CLI, and C FFI library.**
@@ -16,15 +14,16 @@ Pre-built binaries for Linux, macOS (universal) and Windows are available on the
 ## Features
 
 - **Arsenic V1** format (`.arsn`) — fully documented in [`arsenic/FORMAT.md`](arsenic/FORMAT.md)
-- **Post-quantum hybrid encryption** — X25519 + ML-KEM-768 or ML-KEM-1024 (NIST FIPS 203). Resistant to future quantum computers (harvest-now-decrypt-later)
-- **ML-DSA-65 signatures** (NIST FIPS 204) — optionally sign files during encryption; signature verified automatically on decryption
+- **Post-quantum hybrid encryption** — X25519 + ML-KEM-768 or ML-KEM-1024 (NIST FIPS 203). Resistant to harvest-now-decrypt-later attacks
+- **ML-DSA-65 signatures** (NIST FIPS 204) — sign files during encryption; signature verified automatically on decryption
+- **Sender identity embedding** — sender's public keys stored unencrypted in the file header; recipient is automatically prompted to add the sender as a contact after decryption (no separate `.pubkey` file exchange needed)
 - **Drag-and-drop GUI** — drop files to encrypt or decrypt; mode auto-detected
-- **CLI** for scripting and automation
-- **Integrated key management**: encryption keypairs (X25519 + ML-KEM) and signing keys (ML-DSA-65)
+- **CLI** for scripting and automation — same binary, same keystore
+- **Integrated key management**: one keypair per identity (X25519 + ML-KEM + ML-DSA-65 signing), shared between GUI and CLI
 - Three independently selectable **AEAD ciphers** for header and payload
 - **Argon2id** key derivation (Interactive 256 MiB / Sensitive 1 GiB)
 - **Password change** without re-encrypting the payload
-- **Built-in benchmark** — find the fastest cipher for your machine
+- **Built-in benchmark** — find the fastest cipher combination for your machine
 - Cross-platform: Linux, Windows, macOS
 
 ---
@@ -39,17 +38,27 @@ Pre-built binaries for Linux, macOS (universal) and Windows are available on the
 
 ---
 
-## GUI — Usage
+## GUI — Quick Start
 
 1. **Drag and drop** files onto the window, or click **Add files**.
 2. Mode is auto-detected: `.arsn` → **Decrypt**, plaintext → **Encrypt**.
 3. Click **Encrypt** / **Decrypt** and enter the password.
 
-### Encrypting for recipients (passwordless)
+### Encrypting for recipients (asymmetric, passwordless)
 
-1. Open **Keys → Key Manager** → generate a keypair or add a contact.
-2. When encrypting, select recipients in the popup — the password becomes optional.
-3. The recipient decrypts with their private key, without knowing the password.
+1. Open **Keys → Key Manager** → click **⚡ Generate** to create a keypair.
+2. Share your public key with the sender (via the key manager export).
+3. When encrypting, select recipients in the popup — the password becomes optional.
+4. The recipient decrypts with their private key, no password required.
+
+### Signing and contact trust
+
+Each keypair includes an ML-DSA-65 signing key. In **Config → Signing key**, select your identity.
+On decryption, the GUI shows a green ✓ banner if the signature matches a known contact, or a yellow
+warning if the signer is unknown.
+
+If the encrypted file contains sender identity info (embedded by the sender), a banner appears after
+decryption: **"📨 From: alice — add to contacts?"** — click **Add** to add them automatically.
 
 ### Configuration
 
@@ -66,8 +75,8 @@ Pre-built binaries for Linux, macOS (universal) and Windows are available on the
 The `cryptyrust` binary acts as a CLI when called with arguments, or opens the GUI when called without arguments.
 
 ```bash
-# Encrypt with password
-cryptyrust -e document.pdf -p "my secret passphrase"
+# Encrypt with password (interactive prompt)
+cryptyrust -e document.pdf
 
 # Encrypt for recipients (ML-KEM-768, default)
 cryptyrust -e document.pdf -R alice -R bob
@@ -76,9 +85,9 @@ cryptyrust -e document.pdf -R alice -R bob
 cryptyrust -e document.pdf -R alice --kem-level 1024
 
 # Encrypt + sign with ML-DSA-65
-cryptyrust -e document.pdf -p "passphrase" -S alice
+cryptyrust -e document.pdf -R alice -S alice
 
-# Decrypt (auto-tries stored keys, verifies signature if present)
+# Decrypt (auto-tries stored keys, falls back to password prompt)
 cryptyrust -d document.pdf.arsn
 
 # Decrypt with a specific key file
@@ -96,25 +105,43 @@ cryptyrust --bench
 ## Key Management
 
 ```bash
-# Encryption keypairs (X25519 + ML-KEM-768/1024)
-cryptyrust keygen -n alice --store           # generate and save to keystore
-cryptyrust keygen -n alice -o alice.key      # generate to file
-cryptyrust keygen --list                     # list stored keypairs
-cryptyrust keygen -y alice.key               # show public key of a .key file
+# Generate an encryption keypair (X25519 + ML-KEM-768 + ML-DSA-65, all in one .key file)
+cryptyrust keygen -n alice --store           # save to shared keystore
+cryptyrust keygen -n alice -o alice.key      # save to specific file
 
-# ML-DSA-65 signing keys
-cryptyrust keygen --sign -n alice --store    # generate signing key → keystore
+# List stored keypairs
+cryptyrust keygen --list
+
+# Show public key of a .key file
+cryptyrust keygen -y alice.key
+
+# Generate a standalone ML-DSA-65 signing key (for CLI signing with -S)
+cryptyrust keygen --sign -n alice --store
 cryptyrust keygen --sign -n alice -o alice.sigkey
-cryptyrust keygen --list-sign                # list stored signing keys
+
+# List stored standalone signing keys
+cryptyrust keygen --list-sign
 ```
 
-The keystore is shared between the GUI and CLI — a key generated in one mode is immediately available in the other.
+The keystore (`{config}/cryptyrust/keys/`) is shared between the GUI and CLI.
 
-## Signing
+### Signing key note
+
+- **GUI**: signing keys are embedded in `.key` files (generated with **⚡ Generate** in the key manager).
+- **CLI**: the `-S` flag uses standalone `.sigkey` files (generated with `keygen --sign`).
+
+### Recipient management
 
 ```bash
-cryptyrust -e document.pdf -S alice -p "passphrase"   # encrypt + sign
-cryptyrust -d document.pdf.arsn -p "passphrase"       # decrypt (auto-verifies signature)
+# List keyslots in an encrypted file
+cryptyrust recipients list file.pdf.arsn
+
+# Add a recipient (requires symmetric password)
+cryptyrust recipients add file.pdf.arsn -R bob -p "passphrase"
+
+# Remove a recipient (by identity file or slot index)
+cryptyrust recipients remove file.pdf.arsn -i alice.key -p "passphrase"
+cryptyrust recipients remove file.pdf.arsn --slot 0 -p "passphrase"
 ```
 
 ---
@@ -134,9 +161,7 @@ cryptyrust -d document.pdf.arsn -p "passphrase"       # decrypt (auto-verifies s
 
 ```bash
 cargo build --release
-# CLI → target/release/cryptyrust_cli
-# GUI → target/release/cryptyrust
-# keygen → target/release/crypty-keygen
+# Binary: target/release/cryptyrust
 ```
 
 ### macOS universal binary

@@ -30,6 +30,7 @@ fn fast_params_with(hdr: CipherId, pld: CipherId) -> ArsenicParams {
         recipients: vec![],
         kem_level: arsenic::KemLevel::L768,
         signing_key: None,
+        sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
     }
 }
 
@@ -44,6 +45,7 @@ fn fast_params_with_metadata(meta: EnvelopeMetadata) -> ArsenicParams {
         recipients: vec![],
         kem_level: arsenic::KemLevel::L768,
         signing_key: None,
+        sender_name: None, sender_x25519_pk: None, sender_mlkem_pk: None,
     }
 }
 

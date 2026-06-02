@@ -80,16 +80,17 @@ pub const MAX_ASYM_KEYSLOTS: usize = 256;
 pub const MERKLE_V1: u8 = 0x01;
 pub const SIG_PRESENT_NONE: u8 = 0x00;
 pub const SIG_PRESENT_MLDSA65: u8 = 0x01;
+pub const SENDER_PRESENT_LEN: usize = 1; // sender_present byte
 
 pub const META_TLV_MANDATORY_PT_LEN: usize = 50;
 
-/// Minimum total header size (0 keyslots of any kind, no signature, no optional metadata):
+/// Minimum total header size (0 keyslots, no signature, no sender, no optional metadata):
 ///   PUB_HEADER_LEN(109) + WRAPPED_DEK_LEN(48) + ASYM_COUNT_LEN(4)
-///   + ASYM_1024_COUNT_LEN(4) + SIG_PRESENT_LEN(1)
-///   + META_TLV_MANDATORY_PT_LEN(50) + GCM_TAG(16) = 232
+///   + ASYM_1024_COUNT_LEN(4) + SIG_PRESENT_LEN(1) + SENDER_PRESENT_LEN(1)
+///   + META_TLV_MANDATORY_PT_LEN(50) + GCM_TAG(16) = 233
 pub const MIN_HEADER_TOTAL_SIZE: usize =
     PUB_HEADER_LEN + WRAPPED_DEK_LEN + ASYM_COUNT_LEN + ASYM_1024_COUNT_LEN
-    + META_TLV_MANDATORY_PT_LEN + GCM_TAG + SIG_PRESENT_LEN;
+    + META_TLV_MANDATORY_PT_LEN + GCM_TAG + SIG_PRESENT_LEN + SENDER_PRESENT_LEN;
 
 // ── TLV tag identifiers ───────────────────────────────────────────────────────
 
@@ -112,6 +113,22 @@ pub struct EnvelopeMetadata {
     pub comment: Option<String>,
     pub timestamp_secs: Option<u64>,
 }
+
+/// Sender identity stored in the **public** header (after the signature region).
+///
+/// Readable without decryption — the recipient can extract it and add the sender
+/// as a contact, then encrypt back, without any separate .pubkey file exchange.
+/// The public keys are already non-secret; only the sender name is revealed.
+#[derive(Clone, Debug)]
+pub struct SenderInfo {
+    pub name: String,
+    pub x25519_pk: [u8; 32],
+    pub mlkem_pk: [u8; 1184],
+}
+
+/// Byte marker for the sender region: 0x00 = none, 0x01 = present.
+pub const SENDER_PRESENT_NONE: u8 = 0x00;
+pub const SENDER_PRESENT: u8 = 0x01;
 
 /// One hybrid (X25519 + ML-KEM-768) keyslot — 1180 bytes on disk.
 ///
@@ -241,14 +258,23 @@ pub struct ParsedEnvelope {
     pub hybrid_keyslots_1024: Vec<HybridKeyslot1024>,
     pub protected_meta: Vec<u8>,
     pub mldsa_sig: Option<MlDsaSignature>,
+    /// Sender identity — stored in the public header, readable without decryption.
+    pub sender: Option<SenderInfo>,
 }
 
 // ── TLV helpers ───────────────────────────────────────────────────────────────
 
+/// Push a TLV entry.  For values ≤ 254 bytes the length is one byte.
+/// For values ≥ 255 bytes the length byte is 0xFF followed by four
+/// little-endian bytes (extended-length encoding).
 fn tlv_push(buf: &mut Vec<u8>, tag: u8, value: &[u8]) {
-    debug_assert!(value.len() <= 255, "TLV value exceeds 255 bytes");
     buf.push(tag);
-    buf.push(value.len() as u8);
+    if value.len() < 0xFF {
+        buf.push(value.len() as u8);
+    } else {
+        buf.push(0xFF);
+        buf.extend_from_slice(&(value.len() as u32).to_le_bytes());
+    }
     buf.extend_from_slice(value);
 }
 
@@ -290,9 +316,21 @@ pub fn deserialize_meta_tlv(buf: &[u8], dek: [u8; 32]) -> Result<EnvelopeContent
         if pos + 2 > buf.len() {
             return Err(CoreErr::DecryptFail("TLV: truncated at tag/len".into()));
         }
-        let tag = buf[pos];
-        let len = buf[pos + 1] as usize;
-        pos += 2;
+        let tag = buf[pos]; pos += 1;
+        // Extended-length encoding: 0xFF byte followed by 4-byte LE length.
+        let len = if buf[pos] == 0xFF {
+            pos += 1;
+            if pos + 4 > buf.len() {
+                return Err(CoreErr::DecryptFail("TLV: truncated extended length".into()));
+            }
+            let l = u32::from_le_bytes(buf[pos..pos+4].try_into().unwrap()) as usize;
+            pos += 4;
+            l
+        } else {
+            let l = buf[pos] as usize;
+            pos += 1;
+            l
+        };
         if pos + len > buf.len() {
             return Err(CoreErr::DecryptFail("TLV: value overruns buffer".into()));
         }
@@ -414,28 +452,65 @@ pub fn parse_envelope(enc_region: &[u8]) -> Result<ParsedEnvelope, CoreErr> {
     let remaining = &enc_region[pos..];
 
     // The sig_present byte comes AFTER protected_meta, before the optional sig data.
-    // We don't know protected_meta length. Scan for it:
-    // If signed: last 1+1952+3293 = 5246 bytes
-    // If not:    last 1 byte
+    // Layout from the end of `remaining` (inner → outer):
+    //   [sender_region] sig_present[1] [sig_data?]
+    // We scan from the end: first peel off the sender region, then the signature.
+
+    // ── Sender region (outermost, at the very end) ──
+    // Format: sender_present[1] [name_len[2 LE] + name[N] + x25519[32] + mlkem[1184]]
+    let sender;
+    let after_sender;
+    let sender_min = 1usize; // just the sender_present byte
+    if remaining.len() < sender_min {
+        return Err(CoreErr::DecryptFail("Envelope missing sender_present byte".into()));
+    }
+    let last = remaining[remaining.len() - 1];
+    if last == SENDER_PRESENT {
+        // Parse sender: [name_len[2 LE] + name[N] + x25519[32] + mlkem[1184]] + SENDER_PRESENT
+        let fixed_tail = 1 + 2 + 32 + 1184; // sender_present + name_len + x25519 + mlkem
+        if remaining.len() < fixed_tail {
+            return Err(CoreErr::DecryptFail("Envelope sender region too short".into()));
+        }
+        let sp = remaining.len() - 1; // index of sender_present byte
+        let mlkem_start = sp - 1184;
+        let x25519_start = mlkem_start - 32;
+        let name_len_start = x25519_start - 2;
+        let name_len = u16::from_le_bytes(remaining[name_len_start..name_len_start+2].try_into().unwrap()) as usize;
+        if name_len_start < name_len {
+            return Err(CoreErr::DecryptFail("Envelope sender name overruns".into()));
+        }
+        let name_start = name_len_start - name_len;
+        let name = std::str::from_utf8(&remaining[name_start..name_start+name_len])
+            .unwrap_or("").to_string();
+        let x25519_pk: [u8; 32] = remaining[x25519_start..x25519_start+32].try_into().unwrap();
+        let mlkem_pk: [u8; 1184] = remaining[mlkem_start..mlkem_start+1184].try_into().unwrap();
+        sender = Some(SenderInfo { name, x25519_pk, mlkem_pk });
+        after_sender = &remaining[..name_start];
+    } else {
+        // SENDER_PRESENT_NONE: just the one byte
+        sender = None;
+        after_sender = &remaining[..remaining.len() - 1];
+    }
+
+    // ── Signature region ──
     let mldsa_sig;
     let protected_meta_slice;
     let sig_total = SIG_PRESENT_LEN + MLDSA_VERIFYING_KEY_LEN + MLDSA_SIGNATURE_LEN;
-    if remaining.len() >= sig_total && remaining[remaining.len() - sig_total] == SIG_PRESENT_MLDSA65 {
-        let sig_start = remaining.len() - sig_total;
-        protected_meta_slice = &remaining[..sig_start];
+    if after_sender.len() >= sig_total && after_sender[after_sender.len() - sig_total] == SIG_PRESENT_MLDSA65 {
+        let sig_start = after_sender.len() - sig_total;
+        protected_meta_slice = &after_sender[..sig_start];
         let vk_start = sig_start + SIG_PRESENT_LEN;
         let s_start = vk_start + MLDSA_VERIFYING_KEY_LEN;
         let vk: Box<[u8; MLDSA_VERIFYING_KEY_LEN]> =
-            Box::new(remaining[vk_start..vk_start+MLDSA_VERIFYING_KEY_LEN].try_into().unwrap());
+            Box::new(after_sender[vk_start..vk_start+MLDSA_VERIFYING_KEY_LEN].try_into().unwrap());
         let sig: Box<[u8; MLDSA_SIGNATURE_LEN]> =
-            Box::new(remaining[s_start..s_start+MLDSA_SIGNATURE_LEN].try_into().unwrap());
+            Box::new(after_sender[s_start..s_start+MLDSA_SIGNATURE_LEN].try_into().unwrap());
         mldsa_sig = Some(MlDsaSignature { verifying_key: vk, signature: sig });
     } else {
-        // No signature: last byte should be SIG_PRESENT_NONE
-        if remaining.is_empty() {
+        if after_sender.is_empty() {
             return Err(CoreErr::DecryptFail("Envelope missing sig_present byte".into()));
         }
-        protected_meta_slice = &remaining[..remaining.len() - SIG_PRESENT_LEN];
+        protected_meta_slice = &after_sender[..after_sender.len() - SIG_PRESENT_LEN];
         mldsa_sig = None;
     }
 
@@ -445,6 +520,7 @@ pub fn parse_envelope(enc_region: &[u8]) -> Result<ParsedEnvelope, CoreErr> {
         hybrid_keyslots_1024,
         protected_meta: protected_meta_slice.to_vec(),
         mldsa_sig,
+        sender,
     })
 }
 
@@ -455,25 +531,34 @@ pub fn build_envelope_region(
     hybrid_keyslots_1024: &[HybridKeyslot1024],
     protected_meta: &[u8],
     mldsa_sig: Option<&MlDsaSignature>,
+    sender: Option<&SenderInfo>,
 ) -> Vec<u8> {
-    let sig_len = mldsa_sig.map_or(SIG_PRESENT_LEN, |_| SIG_PRESENT_LEN + MLDSA_VERIFYING_KEY_LEN + MLDSA_SIGNATURE_LEN);
-    let mut buf = Vec::with_capacity(
-        WRAPPED_DEK_LEN + ASYM_COUNT_LEN + hybrid_keyslots.len() * ASYM_KEYSLOT_LEN
-        + ASYM_1024_COUNT_LEN + hybrid_keyslots_1024.len() * ASYM_1024_KEYSLOT_LEN
-        + protected_meta.len() + sig_len,
-    );
+    let mut buf = Vec::new();
     buf.extend_from_slice(wrapped_dek);
     buf.extend_from_slice(&(hybrid_keyslots.len() as u32).to_le_bytes());
     for slot in hybrid_keyslots { buf.extend_from_slice(&slot.to_bytes()); }
     buf.extend_from_slice(&(hybrid_keyslots_1024.len() as u32).to_le_bytes());
     for slot in hybrid_keyslots_1024 { buf.extend_from_slice(&slot.to_bytes()); }
     buf.extend_from_slice(protected_meta);
+    // Signature region
     if let Some(sig) = mldsa_sig {
         buf.push(SIG_PRESENT_MLDSA65);
         buf.extend_from_slice(sig.verifying_key.as_slice());
         buf.extend_from_slice(sig.signature.as_slice());
     } else {
         buf.push(SIG_PRESENT_NONE);
+    }
+    // Sender region (public — readable without decryption)
+    if let Some(s) = sender {
+        let name_bytes = s.name.as_bytes();
+        let name_len = name_bytes.len().min(255) as u16;
+        buf.extend_from_slice(&name_bytes[..name_len as usize]);
+        buf.extend_from_slice(&name_len.to_le_bytes());
+        buf.extend_from_slice(&s.x25519_pk);
+        buf.extend_from_slice(&s.mlkem_pk);
+        buf.push(SENDER_PRESENT);
+    } else {
+        buf.push(SENDER_PRESENT_NONE);
     }
     buf
 }

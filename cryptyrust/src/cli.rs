@@ -6,20 +6,25 @@ const ABOUT: &str = "
 Arsenic file encryption — encrypts, decrypts, and manages keys.
 
 Key management:
-  cryptyrust keygen -n alice --store               Generate keypair (ML-KEM-768, default)
+  cryptyrust keygen -n alice --store               Generate keypair (X25519 + ML-KEM-768)
   cryptyrust keygen -n alice --store --kem-level 1024  Generate keypair (ML-KEM-1024)
-  cryptyrust keygen sign -n alice --store          Generate ML-DSA-65 signing key
+  cryptyrust keygen --sign -n alice --store        Generate ML-DSA-65 signing key
   cryptyrust keygen --list                         List stored keypairs
   cryptyrust keygen --list-sign                    List stored signing keys
 
 Encryption / decryption:
-  cryptyrust -e FILE                               Encrypt (password)
-  cryptyrust -e FILE -R alice                      Encrypt for recipient
+  cryptyrust -e FILE                               Encrypt (password, interactive prompt)
+  cryptyrust -e FILE -R alice                      Encrypt for recipient (passwordless)
   cryptyrust -e FILE -S alice                      Encrypt + sign with ML-DSA-65 key
   cryptyrust -e FILE --kem-level 1024              Encrypt using ML-KEM-1024 keyslots
-  cryptyrust -d FILE                               Decrypt
+  cryptyrust -d FILE                               Decrypt (auto-tries keystore, then password)
   cryptyrust --rekey FILE                          Change password
   cryptyrust --bench                               Benchmark ciphers
+
+Recipient management:
+  cryptyrust recipients list FILE                  List keyslots in a file
+  cryptyrust recipients add FILE -R alice          Add a recipient keyslot
+  cryptyrust recipients remove FILE -i KEY_FILE    Remove a recipient keyslot
 
 Author : Fabrice Corraire <antidote1911@gmail.com>
 Github : https://github.com/Antidote1911/
