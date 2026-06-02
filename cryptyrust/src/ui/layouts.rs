@@ -105,6 +105,27 @@ pub fn render_bottom_bar(app: &CryptyApp, ui: &mut egui::Ui) {
                     cipher_short_label(app.hdr_cipher),
                     cipher_short_label(app.pld_cipher),
                 )));
+                ui.separator();
+                // Signing key indicator — red if none active
+                let (sign_icon, sign_label, sign_color) = match app.signing_key_index
+                    .and_then(|i| app.signing_keys.get(i))
+                {
+                    Some(sk) => (
+                        "✍",
+                        sk.name.clone(),
+                        egui::Color32::from_rgb(80, 200, 100),
+                    ),
+                    None => (
+                        "✍",
+                        "No signing key".into(),
+                        egui::Color32::from_rgb(220, 80, 60),
+                    ),
+                };
+                ui.label(
+                    egui::RichText::new(format!("{sign_icon} {sign_label}"))
+                        .color(sign_color)
+                        .size(13.0),
+                ).on_hover_text("Active signing key — set in Config menu");
             });
         });
 }

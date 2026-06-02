@@ -932,12 +932,35 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
         ui.label(egui::RichText::new("Signing keys  (ML-DSA-65)").strong().size(14.0));
         ui.label(
             egui::RichText::new(
-                "NIST FIPS 204 — sign files during encryption. \
+                "NIST FIPS 204 — signing is mandatory to encrypt. \
                  Recipients verify the signature automatically.",
             )
             .small()
             .weak(),
         );
+        ui.add_space(4.0);
+
+        // Active signing key status banner
+        match app.signing_key_index.and_then(|i| app.signing_keys.get(i)) {
+            Some(sk) => {
+                ui.horizontal(|ui| {
+                    ui.label(
+                        egui::RichText::new(format!("✍  Active: {}", sk.name))
+                            .color(egui::Color32::from_rgb(80, 200, 100))
+                            .strong(),
+                    );
+                    ui.label(egui::RichText::new("— click \"★ Active\" on another key to switch").small().weak());
+                });
+            }
+            None => {
+                let (msg, color) = if app.signing_keys.is_empty() {
+                    ("⚠  No signing key — generate one below and activate it to encrypt.", egui::Color32::from_rgb(220, 80, 60))
+                } else {
+                    ("⚠  No signing key active — click \"Set active\" on a key below.", egui::Color32::from_rgb(220, 160, 40))
+                };
+                ui.label(egui::RichText::new(msg).color(color).strong());
+            }
+        }
         ui.add_space(4.0);
 
         if app.signing_keys.is_empty() {
