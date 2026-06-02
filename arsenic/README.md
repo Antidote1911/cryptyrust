@@ -12,7 +12,7 @@ Used by the [`cryptyrust`](../cryptyrust) binary (GUI + CLI + key management) an
 
 - **Hybrid post-quantum asymmetric encryption** — X25519 + ML-KEM-768 or ML-KEM-1024 (NIST FIPS 203). Each recipient gets an independent keyslot; files stay decryptable by quantum computers *and* classical ones
 - **Optional ML-DSA-65 signatures** (NIST FIPS 204) — files can be signed during encryption; signature verified automatically on decryption
-- **Sender identity embedding** — the sender's public keys and display name can be stored unencrypted in the header. The recipient reads this without decrypting and can auto-add the sender as a contact
+- **Sender identity embedding** — the sender's public keys and display name can be stored unencrypted in the header. When the file is signed, the sender region is cryptographically authenticated (covered by the ML-DSA-65 signature); the recipient reads it without decrypting and can auto-add the sender as a trusted contact
 - **Three selectable AEAD ciphers**, independently configurable for header and payload:
   - `Deoxys-II-256` — tweakable block cipher AEAD *(default header cipher)*
   - `XChaCha20-Poly1305` — 192-bit nonce, software-friendly *(default payload cipher)*
@@ -204,9 +204,19 @@ X25519 + ML-KEM are combined via BLAKE3 hybrid KEM binding — the hybrid is sec
 
 ### ML-DSA-65 signatures
 
-Files can optionally be signed with an ML-DSA-65 key (NIST FIPS 204, ~192-bit quantum security). The signature covers the public header parameters (`pre_mac[77]`). Verification is automatic and mandatory during decryption if a signature is present.
+Files can optionally be signed with an ML-DSA-65 key (NIST FIPS 204, ~192-bit quantum security).
 
-**GUI:** the signing key is embedded in each encryption keypair (`.key` file, generated with `⚡ Generate`). Select the signing identity in Config → Signing key.
+**Signed message:**
+```
+pre_mac[77] || sender_bytes   — when sender identity is embedded
+pre_mac[77]                   — no sender (backward compatible with v1.5.x)
+```
+
+Covering the sender region in the signed message prevents key-substitution attacks: an attacker who intercepts the file cannot silently replace the sender's public keys without invalidating the signature.
+
+Verification is automatic and mandatory on decryption — both in `decrypt_arsenic` (symmetric path) and `decrypt_arsenic_with_key` (asymmetric path). A signature mismatch is always a hard error.
+
+**GUI:** the signing key is embedded in each encryption keypair (`.key` file, generated with `⚡ Generate`). Select the signing identity in Config → Signing key. Files received with an unsigned sender region display an orange ⚠ warning.
 
 **CLI:** use a separate `.sigkey` file generated with `cryptyrust keygen --sign`. Pass `-S alice` to sign during encryption.
 

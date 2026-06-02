@@ -16,7 +16,7 @@ Pre-built binaries for Linux, macOS (universal) and Windows are available on the
 - **Arsenic V1** format (`.arsn`) — fully documented in [`arsenic/FORMAT.md`](arsenic/FORMAT.md)
 - **Post-quantum hybrid encryption** — X25519 + ML-KEM-768 or ML-KEM-1024 (NIST FIPS 203). Resistant to harvest-now-decrypt-later attacks
 - **ML-DSA-65 signatures** (NIST FIPS 204) — sign files during encryption; signature verified automatically on decryption
-- **Sender identity embedding** — sender's public keys stored unencrypted in the file header; recipient is automatically prompted to add the sender as a contact after decryption (no separate `.pubkey` file exchange needed)
+- **Sender identity embedding** — sender's public keys stored unencrypted in the file header; authenticated by the ML-DSA-65 signature when present (key-substitution attack impossible); recipient is automatically prompted to add the sender as a contact after decryption (no separate `.pubkey` file exchange needed)
 - **Drag-and-drop GUI** — drop files to encrypt or decrypt; mode auto-detected
 - **CLI** for scripting and automation — same binary, same keystore
 - **Integrated key management**: one keypair per identity (X25519 + ML-KEM + ML-DSA-65 signing), shared between GUI and CLI
@@ -59,6 +59,8 @@ warning if the signer is unknown.
 
 If the encrypted file contains sender identity info (embedded by the sender), a banner appears after
 decryption: **"📨 From: alice — add to contacts?"** — click **Add** to add them automatically.
+When the file is signed, the sender identity is cryptographically authenticated (covered by the
+ML-DSA-65 signature). Without a signature, an orange ⚠ warning is shown: the identity is advisory only.
 
 ### Configuration
 

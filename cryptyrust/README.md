@@ -53,12 +53,15 @@ Each keypair generated with **⚡ Generate** includes an ML-DSA-65 signing key a
    - Yellow banner: "Signed by unknown key" (valid but not in trust store)
    - Red banner: "Signature INVALID" (tampered file)
 
+Signing also authenticates the sender identity region: an attacker who intercepts the file cannot replace the sender's public keys without invalidating the signature.
+
 ### Decryption
 
 - **With stored key**: if a keystore key matches the file, decryption starts immediately without a popup
 - **With password**: if no key matches, the popup asks for the password
 - **Sender identity**: if the file contains sender info, a banner appears after decryption:
-  "📨 From: alice — add to contacts?" with an **Add** button
+  - Blue "📨 From: alice — add to contacts?" when the file is signed (identity authenticated)
+  - Orange "📨 From: alice — add to contacts? ⚠ non signé — identité non vérifiée" when unsigned
 
 ---
 

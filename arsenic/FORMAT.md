@@ -249,12 +249,24 @@ sig_present[1]       0x00 = no signature
   verifying_key[1952]  ML-DSA-65 verifying (public) key
   signature[3309]      ML-DSA-65 signature
 
-Signed message = pre_mac[77]  (covers all KDF params, cipher IDs, nonces)
+Signed message:
+  pre_mac[77] || sender_bytes   if sender_present == 0x01
+  pre_mac[77]                   if sender_present == 0x00  (no sender)
 ```
 
+Including the sender region in the signed message prevents an attacker from
+silently swapping the sender's public keys (key-substitution / TOFU poisoning
+attack). Stripping the sender region or modifying any byte of it causes the
+signature verification to fail, which is a hard error.
+
+The no-sender path (`pre_mac[77]` only) is backward-compatible with files
+produced before sender-identity support was introduced.
+
 The signature is verified automatically during decryption; a mismatch is a
-hard error. The signing seed is a 32-byte value embedded in the sender's
-`.key` file (since v1.5.0) or in a separate `.sigkey` file.
+hard error on both the symmetric (`decrypt_arsenic`) and asymmetric
+(`decrypt_arsenic_with_key`) paths. The signing seed is a 32-byte value
+embedded in the sender's `.key` file (since v1.5.0) or in a separate `.sigkey`
+file.
 
 ### 5.7 Sender Identity Region (variable size)
 
@@ -282,6 +294,12 @@ name_bytes[N] || name_len[2 LE] || x25519_pk[32] || mlkem_pk[1184] || sender_pre
 
 Parsers read from the tail: peel `sender_present[1]`, then `mlkem_pk[1184]`,
 `x25519_pk[32]`, `name_len[2]`, then `name[name_len]`.
+
+**Authentication:** the sender region is covered by the ML-DSA-65 signature
+(when a signature is present). Any modification — including replacing the
+public keys with an attacker's keys — invalidates the signature and causes
+a hard decryption error. When no signature is present, the sender region
+is unauthenticated and must be treated as advisory only.
 
 **Privacy note:** the sender's display name and public keys are visible to
 any party in possession of the file. This is intentional — the dead-drop
@@ -432,12 +450,15 @@ OS random → DEK[32]
         (same as above but ML-KEM-1024, mlkem_ct[1568],
          context = "Arsenic Hybrid KEM 1024")
 
-[optional — if signing_key provided]:
-  ML-DSA-65.Sign(signing_key_seed[32], pre_mac[77])        → signature[3309]
-  + verifying_key[1952] appended to header
-
 [optional — if sender info provided]:
-  sender.name + sender.x25519_pk[32] + sender.mlkem_pk[1184]  → plaintext sender region
+  sender_bytes = name[N] || name_len[2 LE] || x25519_pk[32] || mlkem_pk[1184] || 0x01
+              → plaintext sender region (appended after signature region)
+
+[optional — if signing_key provided]:
+  signed_msg = pre_mac[77] || sender_bytes   (sender present)
+             = pre_mac[77]                   (no sender)
+  ML-DSA-65.Sign(signing_key_seed[32], signed_msg)          → signature[3309]
+  + verifying_key[1952] appended to header (before sender region)
 ```
 
 ---
@@ -559,7 +580,7 @@ uses the signing seed embedded in `.key` files instead.
 | Defence in depth                  | Hybrid X25519+ML-KEM: a flaw in one does not compromise the other |
 | Harvest-now-decrypt-later         | ML-KEM protects files encrypted today                            |
 | Sender authentication             | Optional ML-DSA-65 signature over pre\_mac (NIST FIPS 204)       |
-| Sender identification             | Plaintext sender region: X25519 + ML-KEM-768 EK + display name  |
+| Sender identification             | Plaintext sender region: name + X25519 + ML-KEM-768 EK; authenticated by ML-DSA-65 signature when signed |
 | Independent key entropy           | X25519, ML-KEM, and ML-DSA-65 seeds generated independently      |
 | Recipient anonymity               | Keyslots do not reveal the recipient's public key               |
 | Merkle domain separation          | BLAKE3_derive_key with distinct contexts                        |
