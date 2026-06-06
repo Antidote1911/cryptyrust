@@ -1,6 +1,6 @@
 # Maintainer: Fabrice Corraire <antidote1911@gmail.com>
 pkgname=cryptyrust
-pkgver=1.5.9
+pkgver=2.1.0
 pkgrel=1
 pkgdesc="Post-quantum file encryption with a drag-and-drop GUI, CLI, and hybrid X25519+ML-KEM-768 key management"
 arch=('x86_64' 'aarch64')
@@ -40,5 +40,5 @@ package() {
         "$pkgdir/usr/share/icons/hicolor/512x512/apps/cryptyrust.png"
     install -Dm644 "LICENSE"   "$pkgdir/usr/share/licenses/$pkgname/LICENSE"
     install -Dm644 "README.md" "$pkgdir/usr/share/doc/$pkgname/README.md"
-    install -Dm644 "arsenic/FORMAT.md" "$pkgdir/usr/share/doc/$pkgname/FORMAT.md"
+    install -Dm644 "arsenic/FORMAT.md"  "$pkgdir/usr/share/doc/$pkgname/FORMAT.md"
 }

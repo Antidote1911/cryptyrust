@@ -1,8 +1,8 @@
 # Maintainer: Fabrice Corraire <antidote1911@gmail.com>
 pkgname=cryptyrust-appimage
-pkgver=1.3.4
+pkgver=2.1.0
 pkgrel=1
-pkgdesc="Simple cross-platform file encryption with a drag-and-drop GUI and a CLI (AppImage)"
+pkgdesc="Post-quantum file encryption with a drag-and-drop GUI, CLI, and hybrid X25519+ML-KEM-768 key management (AppImage)"
 arch=('x86_64')
 url="https://github.com/Antidote1911/cryptyrust"
 license=('GPL-3.0-only')
@@ -20,10 +20,6 @@ prepare() {
 }
 
 package() {
-    # CLI binaire extrait de l'AppImage
-    install -Dm755 "$srcdir/squashfs-root/usr/bin/cryptyrust_cli" \
-        "$pkgdir/usr/bin/cryptyrust_cli"
-
     # AppImage installée dans /usr/lib
     install -Dm755 "$srcdir/cryptyrust-${pkgver}.AppImage" \
         "$pkgdir/usr/lib/cryptyrust/cryptyrust.AppImage"
