@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use rayon;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex};
@@ -201,7 +201,9 @@ impl JobState {
                                 } else if in_path.ends_with(".arsn") {
                                     in_path.trim_end_matches(".arsn").to_string()
                                 } else {
-                                    format!("decrypted_{}", in_path)
+                                    let parent = path.parent().unwrap_or_else(|| Path::new(""));
+                                    let name = path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                                    parent.join(format!("decrypted_{}", name)).to_string_lossy().into_owned()
                                 };
                                 match create_unique_output_file(&base, "") {
                                     Err(e) => {
