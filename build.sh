@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # =============================================================================
-#  build.sh — Build complet du workspace + unification des numéros de version
+#  build.sh — Build complet du workspace
 #  Usage : ./build.sh [--debug]
 #
 #  - Lit la version de référence dans [workspace.package] (Cargo.toml racine)
-#  - Propage cette version dans tous les fichiers de packaging (PKGBUILD, ...)
 #  - Compile le workspace (arsenic, cryptyrust, ffi)
 # =============================================================================
 
@@ -45,26 +44,7 @@ if [[ -z "$VERSION" ]]; then
 fi
 info "Version du workspace : ${BOLD}${VERSION}${RESET}"
 
-# ── 2. Propagation dans les fichiers de packaging ────────────────────────────
-title "Unification des numéros de version"
-
-bump_pkgver() {
-  local file="$1"
-  [[ -f "$file" ]] || return 0
-  local current
-  current=$(grep -m1 '^pkgver=' "$file" | cut -d= -f2)
-  if [[ "$current" == "$VERSION" ]]; then
-    info "${file} : déjà à jour (${VERSION})"
-  else
-    sed -i "s/^pkgver=.*/pkgver=${VERSION}/" "$file"
-    success "${file} : ${current} → ${VERSION}"
-  fi
-}
-
-bump_pkgver "packaging/archlinux/PKGBUILD"
-bump_pkgver "packaging/archlinux/PKGBUILD-AppImage"
-
-# ── 3. Compilation du workspace ───────────────────────────────────────────────
+# ── 2. Compilation du workspace ───────────────────────────────────────────────
 title "Compilation du workspace (profil : ${PROFILE})"
 
 info "cargo build ${CARGO_FLAGS[*]}"
