@@ -85,6 +85,23 @@ fn main() {
     }
 }
 
+/// winit 0.30 does not implement file drag-and-drop on Wayland: when an X
+/// server is available (XWayland), use X11 so files can be dropped on the
+/// window. Without DISPLAY, winit picks Wayland as usual.
+#[cfg(target_os = "linux")]
+fn x11_event_loop() -> Option<eframe::EventLoopBuilderHook> {
+    std::env::var_os("DISPLAY")?;
+    Some(Box::new(|builder| {
+        use winit::platform::x11::EventLoopBuilderExtX11;
+        builder.with_x11();
+    }))
+}
+
+#[cfg(not(target_os = "linux"))]
+fn x11_event_loop() -> Option<eframe::EventLoopBuilderHook> {
+    None
+}
+
 fn run_gui() -> Result<(), eframe::Error> {
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -94,6 +111,7 @@ fn run_gui() -> Result<(), eframe::Error> {
                 eframe::icon_data::from_png_bytes(include_bytes!("../../packaging/cryptyrust.png"))
                     .unwrap_or_default(),
             ),
+        event_loop_builder: x11_event_loop(),
         ..Default::default()
     };
 
