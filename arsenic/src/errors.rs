@@ -17,7 +17,7 @@ pub enum CoreErr {
     #[error("Read error")]
     ReadError { source: std::io::Error },
 
-    #[error("Read error: {0}")]
+    #[error("I/O error: {0}")]
     IOError(#[from] std::io::Error),
 
     #[error("Decryption failed: {0}")]
@@ -32,7 +32,7 @@ pub enum CoreErr {
     #[error("Decryption failed: Incorrect signature. Not a valid Arsenic file.")]
     BadSignature,
 
-    #[error("Decryption failed: Incorrect header version.")]
+    #[error("Unsupported file format version (this version reads Arsenic V2 files only).")]
     BadHeaderVersion,
 
     #[error("Decryption failed: No asymmetric keyslot matched the provided private key.")]

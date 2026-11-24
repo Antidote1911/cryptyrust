@@ -9,19 +9,19 @@ mod secret;
 pub use crate::arsenic::bench::{bench_cipher_combinations, best_combination, CipherBenchResult};
 pub use crate::arsenic::header::{
     MAX_ASYM_KEYSLOTS, MAX_T_COST, MAX_P_COST,
-    MAX_EXTRA_PASSPHRASE_SLOTS, COMPRESS_ZSTD,
+    MAX_PASSWORD_SLOTS, COMPRESS_ZSTD,
 };
 pub use crate::arsenic::MAX_ARGON2_RAM_KB;
 pub use crate::arsenic::{
     ArsenicParams, ArsenicStrength, CipherId, EnvelopeMetadata,
     HybridKeyslot, HybridKeyslot1024, HybridRecipient, HybridPrivKey, KemLevel,
-    ExtraPassSlot,
+    PasswordSlot,
     decrypt_arsenic, decrypt_arsenic_with_key, encrypt_arsenic,
     encrypt_arsenic_to_writer,
     decrypt_block_at, decrypt_block_at_with_key,
     find_decrypting_key, find_slot_for_privkey, list_recipients, rekey_arsenic,
     armor, dearmor,
-    BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE,
+    BLOCK_SIZE_4MB, MIN_HEADER_TOTAL_SIZE, PASSWORD_SLOT_LEN,
 };
 pub use crate::arsenic::header::SenderInfo;
 
@@ -55,35 +55,22 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::time::Instant;
 
 
-/// Read sender identity embedded in the **public** (unencrypted) header region.
+/// Read the sender identity stored in clear in the header.
 ///
-/// No password or private key is required — the sender region is intentionally
-/// stored in plaintext so the recipient can identify who sent the file before
-/// decrypting, and can automatically add the sender to their contact list.
+/// No password or private key is required, so the result is **not
+/// authenticated** on its own: the header MAC that covers it is only checked
+/// when the file is decrypted. Read it after a successful decryption.
 ///
 /// Returns `None` if the file has no sender info, cannot be opened, or the
 /// header is malformed.
 pub fn arsenic_read_sender_info(path: &std::path::Path) -> Option<SenderInfo> {
-    use arsenic::header::{parse_header_bytes, parse_envelope, MIN_HEADER_TOTAL_SIZE};
-    use crate::arsenic::MAX_HEADER_TOTAL_SIZE;
-
     let mut f = File::open(path).ok()?;
-    let mut prefix = [0u8; 13];
-    f.read_exact(&mut prefix).ok()?;
-    let header_total_size =
-        u32::from_le_bytes([prefix[9], prefix[10], prefix[11], prefix[12]]) as usize;
-    if header_total_size < MIN_HEADER_TOTAL_SIZE
-        || header_total_size > MAX_HEADER_TOTAL_SIZE as usize
-    {
-        return None;
-    }
-    let mut header_buf = vec![0u8; header_total_size];
-    header_buf[..13].copy_from_slice(&prefix);
-    f.read_exact(&mut header_buf[13..]).ok()?;
+    arsenic::read_header(&mut f).ok()?.sender
+}
 
-    let (_, _, _, enc_env_region) = parse_header_bytes(&header_buf).ok()?;
-    let envelope = parse_envelope(&enc_env_region).ok()?;
-    envelope.sender
+/// True if `key` is a well-formed ML-KEM-768 public key.
+pub fn mlkem_pubkey_is_valid(key: &[u8; 1184]) -> bool {
+    arsenic::hybrid_kem::is_valid_ek_768(key)
 }
 
 pub const fn get_version() -> &'static str {
@@ -91,6 +78,11 @@ pub const fn get_version() -> &'static str {
 }
 
 /// Return 32 cryptographically random bytes drawn directly from the OS CSPRNG.
+///
+/// # Panics
+/// If the operating system cannot provide randomness — there is no safe way
+/// to continue without it.
+#[allow(clippy::expect_used)]
 pub fn random_bytes_32() -> [u8; 32] {
     let mut buf = [0u8; 32];
     getrandom::fill(&mut buf).expect("OS random number generator unavailable");
@@ -138,6 +130,10 @@ pub fn pubkey_from_privkey(privkey: &[u8; 32]) -> [u8; 32] {
 ///
 /// The private key is cryptographically random (32 bytes).
 /// The caller is responsible for storing and zeroizing it appropriately.
+///
+/// # Panics
+/// If the operating system cannot provide randomness.
+#[allow(clippy::expect_used)]
 pub fn generate_x25519_keypair() -> ([u8; 32], [u8; 32]) {
     use x25519_dalek::{PublicKey, StaticSecret};
     let mut privkey_bytes = [0u8; 32];
@@ -161,6 +157,7 @@ pub fn arsenic_read_params(path: &std::path::Path) -> Option<ArsenicParams> {
         return None;
     }
     // offsets: t_cost at 29..33, m_cost at 33..37, p_cost at 37..41
+    // (see the layout at the top of `arsenic/header.rs`)
     Some(ArsenicParams {
         t_cost: u32::from_le_bytes(buf[29..33].try_into().ok()?),
         m_cost: u32::from_le_bytes(buf[33..37].try_into().ok()?),
@@ -202,114 +199,125 @@ pub fn arsenic_find_slot_for_privkey_legacy(path: &std::path::Path, x25519_sk: &
     arsenic::find_slot_for_privkey(&mut f, x25519_sk, &mlkem_seed).ok().flatten()
 }
 
-/// Change the symmetric password of an Arsenic file without decrypting the payload.
+/// Path of the header backup kept next to `path` while its header is rewritten.
+fn header_backup_path(path: &std::path::Path) -> std::path::PathBuf {
+    let mut name = path.file_name().unwrap_or_default().to_os_string();
+    name.push(".bak");
+    path.with_file_name(name)
+}
+
+/// If a previous in-place header rewrite of `path` was interrupted, put the
+/// saved header back. Returns `true` if a backup was restored.
 ///
-/// A backup of the current header is written to `<path>.bak` and flushed before
-/// the in-place write.  On success the backup is removed.  On crash the backup
-/// allows restoring the original header.
+/// A leftover backup means the rewrite did not reach its end, so the header
+/// on disk may be the old one, the new one, or a mix of both. The backup is
+/// always a complete, consistent header (the payload and the file key never
+/// change), so it is restored unconditionally.
+fn restore_interrupted_header(path: &std::path::Path) -> Result<bool, CoreErr> {
+    let bak_path = header_backup_path(path);
+    if !bak_path.exists() {
+        return Ok(false);
+    }
+    let backup = std::fs::read(&bak_path)?;
+    // Only a backup that is itself a complete header is restored; anything
+    // else is a leftover that cannot help and is simply discarded.
+    let valid = arsenic::header::Header::parse(&backup).is_ok();
+    if valid {
+        let mut f = OpenOptions::new().write(true).open(path)?;
+        f.write_all(&backup)?;
+        f.sync_all()?;
+    }
+    remove_file(&bak_path)?;
+    Ok(valid)
+}
+
+/// Change one password of an Arsenic file without touching the payload.
+///
+/// The slot of `old_password` is replaced by a slot for `new_password`; other
+/// passwords and recipients keep working. The file key does not change:
+/// someone who knew the old password and kept a copy of the old file can
+/// still decrypt that copy.
+///
+/// The header is rewritten in place. The current header is first saved to
+/// `<path>.bak` and synced; the backup is removed on success. If a previous
+/// change was interrupted, the saved header is restored and an error asks the
+/// caller to retry (with the password that was valid before that attempt).
 pub fn arsenic_rekey(
     path: &std::path::Path,
     old_password: &Secret<String>,
     new_password: &Secret<String>,
     ui: &dyn Ui,
 ) -> Result<(), CoreErr> {
-    let bak_path = {
-        let mut name = path.file_name().unwrap_or_default().to_os_string();
-        name.push(".bak");
-        path.with_file_name(name)
-    };
-
-    // ── Detect interrupted previous rekey ─────────────────────────────────
-    if bak_path.exists() {
-        let magic_intact = {
-            let mut magic = [0u8; 4];
-            File::open(path)
-                .and_then(|mut f| f.read_exact(&mut magic))
-                .is_ok_and(|_| magic == arsenic::header::MAGIC)
-        };
-
-        if !magic_intact {
-            let backup = std::fs::read(&bak_path)?;
-            if backup.len() >= arsenic::header::MIN_HEADER_TOTAL_SIZE {
-                let mut f = OpenOptions::new().write(true).open(path)?;
-                f.write_all(&backup)?;
-                f.sync_all()?;
-            }
-            let _ = remove_file(&bak_path);
-            return Err(CoreErr::DecryptFail(
-                "A previous rekey was interrupted and the header was corrupted. \
-                 It has been restored from the backup. Please retry."
-                    .into(),
-            ));
-        }
+    if restore_interrupted_header(path)? {
+        return Err(CoreErr::DecryptFail(
+            "a previous password change was interrupted; the previous header has been restored. \
+             Please retry."
+                .into(),
+        ));
     }
 
-    // ── Read current header (u32 header_total_size) and back it up ────────
+    // ── Back up the current header ────────────────────────────────────────
+    let bak_path = header_backup_path(path);
     {
-        let header_total_size = {
-            let mut size_buf = [0u8; 13]; // header_total_size at offset 9 (u32 LE)
-            File::open(path)?.read_exact(&mut size_buf)?;
-            u32::from_le_bytes([size_buf[9], size_buf[10], size_buf[11], size_buf[12]]) as usize
-        };
-        if header_total_size < arsenic::header::MIN_HEADER_TOTAL_SIZE
-            || header_total_size > arsenic::MAX_HEADER_TOTAL_SIZE as usize
-        {
-            return Err(CoreErr::DecryptFail(
-                "Invalid header_total_size in file".into(),
-            ));
-        }
-        let mut current_hdr = vec![0u8; header_total_size];
-        File::open(path)?.read_exact(&mut current_hdr)?;
+        let current = arsenic::read_header(&mut File::open(path)?)?.to_bytes();
         let mut bak = File::create(&bak_path)?;
-        bak.write_all(&current_hdr)?;
+        bak.write_all(&current)?;
         bak.sync_all()?;
-        // On POSIX filesystems (ext4, btrfs, ZFS) the directory entry is
-        // separate metadata from the inode; fsync on the file alone does NOT
-        // guarantee the filename→inode mapping is on disk.  Fsyncing the
-        // parent directory ensures the .bak is reachable by name even after
-        // a power failure mid-rewrite.
-        // On Windows, NTFS journals directory entries automatically and
-        // File::open() on a directory returns "Access is denied", so we
-        // skip this step on non-Unix platforms.
+        // On POSIX filesystems the directory entry is separate metadata:
+        // syncing the file alone does not guarantee the backup can be found
+        // by name after a power failure. Windows journals directory entries
+        // and cannot open a directory this way.
         #[cfg(unix)]
-        if let Some(parent) = bak_path.parent() {
+        if let Some(parent) = bak_path.parent().filter(|p| !p.as_os_str().is_empty()) {
             File::open(parent)?.sync_all()?;
         }
     }
 
-    let result = {
+    let result = (|| {
         let mut f = OpenOptions::new().read(true).write(true).open(path)?;
-        arsenic::rekey_arsenic(&mut f, old_password, new_password, ui)
-    };
+        arsenic::rekey_arsenic(&mut f, old_password, new_password, ui)?;
+        f.sync_all()?;
+        Ok(())
+    })();
 
-    if result.is_ok() {
+    // On success the new header is on disk. On failure before the write the
+    // file is untouched; on failure during the write the backup stays and is
+    // restored by the next call.
+    if result.is_ok() || !matches!(result, Err(CoreErr::IOError(_))) {
         let _ = remove_file(&bak_path);
     }
-
     result
 }
 
-/// Add a hybrid (X25519 + ML-KEM-768) recipient to an existing Arsenic file.
+/// Add a hybrid recipient to an existing Arsenic file.
 ///
-/// Authenticates with `password`, derives the DEK from the symmetric keyslot,
-/// generates a fresh hybrid keyslot for `recipient`, and rewrites
-/// the file with the expanded header.  The payload is streamed unchanged.
+/// Authenticates with `password` (any password of the file) and rewrites the
+/// file with the larger header; the payload is copied unchanged. The new
+/// keyslot follows the file's ML-KEM level — see
+/// [`arsenic_add_recipient_with_level`] to choose it.
 pub fn arsenic_add_recipient(
     path: &std::path::Path,
     password: &Secret<String>,
     recipient: &arsenic::HybridRecipient,
     ui: &dyn Ui,
 ) -> Result<(), CoreErr> {
-    ui.output(0);
-    let hdr_cipher = arsenic_read_params(path)
-        .map(|p| p.hdr_cipher)
-        .unwrap_or(arsenic::CipherId::DeoxysII256);
+    arsenic_add_recipient_with_level(path, password, recipient, None, ui)
+}
 
+/// Like [`arsenic_add_recipient`], with an explicit ML-KEM level for the new
+/// keyslot (`None` = follow the file).
+pub fn arsenic_add_recipient_with_level(
+    path: &std::path::Path,
+    password: &Secret<String>,
+    recipient: &arsenic::HybridRecipient,
+    level: Option<KemLevel>,
+    ui: &dyn Ui,
+) -> Result<(), CoreErr> {
+    ui.output(0);
     let (new_header, old_header_size) = {
         let mut f = File::open(path)?;
-        arsenic::build_header_with_added_recipient(&mut f, password, hdr_cipher, recipient)?
+        arsenic::build_header_with_added_recipient(&mut f, password, recipient, level)?
     };
-
     rewrite_file_with_new_header(path, &new_header, old_header_size)?;
     ui.output(100);
     Ok(())
@@ -317,8 +325,9 @@ pub fn arsenic_add_recipient(
 
 /// Remove the asymmetric keyslot at position `index` from an Arsenic file.
 ///
-/// Requires the symmetric `password` to authenticate the operation.  Rewrites
-/// the file with the shrunken header; the payload is streamed unchanged.
+/// `index` uses the numbering of [`arsenic_list_recipients`]: ML-KEM-768
+/// slots first, then ML-KEM-1024 slots. Requires a password of the file.
+/// Rewrites the file with the smaller header; the payload is copied unchanged.
 pub fn arsenic_remove_recipient(
     path: &std::path::Path,
     password: &Secret<String>,
@@ -337,7 +346,8 @@ pub fn arsenic_remove_recipient(
     Ok(())
 }
 
-/// Return the ephemeral public keys of all asymmetric keyslots in the file.
+/// Return the ephemeral public keys of all asymmetric keyslots in the file
+/// (ML-KEM-768 slots first, then ML-KEM-1024 slots).
 ///
 /// These identify slots (by position) but are NOT the recipients' own public keys.
 pub fn arsenic_list_recipients(path: &std::path::Path) -> Result<Vec<[u8; 32]>, CoreErr> {
@@ -346,29 +356,26 @@ pub fn arsenic_list_recipients(path: &std::path::Path) -> Result<Vec<[u8; 32]>, 
 }
 
 /// Rewrite `path` replacing the first `old_header_size` bytes with `new_header`,
-/// streaming the rest of the file unchanged.  Uses a temp file + atomic rename.
+/// copying the rest of the file unchanged. Uses a sibling temporary file and
+/// an atomic rename, so the original is intact until the new file is complete.
 fn rewrite_file_with_new_header(
     path: &std::path::Path,
     new_header: &[u8],
     old_header_size: usize,
 ) -> Result<(), CoreErr> {
-    let tmp_path = path.with_extension("arsn.tmp");
+    // A name next to the target, so the rename stays on one filesystem.
+    let tmp_path = {
+        let mut name = path.file_name().unwrap_or_default().to_os_string();
+        name.push(format!(".{:016x}.tmp", u64::from_le_bytes(random_bytes_32()[..8].try_into().unwrap_or_default())));
+        path.with_file_name(name)
+    };
 
     let result = (|| -> Result<(), CoreErr> {
-        let mut tmp = File::create(&tmp_path)?;
+        let mut tmp = OpenOptions::new().write(true).create_new(true).open(&tmp_path)?;
         tmp.write_all(new_header)?;
-
         let mut src = File::open(path)?;
         src.seek(SeekFrom::Start(old_header_size as u64))?;
-
-        let mut chunk = vec![0u8; 4 * 1024 * 1024];
-        loop {
-            let n = src.read(&mut chunk)?;
-            if n == 0 {
-                break;
-            }
-            tmp.write_all(&chunk[..n])?;
-        }
+        std::io::copy(&mut src, &mut tmp)?;
         tmp.sync_all()?;
         Ok(())
     })();
@@ -377,11 +384,16 @@ fn rewrite_file_with_new_header(
         let _ = remove_file(&tmp_path);
         return result;
     }
-
-    std::fs::rename(&tmp_path, path).map_err(CoreErr::IOError)
+    if let Err(e) = std::fs::rename(&tmp_path, path) {
+        let _ = remove_file(&tmp_path);
+        return Err(CoreErr::IOError(e));
+    }
+    Ok(())
 }
 
 /// Decrypt an Arsenic file using a `KeyEntry` (X25519 + independent ML-KEM seed).
+// Public API (also used by the FFI crate): the progress handler is owned.
+#[allow(clippy::needless_pass_by_value)]
 pub fn arsenic_main_routine_with_key(
     filename: Option<&str>,
     out_file: Option<&str>,
@@ -424,10 +436,12 @@ pub fn is_arsenic_file(path: &std::path::Path) -> bool {
     };
     let mut magic = [0u8; 4];
     f.read_exact(&mut magic)
-        .is_ok_and(|_| magic == arsenic::header::MAGIC)
+        .is_ok_and(|()| magic == arsenic::header::MAGIC)
 }
 
 /// Encrypt or decrypt a file in Arsenic format.
+// Public API (also used by the FFI crate): the progress handler is owned.
+#[allow(clippy::needless_pass_by_value)]
 pub fn arsenic_main_routine(
     direction: &Direction,
     filename: Option<&str>,
@@ -479,19 +493,14 @@ pub fn arsenic_main_routine(
     Ok(start.elapsed().as_secs_f64())
 }
 
-// ── Feature 4: extra passphrase slot management ──────────────────────────────
+// ── Password slot management ──────────────────────────────────────────────────
 
-/// Add an extra passphrase keyslot to an Arsenic file.
+/// Add a password to an Arsenic file.
 ///
-/// `existing_password` authenticates via any existing slot.
-/// On success, the file can be decrypted with either password.
-///
-/// # Limits
-/// At most `MAX_EXTRA_PASSPHRASE_SLOTS` (15) extra slots.
-///
-/// # DoS note
-/// Extra slots do not benefit from HeaderMAC fast-fail — wrong password
-/// attempts pay the full Argon2id cost for each extra slot.
+/// `existing_password` may be any password of the file. Afterwards the file
+/// opens with either one. At most [`MAX_PASSWORD_SLOTS`] passwords per file.
+/// All of them share the file's Argon2id salt and parameters, so a wrong
+/// password costs one Argon2id run whatever their number.
 pub fn arsenic_add_passphrase(
     path: &std::path::Path,
     existing_password: &Secret<String>,
@@ -508,50 +517,31 @@ pub fn arsenic_add_passphrase(
     Ok(())
 }
 
-/// Remove an extra passphrase keyslot from an Arsenic file.
+/// Remove a password from an Arsenic file.
 ///
-/// `primary_password` authenticates the operation (HeaderMAC check).
-/// `password_to_remove` identifies the extra slot to drop.
-/// The primary slot cannot be removed.
+/// `password` authenticates the operation and may be any password of the
+/// file, including `password_to_remove` itself. The last key slot of a file
+/// (password or recipient) cannot be removed.
 pub fn arsenic_remove_passphrase(
     path: &std::path::Path,
-    primary_password: &Secret<String>,
+    password: &Secret<String>,
     password_to_remove: &Secret<String>,
     ui: &dyn Ui,
 ) -> Result<(), CoreErr> {
     ui.output(0);
     let (new_header, old_header_size) = {
         let mut f = File::open(path)?;
-        arsenic::build_header_with_removed_passphrase(&mut f, primary_password, password_to_remove)?
+        arsenic::build_header_with_removed_passphrase(&mut f, password, password_to_remove)?
     };
     rewrite_file_with_new_header(path, &new_header, old_header_size)?;
     ui.output(100);
     Ok(())
 }
 
-/// Return the number of extra passphrase keyslots (0 = only primary slot).
+/// Return the number of password slots of the file (0 = keypairs only).
 ///
-/// Reads the public header without decryption — no password required.
-/// The extra-slot count is not security-sensitive (it is visible in the header).
+/// Reads the header without any key; the count is visible to anyone.
 pub fn arsenic_list_passphrases(path: &std::path::Path) -> Result<usize, CoreErr> {
-    use arsenic::header::{parse_header_bytes, parse_envelope, MIN_HEADER_TOTAL_SIZE};
-    use crate::arsenic::MAX_HEADER_TOTAL_SIZE;
-
     let mut f = File::open(path)?;
-    let mut prefix = [0u8; 13];
-    f.read_exact(&mut prefix)?;
-    let header_total_size =
-        u32::from_le_bytes([prefix[9], prefix[10], prefix[11], prefix[12]]) as usize;
-    if header_total_size < MIN_HEADER_TOTAL_SIZE
-        || header_total_size > MAX_HEADER_TOTAL_SIZE as usize
-    {
-        return Err(CoreErr::DecryptFail("Invalid header_total_size".into()));
-    }
-    let mut header_buf = vec![0u8; header_total_size];
-    header_buf[..13].copy_from_slice(&prefix);
-    f.read_exact(&mut header_buf[13..])?;
-
-    let (_, _, _, enc_env_region) = parse_header_bytes(&header_buf)?;
-    let envelope = parse_envelope(&enc_env_region)?;
-    Ok(envelope.extra_pass_slots.len())
+    Ok(arsenic::read_header(&mut f)?.password_slots.len())
 }

@@ -1,3 +1,9 @@
+// Benchmark helper: fixed valid parameters, throughput figures only.
+#![allow(
+    clippy::unwrap_used, clippy::expect_used, clippy::missing_panics_doc,
+    clippy::cast_possible_truncation, clippy::cast_possible_wrap, clippy::cast_precision_loss,
+)]
+
 use std::time::Instant;
 
 use argon2::{Algorithm, Argon2, Params, Version};
@@ -35,8 +41,7 @@ impl CipherBenchResult {
 pub fn best_combination(results: &[CipherBenchResult]) -> (CipherId, CipherId) {
     let best = results
         .first()
-        .map(|r| r.cipher)
-        .unwrap_or(CipherId::DeoxysII256);
+        .map_or(CipherId::DeoxysII256, |r| r.cipher);
     (best, best)
 }
 

@@ -24,7 +24,7 @@ pub struct KeyEntry {
     pub mlkem_seed: [u8; 64],
     /// X25519 public key.
     pub public_key: [u8; 32],
-    /// ML-KEM-768 encapsulation key (1184 bytes, derived from mlkem_seed).
+    /// ML-KEM-768 encapsulation key (1184 bytes, derived from `mlkem_seed`).
     pub mlkem_public_key: Box<[u8; 1184]>,
     /// Path of the `.key` file on disk (`None` before first save).
     pub file_path: Option<PathBuf>,
@@ -76,6 +76,8 @@ pub fn pubkey_short(bytes: &[u8; 32]) -> String {
 
 // ── Platform paths ────────────────────────────────────────────────────────────
 
+// `None` is only possible on Windows/macOS; the signature is shared.
+#[allow(clippy::unnecessary_wraps)]
 fn config_base() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     return std::env::var("APPDATA").ok().map(Into::into);
@@ -90,12 +92,10 @@ fn config_base() -> Option<PathBuf> {
     {
         Some(
             std::env::var("XDG_CONFIG_HOME")
-                .ok()
-                .map(PathBuf::from)
-                .unwrap_or_else(|| {
+                .ok().map_or_else(|| {
                     let home: PathBuf = std::env::var("HOME").unwrap_or_default().into();
                     home.join(".config")
-                }),
+                }, PathBuf::from),
         )
     }
 }
@@ -146,7 +146,7 @@ fn unix_to_datetime(mut secs: u64) -> (u64, u64, u64, u64, u64, u64) {
     (y, mo, rem + 1, h, mi, s)
 }
 
-fn is_leap(y: u64) -> bool { (y % 4 == 0 && y % 100 != 0) || y % 400 == 0 }
+const fn is_leap(y: u64) -> bool { (y.is_multiple_of(4) && !y.is_multiple_of(100)) || y.is_multiple_of(400) }
 
 // ── Identity file format ──────────────────────────────────────────────────────
 
@@ -171,6 +171,8 @@ pub fn serialize_pubkey(entry: &KeyEntry) -> String {
 ///
 /// Reads encryption keys and, if present, the `# sign-key:` ML-DSA-65 verifying
 /// key. Private key / seed lines are silently ignored.
+// Public API shared with `parse_identity`: the path is taken by value.
+#[allow(clippy::needless_pass_by_value)]
 pub fn parse_pubkey_file(content: &str, path: std::path::PathBuf) -> Option<ContactEntry> {
     let mut name = String::new();
     let mut public_key: Option<[u8; 32]>   = None;
@@ -263,7 +265,7 @@ pub fn load_keystore() -> Vec<KeyEntry> {
     let Ok(entries) = std::fs::read_dir(&dir) else { return vec![] };
     let mut keys: Vec<KeyEntry> = entries
         .flatten()
-        .filter(|e| e.path().extension().map(|x| x == "key").unwrap_or(false))
+        .filter(|e| e.path().extension().is_some_and(|x| x == "key"))
         .filter_map(|e| {
             let path = e.path();
             let content = std::fs::read_to_string(&path).ok()?;
@@ -286,9 +288,13 @@ pub fn save_key(entry: &mut KeyEntry) -> Result<(), String> {
     Ok(())
 }
 
-pub fn delete_key(entry: &KeyEntry) {
-    if let Some(ref path) = entry.file_path {
-        let _ = std::fs::remove_file(path);
+/// Remove the `.key` file of `entry`. A key that was never saved, or whose
+/// file is already gone, counts as deleted.
+pub fn delete_key(entry: &KeyEntry) -> std::io::Result<()> {
+    let Some(ref path) = entry.file_path else { return Ok(()) };
+    match std::fs::remove_file(path) {
+        Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e),
+        _ => Ok(()),
     }
 }
 
@@ -337,9 +343,17 @@ pub fn load_contacts() -> Vec<ContactEntry> {
     parse_contacts(&data)
 }
 
-pub fn save_contacts(contacts: &[ContactEntry]) {
-    let Some(path) = contacts_path() else { return };
-    let _ = std::fs::write(path, serialize_contacts(contacts));
+/// Persist the contact list. Written to a temporary file first and renamed,
+/// so a failed write never truncates the existing list.
+pub fn save_contacts(contacts: &[ContactEntry]) -> std::io::Result<()> {
+    let path = contacts_path().ok_or_else(|| {
+        std::io::Error::new(std::io::ErrorKind::NotFound, "cannot determine config directory")
+    })?;
+    let tmp = path.with_extension("tmp");
+    std::fs::write(&tmp, serialize_contacts(contacts))?;
+    std::fs::rename(&tmp, &path).inspect_err(|_| {
+        let _ = std::fs::remove_file(&tmp);
+    })
 }
 
 fn parse_contacts(data: &str) -> Vec<ContactEntry> {

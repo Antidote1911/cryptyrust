@@ -1,11 +1,15 @@
+// egui layout code is one long declarative block per panel; splitting it by
+// line count would only scatter the layout.
+#![allow(clippy::too_many_lines)]
+
 use eframe::egui;
 
 use crate::app::CryptyApp;
-use crate::file_utils::{arsenic_strength_label, cipher_short_label, is_cryptyrust_file, Mode};
-use crate::job::JobState;
+use crate::file_utils::{arsenic_strength_label, cipher_short_label, FileMeta, Mode};
+use crate::job::{lock, FileStatus, JobState};
+use std::collections::HashMap;
+use std::path::PathBuf;
 use crate::ui::components;
-use std::sync::atomic::AtomicBool;
-use std::sync::Arc;
 
 pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool, popup_open: bool) {
     egui::Panel::top("menubar").show_inside(ui, |ui| {
@@ -119,8 +123,14 @@ pub fn render_action_bar(
 
     let can_act = !app.files.is_empty() && !app.mixed && !is_running && !popup_open;
 
-    let can_change_pw =
-        app.files.len() == 1 && is_cryptyrust_file(&app.files[0]) && !is_running && !popup_open;
+    // Binary .arsn only: an armored file has no header to rewrite in place.
+    let can_change_pw = app.files.len() == 1
+        && app
+            .file_meta
+            .get(&app.files[0])
+            .is_some_and(|m| m.encrypted && !m.armored)
+        && !is_running
+        && !popup_open;
 
     let mut do_open_popup = false;
     let mut do_change_pw = false;
@@ -264,19 +274,24 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
         match &app.job {
             JobState::Running {
                 progress,
-                current_file,
                 processing_files,
+                file_statuses,
                 cancel_flags,
                 cancel_all,
+                cancellable,
                 ..
             } => {
-                render_processing_view(
+                let statuses = lock(file_statuses).clone();
+                let file_progress = lock(progress);
+                components::render_processing_table(
                     ui,
-                    progress,
-                    current_file,
                     processing_files,
+                    &app.file_meta,
+                    &file_progress,
+                    &statuses,
                     cancel_flags,
                     cancel_all,
+                    *cancellable,
                 );
             }
             JobState::Completed {
@@ -284,7 +299,8 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
                 statuses,
                 success_label,
             } => {
-                completed_remove = render_completed_view(ui, files, statuses, success_label);
+                completed_remove =
+                    render_completed_view(ui, files, &app.file_meta, statuses, success_label);
                 // Sender identity banner — offer to add as contact
                 let sender_banner = app.pending_contact_from_file.as_ref().map(|p| p.name.clone());
                 if let Some(sender_name) = sender_banner {
@@ -294,10 +310,16 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
                     let mut do_dismiss = false;
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(format!("📨 De : {sender_name}  — ajouter aux contacts ?"))
-                                .color(color),
+                            egui::RichText::new(format!(
+                                "📨 From: {sender_name} (unverified) — add to contacts?"
+                            ))
+                            .color(color),
+                        )
+                        .on_hover_text(
+                            "This name is declared by whoever made the file and is not authenticated.\n\
+                             Check the public key through another channel before trusting it.",
                         );
-                        if ui.button("Ajouter").clicked() { do_add = true; }
+                        if ui.button("Add").clicked() { do_add = true; }
                         if ui.button("✕").clicked()       { do_dismiss = true; }
                     });
                     if do_add     { app.confirm_add_contact_from_file(); }
@@ -325,41 +347,22 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
     }
 }
 
-fn render_processing_view(
-    ui: &mut egui::Ui,
-    progress: &std::sync::Arc<std::sync::Mutex<std::collections::HashMap<usize, i32>>>,
-    current_file: &std::sync::Arc<std::sync::Mutex<usize>>,
-    processing_files: &[std::path::PathBuf],
-    cancel_flags: &[Arc<AtomicBool>],
-    cancel_all: &Arc<AtomicBool>,
-) {
-    let current_idx = *current_file.lock().unwrap();
-    let file_progress = progress.lock().unwrap();
-    components::render_processing_table(
-        ui,
-        processing_files,
-        &file_progress,
-        current_idx,
-        cancel_flags,
-        cancel_all,
-    );
-}
-
 fn render_completed_view(
     ui: &mut egui::Ui,
-    files: &[std::path::PathBuf],
-    statuses: &[crate::job::FileStatus],
+    files: &[PathBuf],
+    meta: &HashMap<PathBuf, FileMeta>,
+    statuses: &[FileStatus],
     success_label: &str,
 ) -> Option<usize> {
-    components::render_completed_table(ui, files, statuses, success_label)
+    components::render_completed_table(ui, files, meta, statuses, success_label)
 }
 
-fn render_drop_zone(ui: &mut egui::Ui, avail: egui::Rect, hovering: bool) {
+fn render_drop_zone(ui: &egui::Ui, avail: egui::Rect, hovering: bool) {
     if hovering {
         ui.painter().rect_stroke(
             avail,
             4.0,
-            egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+            egui::Stroke::new(2.0_f32, ui.visuals().selection.stroke.color),
             egui::StrokeKind::Inside,
         );
     }
@@ -378,7 +381,7 @@ fn render_file_list(ui: &mut egui::Ui, avail: egui::Rect, hovering: bool, app: &
         components::render_warning_banner(ui);
     }
 
-    if let Some(idx) = components::render_file_table(ui, &app.files) {
+    if let Some(idx) = components::render_file_table(ui, &app.files, &app.file_meta) {
         app.remove_file(idx);
     }
 
@@ -386,7 +389,7 @@ fn render_file_list(ui: &mut egui::Ui, avail: egui::Rect, hovering: bool, app: &
         ui.painter().rect_stroke(
             avail,
             0.0,
-            egui::Stroke::new(2.0, ui.visuals().selection.stroke.color),
+            egui::Stroke::new(2.0_f32, ui.visuals().selection.stroke.color),
             egui::StrokeKind::Inside,
         );
     }

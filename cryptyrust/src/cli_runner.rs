@@ -1,5 +1,5 @@
 use arsenic::{
-    arsenic_add_recipient, arsenic_find_matching_key, arsenic_find_slot_for_key,
+    arsenic_add_recipient_with_level, arsenic_find_matching_key, arsenic_find_slot_for_key,
     arsenic_list_recipients, arsenic_main_routine, arsenic_main_routine_with_key,
     arsenic_rekey, arsenic_remove_recipient, is_arsenic_file,
     arsenic_add_passphrase, arsenic_remove_passphrase, arsenic_list_passphrases,
@@ -14,7 +14,10 @@ use arsenic::{
     COMPRESSION_LEAKS_SIZE,
 };
 use clap::Parser;
-use crate::cli::{Cli, KeygenCli, RecipientsCli, RecipientsAction, PassphraseCli, PassphraseAction};
+use crate::file_utils::{check_new_password, cipher_label, is_armored_file};
+use crate::cli::{
+    Cli, KemLevelArg, KeygenCli, PassphraseAction, PassphraseCli, RecipientsAction, RecipientsCli,
+};
 use std::{
     env,
     io::{self, BufRead, Write},
@@ -25,60 +28,65 @@ use indicatif::{ProgressBar, ProgressStyle};
 
 const ARSENIC_EXTENSION: &str = ".arsn";
 
+/// Shown after a password is changed or removed: the file key stays the same,
+/// so this is not a revocation.
+const OLD_COPIES_NOTE: &str = "Note: copies of this file made earlier still open with the old password. \
+     If that password is compromised, decrypt and re-encrypt to a new file.";
+const ARMOR_EXTENSION: &str = ".arsn.armor";
+
 // ── Progress UI ───────────────────────────────────────────────────────────────
 
+fn progress_bar() -> ProgressBar {
+    let pb = ProgressBar::new(100);
+    pb.set_style(
+        ProgressStyle::with_template("{spinner:.green} [{wide_bar:.cyan/blue}] {pos}%")
+            .unwrap_or_else(|_| ProgressStyle::default_bar())
+            .progress_chars("#>-"),
+    );
+    pb
+}
+
+/// Progress bar that prints `done_message` when the operation reaches 100 %.
 struct ProgressUpdater {
-    mode: Direction,
+    done_message: &'static str,
     pb: ProgressBar,
 }
 
 impl ProgressUpdater {
-    fn new(mode: Direction) -> Self {
-        let pb = ProgressBar::new(100);
-        pb.set_style(
-            ProgressStyle::with_template("{spinner:.green} [{wide_bar:.cyan/blue}] {pos}%")
-                .unwrap_or_else(|_| ProgressStyle::default_bar())
-                .progress_chars("#>-"),
-        );
-        Self { mode, pb }
+    fn new(done_message: &'static str) -> Self {
+        Self { done_message, pb: progress_bar() }
+    }
+
+    fn for_direction(mode: &Direction) -> Self {
+        Self::new(match mode {
+            Direction::Encrypt => "Encrypted",
+            Direction::Decrypt => "Decrypted",
+        })
     }
 }
 
 impl Ui for ProgressUpdater {
     fn output(&self, percentage: i32) {
-        self.pb.set_position(percentage as u64);
+        self.pb.set_position(u64::try_from(percentage).unwrap_or(0));
         if percentage >= 100 {
-            let msg = match self.mode {
-                Direction::Encrypt => "Encrypted",
-                Direction::Decrypt => "Decrypted",
-            };
-            self.pb.finish_with_message(msg);
+            self.pb.finish_with_message(self.done_message);
         }
     }
 }
 
-struct RekeyProgress {
-    pb: ProgressBar,
+/// For header-only operations that finish instantly.
+struct NoProgress;
+impl Ui for NoProgress {
+    fn output(&self, _: i32) {}
 }
 
-impl RekeyProgress {
-    fn new() -> Self {
-        let pb = ProgressBar::new(100);
-        pb.set_style(
-            ProgressStyle::with_template("{spinner:.green} [{wide_bar:.cyan/blue}] {pos}%")
-                .unwrap_or_else(|_| ProgressStyle::default_bar())
-                .progress_chars("#>-"),
-        );
-        Self { pb }
-    }
-}
-
-impl Ui for RekeyProgress {
-    fn output(&self, percentage: i32) {
-        self.pb.set_position(percentage as u64);
-        if percentage >= 100 {
-            self.pb.finish_with_message("Password changed");
-        }
+/// `path` must be an existing regular file.
+fn require_file(path: &str) -> Result<&Path> {
+    let p = Path::new(path);
+    if p.is_file() {
+        Ok(p)
+    } else {
+        Err(anyhow!("Invalid filename: {path}"))
     }
 }
 
@@ -88,19 +96,19 @@ pub fn run() {
     // Dispatch `cryptyrust keygen [...]` before the main clap parser so the
     // existing required-mode group does not interfere.
     let raw: Vec<String> = std::env::args().collect();
-    if raw.get(1).map(|s| s.as_str()) == Some("keygen") {
+    if raw.get(1).map(std::string::String::as_str) == Some("keygen") {
         let argv: Vec<String> = std::iter::once("cryptyrust keygen".to_string())
             .chain(raw.into_iter().skip(2))
             .collect();
         let cli = KeygenCli::parse_from(argv);
-        if let Err(e) = run_keygen(cli) {
+        if let Err(e) = run_keygen(&cli) {
             eprintln!("\n{e}");
             std::process::exit(1);
         }
         return;
     }
 
-    if raw.get(1).map(|s| s.as_str()) == Some("passphrase") {
+    if raw.get(1).map(std::string::String::as_str) == Some("passphrase") {
         let argv: Vec<String> = std::iter::once("cryptyrust passphrase".to_string())
             .chain(raw.into_iter().skip(2))
             .collect();
@@ -112,7 +120,7 @@ pub fn run() {
         return;
     }
 
-    if raw.get(1).map(|s| s.as_str()) == Some("recipients") {
+    if raw.get(1).map(std::string::String::as_str) == Some("recipients") {
         let argv: Vec<String> = std::iter::once("cryptyrust recipients".to_string())
             .chain(raw.into_iter().skip(2))
             .collect();
@@ -133,7 +141,10 @@ pub fn run() {
 
     if app.rekey().is_some() {
         match run_rekey(&app) {
-            Ok(path) => println!("\nSuccess! Password changed for {path}"),
+            Ok(path) => {
+                println!("\nSuccess! Password changed for {path}");
+                println!("{OLD_COPIES_NOTE}");
+            }
             Err(e) => { eprintln!("\n{e}"); std::process::exit(1); }
         }
     } else {
@@ -155,11 +166,8 @@ pub fn run() {
 // ── Rekey ─────────────────────────────────────────────────────────────────────
 
 fn run_rekey(app: &Cli) -> Result<String> {
-    let f = app.rekey().unwrap();
-    let path = Path::new(f);
-    if !(path.exists() && path.is_file()) {
-        return Err(anyhow!("Invalid filename: {f}"));
-    }
+    let f = app.rekey().ok_or_else(|| anyhow!("no file given"))?;
+    let path = require_file(f)?;
     if !is_arsenic_file(path) {
         return Err(anyhow!("{f} is not a valid Arsenic (.arsn) file"));
     }
@@ -171,15 +179,13 @@ fn run_rekey(app: &Cli) -> Result<String> {
         rpassword::prompt_password("New password (minimum 8 characters): ")
             .context("could not read new password")?,
     );
-    if new_password.expose().len() < 8 {
-        return Err(anyhow!("new password must be at least 8 characters"));
-    }
+    check_new_password(new_password.expose()).map_err(|e| anyhow!(e))?;
     let confirm = rpassword::prompt_password("Confirm new password: ")
         .context("could not read password confirmation")?;
     if new_password.expose() != &confirm {
         return Err(anyhow!("new passwords do not match"));
     }
-    arsenic_rekey(path, &old_password, &new_password, &RekeyProgress::new())
+    arsenic_rekey(path, &old_password, &new_password, &ProgressUpdater::new("Password changed"))
         .map_err(|e| anyhow!(e))?;
     Ok(f.to_string())
 }
@@ -187,40 +193,29 @@ fn run_rekey(app: &Cli) -> Result<String> {
 // ── Encrypt / Decrypt ─────────────────────────────────────────────────────────
 
 fn run_crypt(app: &Cli) -> Result<(Option<String>, Direction, f64)> {
-    let direction = if app.encrypt().is_some() {
-        Direction::Encrypt
-    } else {
-        Direction::Decrypt
+    let (direction, f) = match (app.encrypt(), app.decrypt()) {
+        (Some(f), _) => (Direction::Encrypt, f),
+        (None, Some(f)) => (Direction::Decrypt, f),
+        (None, None) => return Err(anyhow!("no file given")),
     };
+    require_file(f)?;
+    let filename = Some(f);
 
-    let filename = if app.encrypt().is_some() {
-        let f = app.encrypt().unwrap();
-        let p = Path::new(f);
-        if !(p.exists() && p.is_file()) {
-            return Err(anyhow!("Invalid filename: {f}"));
-        }
-        Some(f)
-    } else {
-        let f = app.decrypt().unwrap();
-        let p = Path::new(f);
-        if !(p.exists() && p.is_file()) {
-            return Err(anyhow!("Invalid filename: {f}"));
-        }
-        Some(f)
-    };
-
-    let output_path = generate_output_path(&direction, filename, app.output())
-        .unwrap()
+    // With --armor the path computed here is the final armored file, so the
+    // "already exists" / unique-name rules apply to what is really written.
+    let armored = matches!(direction, Direction::Encrypt) && app.armor();
+    let output_path = generate_output_path(&direction, filename, app.output(), armored)
+        .map_err(|e| anyhow!(e))?
         .to_str()
         .ok_or_else(|| anyhow!("could not convert output path to string"))?
         .to_string();
 
     let out_str = output_path.as_str();
-    let ui = Box::new(ProgressUpdater::new(direction.clone()));
+    let ui = Box::new(ProgressUpdater::for_direction(&direction));
 
     let duration = match direction {
         Direction::Encrypt => run_encrypt(app, filename, out_str, ui)?,
-        Direction::Decrypt => run_decrypt(app, filename.unwrap(), out_str, ui)?,
+        Direction::Decrypt => run_decrypt(app, f, out_str, ui)?,
     };
 
     Ok((Some(output_path), direction, duration))
@@ -248,8 +243,8 @@ fn run_encrypt(
         && app.password().is_none()
         && app.passwordfile().is_none()
     {
-        let r = arsenic::random_bytes_32();
-        Secret::new(r.iter().map(|b| format!("{b:02x}")).collect())
+        // Recipients only: no password slot in the file.
+        Secret::new(String::new())
     } else {
         get_password_for_encrypt(app)?
     };
@@ -270,27 +265,54 @@ fn run_encrypt(
         ..ArsenicParams::from(app.strength())
     };
 
+    if !app.armor() {
+        return arsenic_main_routine(
+            &Direction::Encrypt,
+            filename,
+            Some(out_str),
+            &password,
+            ui,
+            Some(params),
+        )
+        .map_err(|e| anyhow!(e));
+    }
+
+    // --armor: encrypt to a temporary file next to the output, then write the
+    // armored text to `out_str`. `create_new` guarantees an existing file is
+    // never overwritten; the temporary file is removed on every exit path.
+    let dir = match Path::new(out_str).parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    };
+    let tmp = tempfile::Builder::new()
+        .prefix(".cryptyrust-")
+        .suffix(".arsn.tmp")
+        .tempfile_in(dir)
+        .with_context(|| format!("cannot create temporary file in {}", dir.display()))?;
+    let tmp_str = tmp
+        .path()
+        .to_str()
+        .ok_or_else(|| anyhow!("could not convert temporary path to string"))?;
     let elapsed = arsenic_main_routine(
         &Direction::Encrypt,
         filename,
-        Some(out_str),
+        Some(tmp_str),
         &password,
         ui,
         Some(params),
     )
     .map_err(|e| anyhow!(e))?;
 
-    // If --armor: read the encrypted file, armor it, write to <out_str>.armor
-    if app.armor() {
-        let ct = std::fs::read(out_str)
-            .with_context(|| format!("cannot read {out_str} for armoring"))?;
-        let armored = armor(&ct);
-        let armor_path = format!("{out_str}.armor");
-        std::fs::write(&armor_path, armored.as_bytes())
-            .with_context(|| format!("cannot write armor file {armor_path}"))?;
-        std::fs::remove_file(out_str)
-            .with_context(|| format!("cannot remove {out_str}"))?;
-        eprintln!("Armored output: {armor_path}");
+    let ct = std::fs::read(tmp.path()).context("cannot read ciphertext for armoring")?;
+    let mut out = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(out_str)
+        .with_context(|| format!("cannot create armor file {out_str}"))?;
+    if let Err(e) = out.write_all(armor(&ct).as_bytes()) {
+        drop(out);
+        let _ = std::fs::remove_file(out_str);
+        return Err(anyhow!(e).context(format!("cannot write armor file {out_str}")));
     }
 
     Ok(elapsed)
@@ -306,13 +328,15 @@ fn run_decrypt(
 ) -> Result<f64> {
     // Auto-detect ASCII armor: if the file starts with the armor header, dearmor
     // to a memory buffer and decrypt from there.
-    let raw_bytes = std::fs::read(filename)
-        .with_context(|| format!("cannot read {filename}"))?;
-    if raw_bytes.starts_with(b"-----BEGIN ARSENIC") {
+    // Only the first bytes are read to decide: a binary file is streamed, never
+    // loaded whole.
+    if is_armored_file(Path::new(filename)) {
+        let raw_bytes = std::fs::read(filename)
+            .with_context(|| format!("cannot read {filename}"))?;
         let armor_str = std::str::from_utf8(&raw_bytes)
             .map_err(|_| anyhow!("armor file is not valid UTF-8"))?;
         let ct = dearmor(armor_str).map_err(|e| anyhow!("dearmor failed: {e}"))?;
-        return decrypt_from_bytes(app, ct, out_str, ui);
+        return decrypt_from_bytes(app, &ct, out_str, &ui);
     }
 
     let path = Path::new(filename);
@@ -323,15 +347,7 @@ fn run_decrypt(
         .filter_map(|p| load_identity_file(Path::new(p)))
         .collect();
 
-    if !explicit_identities.is_empty() {
-        if let Some(idx) = arsenic_find_matching_key(path, &explicit_identities) {
-            eprintln!("Decrypting with identity: {}", explicit_identities[idx].name);
-            return arsenic_main_routine_with_key(
-                Some(filename), Some(out_str), &explicit_identities[idx], ui,
-            ).map_err(|e| anyhow!(e));
-        }
-        return Err(anyhow!("none of the provided identity files can decrypt this file"));
-    } else {
+    if explicit_identities.is_empty() {
         let keystore = load_keystore();
         if !keystore.is_empty() {
             if let Some(idx) = arsenic_find_matching_key(path, &keystore) {
@@ -341,6 +357,14 @@ fn run_decrypt(
                 ).map_err(|e| anyhow!(e));
             }
         }
+    } else {
+        if let Some(idx) = arsenic_find_matching_key(path, &explicit_identities) {
+            eprintln!("Decrypting with identity: {}", explicit_identities[idx].name);
+            return arsenic_main_routine_with_key(
+                Some(filename), Some(out_str), &explicit_identities[idx], ui,
+            ).map_err(|e| anyhow!(e));
+        }
+        return Err(anyhow!("none of the provided identity files can decrypt this file"));
     }
 
     let password = get_password_for_decrypt(app)?;
@@ -358,19 +382,15 @@ fn run_decrypt(
 // ── Password helpers ──────────────────────────────────────────────────────────
 
 fn get_password_for_encrypt(app: &Cli) -> Result<Secret<String>> {
-    if let Some(p) = app.password() {
-        return Ok(Secret::new(p));
-    }
-    if let Some(f) = app.passwordfile() {
-        let s = std::fs::read_to_string(f)
-            .with_context(|| format!("cannot read password file: {f}"))?;
-        return Ok(Secret::new(s));
+    // The minimum length applies however the new password is given.
+    if app.password().is_some() || app.passwordfile().is_some() {
+        let pw = get_password_for_decrypt(app)?;
+        check_new_password(pw.expose()).map_err(|e| anyhow!(e))?;
+        return Ok(pw);
     }
     let pw = rpassword::prompt_password("Password (minimum 8 characters): ")
         .context("could not read password")?;
-    if pw.len() < 8 {
-        return Err(anyhow!("password must be at least 8 characters"));
-    }
+    check_new_password(&pw).map_err(|e| anyhow!(e))?;
     let confirm = rpassword::prompt_password("Confirm password: ")
         .context("could not confirm password")?;
     if pw != confirm {
@@ -380,16 +400,7 @@ fn get_password_for_encrypt(app: &Cli) -> Result<Secret<String>> {
 }
 
 fn get_password_for_decrypt(app: &Cli) -> Result<Secret<String>> {
-    if let Some(p) = app.password() {
-        return Ok(Secret::new(p));
-    }
-    if let Some(f) = app.passwordfile() {
-        let s = std::fs::read_to_string(f)
-            .with_context(|| format!("cannot read password file: {f}"))?;
-        return Ok(Secret::new(s));
-    }
-    let pw = rpassword::prompt_password("Password: ").context("could not read password")?;
-    Ok(Secret::new(pw))
+    resolve_password(app.password(), app.passwordfile().map(str::to_owned), "Password: ")
 }
 
 // ── Output path helpers ───────────────────────────────────────────────────────
@@ -398,19 +409,41 @@ fn generate_output_path(
     mode: &Direction,
     input: Option<&str>,
     output: Option<&str>,
+    armored: bool,
 ) -> Result<PathBuf, String> {
     if let Some(output) = output {
         let p = PathBuf::from(output);
-        if p.exists() && p.is_dir() {
-            generate_default_filename(mode, p, input)
-        } else if p.exists() && p.is_file() {
-            Err(format!("Error: file {p:?} already exists."))
+        if p.is_dir() {
+            // Only the input's file name goes into the chosen directory: pushing
+            // the whole input path would ignore `-o` for absolute inputs.
+            let name = input
+                .map(|i| {
+                    Path::new(i)
+                        .file_name()
+                        .map(|n| n.to_string_lossy().into_owned())
+                        .ok_or_else(|| format!("Invalid filename: {i}"))
+                })
+                .transpose()?;
+            return generate_default_filename(mode, p, name.as_deref(), armored);
+        }
+        // Explicit file: with --armor the armored text goes to `<output>.armor`.
+        let p = if armored {
+            let mut s = p.into_os_string();
+            s.push(".armor");
+            PathBuf::from(s)
+        } else {
+            p
+        };
+        if p.exists() {
+            Err(format!("Error: file \"{}\" already exists.", p.display()))
         } else {
             Ok(p)
         }
     } else {
+        // No -o: the output lands next to the input (relative inputs resolve
+        // against the current directory, absolute ones keep their directory).
         let cwd = env::current_dir().map_err(|e| e.to_string())?;
-        generate_default_filename(mode, cwd, input)
+        generate_default_filename(mode, cwd, input, armored)
     }
 }
 
@@ -418,19 +451,24 @@ fn generate_default_filename(
     mode: &Direction,
     path: PathBuf,
     name: Option<&str>,
+    armored: bool,
 ) -> Result<PathBuf, String> {
     let mut path = path;
     let f = match mode {
         Direction::Encrypt => {
             let base = name.unwrap_or("encrypted").to_string();
-            format!("{base}{ARSENIC_EXTENSION}")
+            let ext = if armored { ARMOR_EXTENSION } else { ARSENIC_EXTENSION };
+            format!("{base}{ext}")
         }
         Direction::Decrypt => {
             let name = name.unwrap_or("stdin");
-            if name.ends_with(ARSENIC_EXTENSION) {
-                name.strip_suffix(ARSENIC_EXTENSION).unwrap().to_string()
+            if let Some(stripped) = name
+                .strip_suffix(ARMOR_EXTENSION)
+                .or_else(|| name.strip_suffix(ARSENIC_EXTENSION))
+            {
+                stripped.to_string()
             } else {
-                prepend("decrypted_".to_string(), name)
+                prepend("decrypted_", name)
                     .ok_or_else(|| format!("could not prepend decrypted_ to {name}"))?
             }
         }
@@ -439,27 +477,25 @@ fn generate_default_filename(
     find_filename(path).ok_or_else(|| "could not generate filename".to_string())
 }
 
+/// Return `path`, or the first free `name (N).ext` variant if it exists.
+/// `.arsn.armor` is kept together as one extension.
 fn find_filename(path: PathBuf) -> Option<PathBuf> {
-    let mut i = 1;
-    let mut path = path;
-    let backup = path.clone();
-    while path.exists() {
-        path = backup.clone();
-        let stem = path.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let ext  = path.extension().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
-        let parent = path.parent()?;
-        let new_file = if ext.is_empty() {
-            format!("{stem} ({i})")
-        } else {
-            format!("{stem} ({i}).{ext}")
-        };
-        path = [parent, Path::new(&new_file)].iter().collect();
-        i += 1;
+    if !path.exists() {
+        return Some(path);
     }
-    Some(path)
+    let parent = path.parent()?.to_path_buf();
+    let file = path.file_name()?.to_string_lossy().into_owned();
+    // Length of the extension to keep after the counter, dot included.
+    let ext_len = if file.ends_with(ARMOR_EXTENSION) {
+        ARMOR_EXTENSION.len()
+    } else {
+        Path::new(&file).extension().map_or(0, |e| e.len() + 1)
+    };
+    let (stem, ext) = file.split_at(file.len() - ext_len);
+    (1..u32::MAX).map(|i| parent.join(format!("{stem} ({i}){ext}"))).find(|p| !p.exists())
 }
 
-fn prepend(prefix: String, p: &str) -> Option<String> {
+fn prepend(prefix: &str, p: &str) -> Option<String> {
     let mut path = PathBuf::from(p);
     let file = path.file_name()?;
     let parent = path.parent()?;
@@ -471,23 +507,16 @@ fn prepend(prefix: String, p: &str) -> Option<String> {
 
 fn run_bench() {
     const PAYLOAD_MIB: usize = 32;
-    println!("Benchmarking 3 AEAD ciphers on {PAYLOAD_MIB} MiB...\n");
-
-    let pb = ProgressBar::new(100);
-    pb.set_style(
-        ProgressStyle::with_template("{spinner:.green} [{wide_bar:.cyan/blue}] {pos}%")
-            .unwrap_or_else(|_| ProgressStyle::default_bar())
-            .progress_chars("#>-"),
-    );
-
     struct BenchUi(ProgressBar);
     impl Ui for BenchUi {
         fn output(&self, pct: i32) {
-            self.0.set_position(pct as u64);
+            self.0.set_position(u64::try_from(pct).unwrap_or(0));
             if pct >= 10 { self.0.set_message("Testing ciphers..."); }
         }
     }
 
+    println!("Benchmarking 3 AEAD ciphers on {PAYLOAD_MIB} MiB...\n");
+    let pb = progress_bar();
     let results = bench_cipher_combinations(PAYLOAD_MIB, &BenchUi(pb.clone()));
     pb.finish_and_clear();
 
@@ -497,22 +526,14 @@ fn run_bench() {
         let tag = if i == 0 { "  ★ fastest" } else { "" };
         println!(
             "  {:<22} {:>9.0} MiB/s {:>9.0} MiB/s{}",
-            cipher_name(r.cipher), r.encrypt_mibps, r.decrypt_mibps, tag
+            cipher_label(r.cipher), r.encrypt_mibps, r.decrypt_mibps, tag
         );
     }
     let (hdr, pld) = best_combination(&results);
     println!("\n  Fastest:  --hdr-cipher {}  --pld-cipher {}\n", cipher_arg(hdr), cipher_arg(pld));
 }
 
-fn cipher_name(c: CipherId) -> &'static str {
-    match c {
-        CipherId::DeoxysII256       => "Deoxys-II-256",
-        CipherId::XChaCha20Poly1305 => "XChaCha20-Poly1305",
-        CipherId::Aes256GcmSiv      => "AES-256-GCM-SIV",
-    }
-}
-
-fn cipher_arg(c: CipherId) -> &'static str {
+const fn cipher_arg(c: CipherId) -> &'static str {
     match c {
         CipherId::DeoxysII256       => "deoxys-ii",
         CipherId::XChaCha20Poly1305 => "xchacha20",
@@ -522,30 +543,36 @@ fn cipher_arg(c: CipherId) -> &'static str {
 
 // ── Key management ────────────────────────────────────────────────────────────
 
-fn run_keygen(cli: KeygenCli) -> Result<()> {
-    if cli.list { return keygen_list(); }
+fn run_keygen(cli: &KeygenCli) -> Result<()> {
+    if cli.list {
+        keygen_list();
+        return Ok(());
+    }
     if !cli.to_public.is_empty() { return keygen_to_public(&cli.to_public); }
     keygen_generate(cli)
 }
 
-fn keygen_list() -> Result<()> {
+fn keygen_list() {
     let keys = load_keystore();
     if keys.is_empty() {
-        let dir = keys_dir()
-            .map(|p| p.display().to_string())
-            .unwrap_or_else(|| "unknown".into());
+        let dir = keys_dir().map_or_else(|| "unknown".into(), |p| p.display().to_string());
         println!("No keypairs found in keystore ({dir}).");
-        return Ok(());
+        return;
     }
-    println!("{:<20} {}", "Name", "Public key");
+    println!("{:<20} Public key", "Name");
     println!("{}", "─".repeat(80));
     for key in &keys {
         println!("{:<20} {}", key.name, encode_pubkey(&key.public_key));
     }
-    Ok(())
 }
 
-fn keygen_generate(cli: KeygenCli) -> Result<()> {
+fn keygen_generate(cli: &KeygenCli) -> Result<()> {
+    if cli.kem_level.is_some() {
+        eprintln!(
+            "note: `keygen --kem-level` is ignored — a keypair works with both ML-KEM levels; \
+             choose the level when encrypting (`-e FILE -R NAME --kem-level 1024`)."
+        );
+    }
     if cli.store && cli.name.is_empty() {
         return Err(anyhow!("--name is required when using --store"));
     }
@@ -555,20 +582,19 @@ fn keygen_generate(cli: KeygenCli) -> Result<()> {
 
     if cli.store {
         save_key(&mut entry).map_err(|e| anyhow!(e))?;
-        let path = entry.file_path.as_ref().unwrap();
-        eprintln!("Identity written to: {}", path.display());
-        eprintln!("Public key: {pub_enc}");
+        if let Some(path) = &entry.file_path {
+            eprintln!("Identity written to: {}", path.display());
+        }
     } else if let Some(path) = &cli.output {
         let content = serialize_identity(&entry);
         write_identity_file(path, &content)
             .with_context(|| format!("cannot write to {}", path.display()))?;
         eprintln!("Identity written to: {}", path.display());
-        eprintln!("Public key: {pub_enc}");
     } else {
         let content = serialize_identity(&entry);
         print!("{content}");
-        eprintln!("Public key: {pub_enc}");
     }
+    eprintln!("Public key: {pub_enc}");
 
     Ok(())
 }
@@ -595,8 +621,8 @@ fn keygen_to_public(sources: &[String]) -> Result<()> {
 fn run_recipients(cli: RecipientsCli) -> Result<()> {
     match cli.action {
         RecipientsAction::List { file, identities } => recipients_list(&file, &identities),
-        RecipientsAction::Add { file, recipient, password, passwordfile } =>
-            recipients_add(&file, &recipient, password, passwordfile.as_deref()),
+        RecipientsAction::Add { file, recipient, password, passwordfile, kem_level } =>
+            recipients_add(&file, &recipient, password, passwordfile.as_deref(), kem_level),
         RecipientsAction::Remove { file, identity, slot, password, passwordfile } =>
             recipients_remove(&file, identity.as_deref(), slot, password, passwordfile.as_deref()),
     }
@@ -605,14 +631,14 @@ fn run_recipients(cli: RecipientsCli) -> Result<()> {
 /// List keyslots of `file`, probing the keystore + extra identity files to name them.
 fn recipients_list(file: &str, extra_identities: &[String]) -> Result<()> {
     let path = Path::new(file);
-    if !(path.exists() && path.is_file()) {
+    if !path.is_file() {
         return Err(anyhow!("File not found: {file}"));
     }
 
     let ephemeral_keys = arsenic_list_recipients(path).map_err(|e| anyhow!(e))?;
     let n = ephemeral_keys.len();
 
-    println!("\nRecipients of '{}' — {} asymmetric keyslot(s):\n", file, n);
+    println!("\nRecipients of '{file}' — {n} asymmetric keyslot(s):\n");
 
     if n == 0 {
         println!("  (no asymmetric keyslots — file is password-only)");
@@ -664,9 +690,10 @@ fn recipients_add(
     recipient_spec: &str,
     password: Option<String>,
     passwordfile: Option<&str>,
+    kem_level: Option<KemLevelArg>,
 ) -> Result<()> {
     let path = Path::new(file);
-    if !(path.exists() && path.is_file()) {
+    if !path.is_file() {
         return Err(anyhow!("File not found: {file}"));
     }
     if !is_arsenic_file(path) {
@@ -676,12 +703,10 @@ fn recipients_add(
     let recipient = resolve_recipient(recipient_spec)
         .ok_or_else(|| anyhow!("Cannot resolve recipient '{recipient_spec}': not a contact name or key file"))?;
 
-    let pw = get_password_for_recipients(password, passwordfile)?;
+    let pw = resolve_password(password, passwordfile.map(str::to_owned), "Password: ")?;
 
-    struct NoProgress;
-    impl Ui for NoProgress { fn output(&self, _: i32) {} }
-
-    arsenic_add_recipient(path, &pw, &recipient, &NoProgress).map_err(|e| anyhow!(e))?;
+    arsenic_add_recipient_with_level(path, &pw, &recipient, kem_level.map(Into::into), &NoProgress)
+        .map_err(|e| anyhow!(e))?;
 
     println!("Recipient added to {file}.");
     Ok(())
@@ -696,7 +721,7 @@ fn recipients_remove(
     passwordfile: Option<&str>,
 ) -> Result<()> {
     let path = Path::new(file);
-    if !(path.exists() && path.is_file()) {
+    if !path.is_file() {
         return Err(anyhow!("File not found: {file}"));
     }
     if !is_arsenic_file(path) {
@@ -720,32 +745,13 @@ fn recipients_remove(
         }
     };
 
-    let pw = get_password_for_recipients(password, passwordfile)?;
-
-    struct NoProgress;
-    impl Ui for NoProgress { fn output(&self, _: i32) {} }
+    let pw = resolve_password(password, passwordfile.map(str::to_owned), "Password: ")?;
 
     arsenic_remove_recipient(path, &pw, slot_idx, &NoProgress)
         .map_err(|e| anyhow!("{e}"))?;
 
     println!("Slot {slot_idx} removed from {file}.");
     Ok(())
-}
-
-fn get_password_for_recipients(
-    password: Option<String>,
-    passwordfile: Option<&str>,
-) -> Result<Secret<String>> {
-    if let Some(p) = password {
-        return Ok(Secret::new(p));
-    }
-    if let Some(f) = passwordfile {
-        let s = std::fs::read_to_string(f)
-            .with_context(|| format!("cannot read password file: {f}"))?;
-        return Ok(Secret::new(s));
-    }
-    let pw = rpassword::prompt_password("Password: ").context("could not read password")?;
-    Ok(Secret::new(pw))
 }
 
 #[cfg(unix)]
@@ -772,15 +778,33 @@ fn write_identity_file(path: &Path, content: &str) -> Result<()> {
 
 fn decrypt_from_bytes(
     app: &Cli,
-    ct: Vec<u8>,
+    ct: &[u8],
     out_str: &str,
-    ui: Box<ProgressUpdater>,
+    ui: &ProgressUpdater,
 ) -> Result<f64> {
     use std::io::Cursor;
     use arsenic::{decrypt_arsenic, decrypt_arsenic_with_key};
 
     let filesize = ct.len() as u64;
     let start = std::time::Instant::now();
+
+    // Every attempt (re)creates the output; a failed one must not leave an
+    // empty or partial file behind.
+    let try_key = |key: &KeyEntry| -> Result<bool> {
+        let mut cur = Cursor::new(ct);
+        let mut out = std::fs::File::create(out_str)
+            .with_context(|| format!("cannot create {out_str}"))?;
+        let privkey = Secret::new(key.private_key);
+        let ok = decrypt_arsenic_with_key(
+            &mut cur, &mut out, &privkey, &key.mlkem_seed, ui, filesize,
+        )
+        .is_ok();
+        if !ok {
+            drop(out);
+            let _ = std::fs::remove_file(out_str);
+        }
+        Ok(ok)
+    };
 
     // Try asymmetric keys first.
     let explicit_identities: Vec<_> = app
@@ -791,10 +815,7 @@ fn decrypt_from_bytes(
 
     if !explicit_identities.is_empty() {
         for key in &explicit_identities {
-            let mut cur = Cursor::new(&ct);
-            let mut out = std::fs::File::create(out_str)?;
-            let privkey = Secret::new(key.private_key);
-            if decrypt_arsenic_with_key(&mut cur, &mut out, &privkey, &key.mlkem_seed, &*ui, filesize).is_ok() {
+            if try_key(key)? {
                 eprintln!("Decrypted with identity: {}", key.name);
                 return Ok(start.elapsed().as_secs_f64());
             }
@@ -802,54 +823,58 @@ fn decrypt_from_bytes(
         return Err(anyhow!("none of the provided identity files can decrypt this armored file"));
     }
 
-    let keystore = load_keystore();
-    for key in &keystore {
-        let mut cur = Cursor::new(&ct);
-        let mut out = std::fs::File::create(out_str)?;
-        let privkey = Secret::new(key.private_key);
-        if decrypt_arsenic_with_key(&mut cur, &mut out, &privkey, &key.mlkem_seed, &*ui, filesize).is_ok() {
+    for key in &load_keystore() {
+        if try_key(key)? {
             eprintln!("Decrypted with stored key: {}", key.name);
             return Ok(start.elapsed().as_secs_f64());
         }
     }
 
     let password = get_password_for_decrypt(app)?;
-    let mut cur = Cursor::new(&ct);
-    let mut out = std::fs::File::create(out_str)?;
-    decrypt_arsenic(&mut cur, &mut out, &password, &*ui, filesize)
-        .map_err(|e| anyhow!(e))?;
+    let mut cur = Cursor::new(ct);
+    let mut out = std::fs::File::create(out_str)
+        .with_context(|| format!("cannot create {out_str}"))?;
+    if let Err(e) = decrypt_arsenic(&mut cur, &mut out, &password, ui, filesize) {
+        drop(out);
+        let _ = std::fs::remove_file(out_str);
+        return Err(anyhow!(e));
+    }
     Ok(start.elapsed().as_secs_f64())
 }
 
 // ── Passphrase slot management ────────────────────────────────────────────────
 
 fn run_passphrase(cli: PassphraseCli) -> Result<()> {
-    struct SilentUi;
-    impl Ui for SilentUi { fn output(&self, _: i32) {} }
-
     match cli.action {
         PassphraseAction::List { file } => {
             let count = arsenic_list_passphrases(Path::new(&file))
                 .map_err(|e| anyhow!(e))?;
-            println!("Extra passphrase slots: {count}  (+ 1 primary = {} total)", count + 1);
+            match count {
+                0 => println!("Password slots: 0  (this file opens with a keypair only)"),
+                n => println!("Password slots: {n}"),
+            }
         }
 
         PassphraseAction::Add { file, password, passwordfile, new_pass, new_pass_file } => {
             let existing_pw = resolve_password(password, passwordfile, "Existing password: ")?;
-            let new_pw = resolve_password(new_pass, new_pass_file, "New passphrase: ")?;
+            let new_pw = resolve_password(
+                new_pass, new_pass_file, "New passphrase (minimum 8 characters): ",
+            )?;
+            check_new_password(new_pw.expose()).map_err(|e| anyhow!(e))?;
             arsenic_add_passphrase(
-                Path::new(&file), &existing_pw, &new_pw, &SilentUi,
+                Path::new(&file), &existing_pw, &new_pw, &NoProgress,
             ).map_err(|e| anyhow!(e))?;
-            println!("✓ Extra passphrase slot added.");
+            println!("✓ Password added.");
         }
 
         PassphraseAction::Remove { file, password, passwordfile, remove_pass, remove_pass_file } => {
-            let primary_pw = resolve_password(password, passwordfile, "Primary password: ")?;
-            let rm_pw = resolve_password(remove_pass, remove_pass_file, "Passphrase to remove: ")?;
+            let auth_pw = resolve_password(password, passwordfile, "Password: ")?;
+            let rm_pw = resolve_password(remove_pass, remove_pass_file, "Password to remove: ")?;
             arsenic_remove_passphrase(
-                Path::new(&file), &primary_pw, &rm_pw, &SilentUi,
+                Path::new(&file), &auth_pw, &rm_pw, &NoProgress,
             ).map_err(|e| anyhow!(e))?;
-            println!("✓ Passphrase slot removed.");
+            println!("✓ Password removed.");
+            println!("{OLD_COPIES_NOTE}");
         }
     }
     Ok(())

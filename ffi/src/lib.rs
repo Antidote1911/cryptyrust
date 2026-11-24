@@ -359,9 +359,8 @@ pub unsafe extern "C" fn arsenic_encrypt(
     }
 
     let pwd = if password.is_null() || unsafe { CStr::from_ptr(password) }.to_bytes().is_empty() {
-        // No password — random KEK if recipients are present
-        let r = arsenic::random_bytes_32();
-        r.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        // No password: the file gets no password slot (recipients required).
+        String::new()
     } else {
         match unsafe { cstr_to_string(password, "password") } {
             Ok(s) => s,
@@ -489,8 +488,8 @@ pub unsafe extern "C" fn arsenic_encrypt_file(
     let out_s = match unsafe { cstr_to_string(path_out, "path_out") } { Ok(s) => s, Err(c) => return c };
 
     let pwd = if password.is_null() || unsafe { CStr::from_ptr(password) }.to_bytes().is_empty() {
-        let r = arsenic::random_bytes_32();
-        r.iter().map(|b| format!("{b:02x}")).collect::<String>()
+        // No password: the file gets no password slot (recipients required).
+        String::new()
     } else {
         match unsafe { cstr_to_string(password, "password") } { Ok(s) => s, Err(c) => return c }
     };
@@ -1085,7 +1084,7 @@ pub unsafe extern "C" fn arsenic_dearmor(
 /// Decrypt a single block by index from an in-memory ciphertext, using a password.
 ///
 /// # Security contract
-/// Only the block's AEAD tag is verified — the Merkle root is **not** checked.
+/// The header and the requested block are authenticated; the rest of the file is not read.
 /// Returns `ARSENIC_ERR_PARAMS` if the file uses compression (random access
 /// requires uncompressed files).
 ///
@@ -1116,7 +1115,7 @@ pub unsafe extern "C" fn arsenic_decrypt_block(
 
 /// Decrypt a single block by index from an in-memory ciphertext, using a private key.
 ///
-/// Same security contract as `arsenic_decrypt_block` — AEAD only, no Merkle.
+/// Same security contract as `arsenic_decrypt_block`.
 ///
 /// # Safety
 /// `privkey` must point to exactly 32 readable bytes.
@@ -1148,7 +1147,7 @@ pub unsafe extern "C" fn arsenic_decrypt_block_with_key(
 
 // ── Passphrase slot management ────────────────────────────────────────────────
 
-/// Return the number of **extra** passphrase slots in the file (0 = primary slot only).
+/// Return the number of password slots in the file (0 = keypairs only).
 ///
 /// No password is required — the count is visible in the public header.
 /// Returns -1 on parse error.
@@ -1164,12 +1163,12 @@ pub unsafe extern "C" fn arsenic_passphrase_count_file(path: *const c_char) -> i
     }
 }
 
-/// Add an extra passphrase slot to a file.
+/// Add a password slot to a file (authenticate with any password of the file).
 ///
 /// `existing_password` must authenticate via any existing slot.
 /// On success the file can be decrypted with either password.
 ///
-/// Maximum 15 extra slots. Returns `ARSENIC_ERR_PARAMS` if the limit is reached.
+/// Maximum 16 passwords per file. Returns `ARSENIC_ERR_PARAMS` if the limit is reached.
 ///
 /// # Safety
 /// All pointer arguments must be valid null-terminated C strings.
@@ -1191,11 +1190,11 @@ pub unsafe extern "C" fn arsenic_add_passphrase_file(
     }
 }
 
-/// Remove an extra passphrase slot from a file.
+/// Remove a password slot from a file.
 ///
-/// `primary_password` authenticates the operation (HeaderMAC check).
-/// `password_to_remove` identifies the extra slot to drop.
-/// The primary slot cannot be removed — returns `ARSENIC_ERR_DECRYPT` if attempted.
+/// `primary_password` authenticates the operation; any password of the file works.
+/// `password_to_remove` identifies the slot to drop.
+/// The last key slot of a file cannot be removed — returns `ARSENIC_ERR_DECRYPT` if attempted.
 ///
 /// # Safety
 /// All pointer arguments must be valid null-terminated C strings.

@@ -13,9 +13,9 @@ Pre-built binaries for Linux, macOS (universal) and Windows are available on the
 
 ## Features
 
-- **Arsenic V1** format (`.arsn`) — fully documented in [`arsenic/FORMAT.md`](arsenic/FORMAT.md)
+- **Arsenic V2** format (`.arsn`) — fully documented in [`arsenic/FORMAT.md`](arsenic/FORMAT.md)
 - **Post-quantum hybrid encryption** — X25519 + ML-KEM-768 or ML-KEM-1024 (NIST FIPS 203)
-- **Multiple passphrase keyslots** — up to 15 independent passwords per file; any unlocks it
+- **Multiple passwords** — up to 16 equal passwords per file; any of them opens and manages it
 - **ASCII armor** — base64 transport encoding for email / text channels; auto-detected on decrypt
 - **Optional zstd compression** — compress before encrypting (levels 1–22); size-leak warning shown
 - **Drag-and-drop GUI** — drop `.arsn` or `.arsn.armor` files to decrypt; plaintext to encrypt
@@ -125,14 +125,14 @@ cryptyrust recipients remove file.pdf.arsn --slot 0 -p "passphrase"
 ### Passphrase slot management
 
 ```bash
-# Count extra passphrase slots
+# Count the passwords of a file
 cryptyrust passphrase list file.pdf.arsn
 
-# Add a passphrase slot (any existing password authenticates)
-cryptyrust passphrase add file.pdf.arsn -p "primary" --new-pass "extra"
+# Add a password (any password of the file authenticates)
+cryptyrust passphrase add file.pdf.arsn -p "a-current-password" --new-pass "second-password"
 
-# Remove an extra passphrase slot (primary password required)
-cryptyrust passphrase remove file.pdf.arsn -p "primary" --remove-pass "extra"
+# Remove a password (any password of the file authenticates)
+cryptyrust passphrase remove file.pdf.arsn -p "a-current-password" --remove-pass "second-password"
 ```
 
 ---

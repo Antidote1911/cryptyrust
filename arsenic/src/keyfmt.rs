@@ -1,3 +1,7 @@
+// Bech32 bit packing: the casts keep the low 5 bits on purpose, and the
+// output alphabet is ASCII so the UTF-8 conversion cannot fail.
+#![allow(clippy::cast_possible_truncation, clippy::expect_used)]
+
 //! Arsenic key encoding — bech32 without checksum, same convention as age.
 //!
 //! Public key  : `arsenic1{bech32}`           — 60 chars — safe to share
@@ -33,9 +37,9 @@ pub fn bech32_decode_lower(s: &str) -> Option<Vec<u8>> { bech32_decode(s) }
 fn bech32_encode(data: &[u8]) -> String {
     let mut acc: u32 = 0;
     let mut bits: u32 = 0;
-    let mut out = Vec::with_capacity((data.len() * 8 + 4) / 5);
+    let mut out = Vec::with_capacity((data.len() * 8).div_ceil(5));
     for &b in data {
-        acc = (acc << 8) | b as u32;
+        acc = (acc << 8) | u32::from(b);
         bits += 8;
         while bits >= 5 {
             bits -= 5;
@@ -60,7 +64,7 @@ fn bech32_decode(s: &str) -> Option<Vec<u8>> {
         if val == 0xff {
             return None;
         }
-        acc = (acc << 5) | val as u32;
+        acc = (acc << 5) | u32::from(val);
         bits += 5;
         if bits >= 8 {
             bits -= 8;
@@ -122,7 +126,10 @@ pub fn encode_mlkem_pubkey(bytes: &[u8; 1184]) -> String {
 pub fn decode_mlkem_pubkey(s: &str) -> Option<[u8; 1184]> {
     let lower = s.to_lowercase();
     let inner = lower.strip_prefix(MLKEM_PUBKEY_HRP)?;
-    bech32_decode(inner)?.try_into().ok()
+    let key: [u8; 1184] = bech32_decode(inner)?.try_into().ok()?;
+    // Reject keys that have the right length but are not valid ML-KEM keys:
+    // they would only fail later, when encrypting for that contact.
+    crate::arsenic::hybrid_kem::is_valid_ek_768(&key).then_some(key)
 }
 
 #[cfg(test)]

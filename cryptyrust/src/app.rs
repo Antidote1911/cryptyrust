@@ -3,12 +3,17 @@ use arsenic::{
     KemLevel, Ui,
 };
 use eframe::egui;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::thread;
 
-use crate::file_utils::{cipher_from_key, cipher_to_key, detect_mode, Mode};
-use crate::job::{JobState, PasswordPopup};
+use crate::file_utils::{
+    cipher_from_key, cipher_to_key, check_new_password, is_armored_file, mode_from_flags,
+    FileMeta, Mode,
+};
+use crate::job::{lock, FileStatus, JobState, PasswordPopup};
+use arsenic::Secret;
 use crate::keystore::{
     delete_key, load_contacts, load_keystore, save_contacts, save_key, ContactEntry, KeyEntry,
 };
@@ -19,8 +24,13 @@ pub enum BenchMsg {
     Done(Vec<CipherBenchResult>),
 }
 
+// One flag per independent window/option of the UI: a state machine would
+// not describe them better.
+#[allow(clippy::struct_excessive_bools)]
 pub struct CryptyApp {
     pub files: Vec<PathBuf>,
+    /// Type and size of each queued file, read once when it is added.
+    pub file_meta: HashMap<PathBuf, FileMeta>,
     pub mode: Mode,
     pub mixed: bool,
     pub job: JobState,
@@ -69,6 +79,11 @@ pub struct CryptyApp {
     pub km_new_name: String,
     /// Validation error for the new key form.
     pub km_error: Option<String>,
+    /// Confirmation of the last successful key action (export).
+    pub km_notice: Option<String>,
+    /// Keystore locations shown in the key manager.
+    pub keys_dir_label: String,
+    pub contacts_path_label: String,
     /// Index of the key pending deletion confirmation (two-click safety).
     pub km_confirm_delete: Option<usize>,
     /// Index of the key whose secret key popup is open.
@@ -114,13 +129,14 @@ impl CryptyApp {
             .and_then(|s| s.get_string("kem_level"))
             .and_then(|s| match s.as_str() {
                 "1024" => Some(KemLevel::L1024),
-                _      => Some(KemLevel::L768),
+                _ => None,
             })
             .unwrap_or(KemLevel::L768);
 
         let compress: Option<i32> = storage
             .and_then(|s| s.get_string("compress_level"))
-            .and_then(|s| s.parse().ok());
+            .and_then(|s| s.parse().ok())
+            .filter(|level| (1..=22).contains(level));
 
         let armor = storage
             .and_then(|s| s.get_string("armor"))
@@ -129,6 +145,7 @@ impl CryptyApp {
 
         Self {
             files: vec![],
+            file_meta: HashMap::new(),
             mode: Mode::Encrypt,
             mixed: false,
             job: JobState::Idle,
@@ -165,6 +182,11 @@ impl CryptyApp {
             show_key_manager: false,
             km_new_name: String::new(),
             km_error: None,
+            km_notice: None,
+            keys_dir_label: crate::keystore::keys_dir()
+                .map_or_else(|| "unknown".into(), |p| p.to_string_lossy().into_owned()),
+            contacts_path_label: crate::keystore::contacts_path()
+                .map_or_else(|| "unknown".into(), |p| p.to_string_lossy().into_owned()),
             km_confirm_delete: None,
             km_show_privkey: None,
             contacts: load_contacts(),
@@ -177,37 +199,85 @@ impl CryptyApp {
     }
 }
 
+/// Longest contact name kept from a file or an identity found in a header.
+const MAX_CONTACT_NAME_CHARS: usize = 64;
+
+/// Overwrite a password buffer before releasing it.
+fn wipe(s: &mut String) {
+    drop(Secret::new(std::mem::take(s)));
+}
+
+/// True if `name` would be misread by the contacts file parser.
+fn is_reserved_contact_name(name: &str) -> bool {
+    name.starts_with("mlkem:") || name.starts_with("sign-key:")
+}
+
+/// Make a contact name coming from outside (a `.pubkey` file, the sender field
+/// of a decrypted file) safe to display and to store: single line, bounded
+/// length, not a reserved prefix.
+fn sanitize_contact_name(raw: &str) -> String {
+    let cleaned: String = raw
+        .chars()
+        .map(|c| if c.is_control() { ' ' } else { c })
+        .collect();
+    let mut name: String = cleaned.trim().chars().take(MAX_CONTACT_NAME_CHARS).collect();
+    if name.is_empty() {
+        name = "contact".into();
+    }
+    if is_reserved_contact_name(&name) {
+        name.insert(0, '_');
+    }
+    name
+}
+
 /// Recursively collect all regular files from `path`.
 /// If `path` is a file, returns it directly.
 /// Entries within a directory are sorted for deterministic ordering.
-fn collect_files_from_path(path: &PathBuf) -> Vec<PathBuf> {
+///
+/// Symbolic links to directories found while walking are not followed: a link
+/// pointing back to a parent would otherwise recurse forever.
+fn collect_files_from_path(path: &Path) -> Vec<PathBuf> {
+    let mut result = Vec::new();
     if path.is_file() {
-        return vec![path.clone()];
+        result.push(path.to_path_buf());
+    } else if path.is_dir() {
+        collect_dir(path, &mut result);
     }
-    if path.is_dir() {
-        let mut result = Vec::new();
-        if let Ok(entries) = std::fs::read_dir(path) {
-            let mut children: Vec<PathBuf> = entries
-                .flatten()
-                .map(|e| e.path())
-                .collect();
-            children.sort();
-            for child in children {
-                result.extend(collect_files_from_path(&child));
-            }
+    result
+}
+
+fn collect_dir(dir: &Path, result: &mut Vec<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else { return };
+    let mut children: Vec<PathBuf> = entries.flatten().map(|e| e.path()).collect();
+    children.sort();
+    for child in children {
+        // symlink_metadata describes the link itself, not its target.
+        let Ok(meta) = std::fs::symlink_metadata(&child) else { continue };
+        if meta.is_dir() {
+            collect_dir(&child, result);
+        } else if child.is_file() {
+            result.push(child);
         }
-        return result;
     }
-    vec![]
 }
 
 impl CryptyApp {
     /// Add files or directories. Directories are expanded recursively.
     /// Drag-and-drop of folders is handled automatically by this method.
+    ///
+    /// After a finished job the previous list is dropped first: those files
+    /// have already been processed and must not be queued a second time.
     pub fn add_files(&mut self, paths: impl IntoIterator<Item = PathBuf>) {
+        if matches!(self.job, JobState::Completed { .. }) {
+            self.files.clear();
+            self.file_meta.clear();
+            self.pending_contact_from_file = None;
+            self.job = JobState::Idle;
+        }
         for p in paths {
             for file in collect_files_from_path(&p) {
-                if !self.files.contains(&file) {
+                if !self.file_meta.contains_key(&file) {
+                    self.file_meta.insert(file.clone(), FileMeta::read(&file));
                     self.files.push(file);
                 }
             }
@@ -216,12 +286,14 @@ impl CryptyApp {
     }
 
     pub fn remove_file(&mut self, idx: usize) {
-        self.files.remove(idx);
+        let removed = self.files.remove(idx);
+        self.file_meta.remove(&removed);
         self.refresh_mode();
     }
 
     fn refresh_mode(&mut self) {
-        match detect_mode(&self.files) {
+        let flags = self.files.iter().map(|f| self.is_encrypted(f));
+        match mode_from_flags(flags) {
             Some(m) => {
                 self.mode = m;
                 self.mixed = false;
@@ -232,20 +304,34 @@ impl CryptyApp {
         }
     }
 
+    /// Cached "is an Arsenic file" flag of a queued file.
+    pub fn is_encrypted(&self, path: &Path) -> bool {
+        self.file_meta.get(path).is_some_and(|m| m.encrypted)
+    }
+
     pub fn clear_all(&mut self) {
         self.files.clear();
+        self.file_meta.clear();
         self.mode = Mode::Encrypt;
         self.mixed = false;
-        self.pw.clear();
-        self.pw_confirm.clear();
+        wipe(&mut self.pw);
+        wipe(&mut self.pw_confirm);
         self.pw_error = None;
         self.popup = PasswordPopup::Closed;
         self.job = JobState::Idle;
     }
 
+    /// Dismiss the password popup, keeping the file list intact.
+    pub fn close_popup(&mut self) {
+        wipe(&mut self.pw);
+        wipe(&mut self.pw_confirm);
+        self.pw_error = None;
+        self.popup = PasswordPopup::Closed;
+    }
+
     pub fn open_popup(&mut self) {
-        self.pw.clear();
-        self.pw_confirm.clear();
+        wipe(&mut self.pw);
+        wipe(&mut self.pw_confirm);
         self.pw_error = None;
         self.pw_show = false;
         self.pw_focus = true;
@@ -255,20 +341,19 @@ impl CryptyApp {
         self.popup = PasswordPopup::Open;
     }
 
-    /// For decrypt mode: probe the first file's header to find a matching keypair.
-    /// If one is found, start decryption immediately without showing any popup.
-    /// Otherwise fall back to the standard password popup.
+    /// For decrypt mode: if every file has a keyslot for one of the stored
+    /// keypairs, start decryption immediately without showing any popup.
+    /// Otherwise show the password popup — the job still uses a matching
+    /// keypair for the files that have one, and the password for the others.
     pub fn open_popup_or_auto_decrypt(&mut self, ctx: &egui::Context) {
-        if self.mode == Mode::Decrypt && !self.keys.is_empty() {
-            if let Some(path) = self.files.first().cloned() {
-                let matched = self.find_matching_key_any_format(&path);
-                if let Some(idx) = matched {
-                    self.decrypt_key_index = Some(idx);
-                    self.popup = PasswordPopup::Closed;
-                    self.start_job(ctx.clone(), String::new());
-                    return;
-                }
-            }
+        if self.mode == Mode::Decrypt
+            && !self.keys.is_empty()
+            && !self.files.is_empty()
+            && self.files.iter().all(|f| self.find_matching_key_any_format(f).is_some())
+        {
+            self.popup = PasswordPopup::Closed;
+            self.start_job(ctx.clone(), String::new());
+            return;
         }
         self.open_popup();
     }
@@ -282,23 +367,15 @@ impl CryptyApp {
             .map(|k| HybridPrivKey { x25519_sk: &k.private_key, mlkem_seed: &k.mlkem_seed })
             .collect();
 
-        // Try binary first (fast path).
-        if let Ok(mut f) = std::fs::File::open(path) {
-            if let Ok(Some(idx)) = find_decrypting_key(&mut f, &hybrid_keys) {
-                return Some(idx);
-            }
+        // Only an armored file is loaded in memory; a binary one is probed
+        // through its header, whatever its size.
+        if is_armored_file(path) {
+            let text = std::fs::read_to_string(path).ok()?;
+            let ct = arsenic::dearmor(&text).ok()?;
+            return find_decrypting_key(&mut Cursor::new(ct), &hybrid_keys).ok().flatten();
         }
-
-        // Try dearmoring (armored file path).
-        let data = std::fs::read(path).ok()?;
-        if data.starts_with(b"-----BEGIN ARSENIC") {
-            let s = std::str::from_utf8(&data).ok()?;
-            let ct = arsenic::dearmor(s).ok()?;
-            let mut cursor = Cursor::new(ct);
-            return find_decrypting_key(&mut cursor, &hybrid_keys).ok().flatten();
-        }
-
-        None
+        let mut f = std::fs::File::open(path).ok()?;
+        find_decrypting_key(&mut f, &hybrid_keys).ok().flatten()
     }
 
     pub fn open_change_pw_popup(&mut self) {
@@ -332,24 +409,28 @@ impl CryptyApp {
                     return;
                 }
                 Mode::Encrypt => {
-                    // No password but recipients selected: generate a random KEK.
-                    // The symmetric keyslot will be inaccessible; only the
-                    // asymmetric keyslots can decrypt.
-                    let r = arsenic::random_bytes_32();
-                    r.iter().map(|b| format!("{b:02x}")).collect::<String>()
+                    // No password but recipients selected: the file gets no
+                    // password slot, only the selected keypairs can open it.
+                    String::new()
                 }
             }
         } else {
-            if self.mode == Mode::Encrypt && self.pw != self.pw_confirm {
-                self.pw_error = Some("Passwords do not match.".into());
-                return;
+            if self.mode == Mode::Encrypt {
+                if let Err(e) = check_new_password(&self.pw) {
+                    self.pw_error = Some(e);
+                    return;
+                }
+                if self.pw != self.pw_confirm {
+                    self.pw_error = Some("Passwords do not match.".into());
+                    return;
+                }
             }
             self.pw.clone()
         };
 
         self.popup = PasswordPopup::Closed;
-        self.pw.clear();
-        self.pw_confirm.clear();
+        wipe(&mut self.pw);
+        wipe(&mut self.pw_confirm);
         self.start_job(ctx.clone(), password);
     }
 
@@ -358,8 +439,8 @@ impl CryptyApp {
             self.cpw_error = Some("Current password cannot be empty.".into());
             return;
         }
-        if self.cpw_new.is_empty() {
-            self.cpw_error = Some("New password cannot be empty.".into());
+        if let Err(e) = check_new_password(&self.cpw_new) {
+            self.cpw_error = Some(format!("New password: {e}"));
             return;
         }
         if self.cpw_new != self.cpw_confirm {
@@ -368,7 +449,7 @@ impl CryptyApp {
         }
         let old_pw = std::mem::take(&mut self.cpw_old);
         let new_pw = std::mem::take(&mut self.cpw_new);
-        self.cpw_confirm.clear();
+        wipe(&mut self.cpw_confirm);
         let file = self.files[0].clone();
         self.popup = PasswordPopup::Closed;
         self.job.start_change_pw(file, old_pw, new_pw, ctx.clone());
@@ -383,8 +464,8 @@ impl CryptyApp {
         self.show_bench = true;
 
         thread::spawn({
-            let tx = tx.clone();
-            let ctx = ctx.clone();
+            let tx = tx;
+            let ctx = ctx;
             move || {
                 struct BenchUi {
                     tx: mpsc::Sender<BenchMsg>,
@@ -438,8 +519,18 @@ impl CryptyApp {
             self.km_contact_error = Some("Name cannot be empty.".into());
             return;
         }
-        if name.contains('\t') || name.contains('\n') {
-            self.km_contact_error = Some("Name must not contain tab or newline.".into());
+        if name.chars().any(char::is_control) {
+            self.km_contact_error = Some("Name must not contain control characters.".into());
+            return;
+        }
+        if name.chars().count() > MAX_CONTACT_NAME_CHARS {
+            self.km_contact_error =
+                Some(format!("Name is too long (max {MAX_CONTACT_NAME_CHARS} characters)."));
+            return;
+        }
+        if is_reserved_contact_name(&name) {
+            self.km_contact_error =
+                Some("Name must not start with \"mlkem:\" or \"sign-key:\".".into());
             return;
         }
         if self.contacts.iter().any(|c| c.name == name) {
@@ -463,18 +554,38 @@ impl CryptyApp {
             public_key,
             mlkem_public_key: Box::new(mlkem_key),
         });
-        save_contacts(&self.contacts);
+        if !self.persist_new_contact() {
+            return;
+        }
         self.km_new_contact_name.clear();
         self.km_new_contact_key.clear();
         self.km_new_contact_mlkem_key.clear();
-        self.km_contact_error = None;
+    }
+
+    /// Save the contact list after pushing a new entry. On failure the entry
+    /// is dropped again so the list on screen matches the one on disk.
+    fn persist_new_contact(&mut self) -> bool {
+        match save_contacts(&self.contacts) {
+            Ok(()) => {
+                self.km_contact_error = None;
+                true
+            }
+            Err(e) => {
+                self.contacts.pop();
+                self.km_contact_error = Some(format!("Could not save contacts: {e}"));
+                false
+            }
+        }
     }
 
     /// Delete the contact at `index` and persist.
     pub fn km_delete_contact(&mut self, index: usize) {
         if index < self.contacts.len() {
-            self.contacts.remove(index);
-            save_contacts(&self.contacts);
+            let removed = self.contacts.remove(index);
+            if let Err(e) = save_contacts(&self.contacts) {
+                self.contacts.insert(index, removed);
+                self.km_contact_error = Some(format!("Could not save contacts: {e}"));
+            }
         }
         self.km_confirm_delete_contact = None;
     }
@@ -482,9 +593,15 @@ impl CryptyApp {
     /// Delete the key at `index` and remove its `.key` file.
     pub fn km_delete_key(&mut self, index: usize) {
         if index < self.keys.len() {
-            delete_key(&self.keys[index]);
-            self.keys.remove(index);
+            match delete_key(&self.keys[index]) {
+                Ok(()) => {
+                    self.keys.remove(index);
+                    self.km_error = None;
+                }
+                Err(e) => self.km_error = Some(format!("Could not delete key file: {e}")),
+            }
         }
+        self.km_notice = None;
         self.km_confirm_delete = None;
     }
 
@@ -492,7 +609,12 @@ impl CryptyApp {
     pub fn extract_sender_from_file(&mut self, path: &std::path::Path) {
         use arsenic::arsenic_read_sender_info;
         let Some(sender) = arsenic_read_sender_info(path) else { return };
-        let (name, x25519_pk, mlkem_pk) = (sender.name, sender.x25519_pk, sender.mlkem_pk);
+        // A malformed key could never be encrypted to: do not offer it.
+        if !arsenic::mlkem_pubkey_is_valid(&sender.mlkem_pk) { return; }
+        // The sender field is a claim written by whoever made the file: clean
+        // the name and keep it distinct from existing contacts.
+        let (x25519_pk, mlkem_pk) = (sender.x25519_pk, sender.mlkem_pk);
+        let name = self.unique_contact_name(&sanitize_contact_name(&sender.name));
         if self.contacts.iter().any(|c| c.public_key == x25519_pk) { return; }
         if self.keys.iter().any(|k| k.public_key == x25519_pk) { return; }
         self.pending_contact_from_file = Some(arsenic::keystore::ContactEntry {
@@ -502,11 +624,23 @@ impl CryptyApp {
         });
     }
 
+    /// `name`, or `name (2)`, `name (3)`… if a contact already uses it.
+    fn unique_contact_name(&self, name: &str) -> String {
+        let taken = |n: &str| self.contacts.iter().any(|c| c.name == n);
+        if !taken(name) {
+            return name.to_string();
+        }
+        (2..u32::MAX)
+            .map(|i| format!("{name} ({i})"))
+            .find(|n| !taken(n))
+            .unwrap_or_else(|| name.to_string())
+    }
+
     /// Confirm adding the pending contact extracted from the last decrypted file.
     pub fn confirm_add_contact_from_file(&mut self) {
         if let Some(entry) = self.pending_contact_from_file.take() {
             self.contacts.push(entry);
-            save_contacts(&self.contacts);
+            self.persist_new_contact();
         }
     }
 
@@ -523,8 +657,14 @@ impl CryptyApp {
             .save_file()
         {
             match std::fs::write(&path, &content) {
-                Ok(()) => self.km_error = Some(format!("✓ Exported to {}", path.display())),
-                Err(e) => self.km_error = Some(format!("Export failed: {e}")),
+                Ok(()) => {
+                    self.km_error = None;
+                    self.km_notice = Some(format!("✓ Exported to {}", path.display()));
+                }
+                Err(e) => {
+                    self.km_notice = None;
+                    self.km_error = Some(format!("Export failed: {e}"));
+                }
             }
         }
     }
@@ -546,16 +686,17 @@ impl CryptyApp {
             Ok(c)  => c,
             Err(e) => { self.km_contact_error = Some(format!("Cannot read file: {e}")); return; }
         };
-        let entry = match arsenic::keystore::parse_pubkey_file(&content, path) {
-            Some(e) => e,
-            None    => { self.km_contact_error = Some("No valid public key found in this file.".into()); return; }
+        let Some(mut entry) = arsenic::keystore::parse_pubkey_file(&content, path) else {
+            self.km_contact_error = Some("No valid public key found in this file.".into());
+            return;
         };
+        entry.name = sanitize_contact_name(&entry.name);
         if self.keys.iter().any(|k| k.public_key == entry.public_key) {
             self.km_contact_error = Some(format!("\"{}\" is one of your own keypairs.", entry.name));
             return;
         }
         if self.contacts.iter().any(|c| c.public_key == entry.public_key) {
-            self.km_contact_error = Some(format!("A contact with this public key already exists."));
+            self.km_contact_error = Some("A contact with this public key already exists.".into());
             return;
         }
         if self.contacts.iter().any(|c| c.name == entry.name) {
@@ -563,8 +704,25 @@ impl CryptyApp {
             return;
         }
         self.contacts.push(entry);
-        save_contacts(&self.contacts);
-        self.km_contact_error = None;
+        self.persist_new_contact();
+    }
+
+    /// True if a dropped file should be imported as a contact rather than
+    /// queued: a `.pubkey`/`.key` file that really holds an Arsenic public key.
+    /// Any other `.key` file (a TLS key, for instance) stays encryptable.
+    fn is_contact_file(path: &Path) -> bool {
+        const MAX_KEY_FILE_BYTES: u64 = 64 * 1024;
+        let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+        if ext != "pubkey" && ext != "key" {
+            return false;
+        }
+        if std::fs::metadata(path).map_or(true, |m| m.len() > MAX_KEY_FILE_BYTES) {
+            return false;
+        }
+        std::fs::read_to_string(path)
+            .ok()
+            .and_then(|c| arsenic::keystore::parse_pubkey_file(&c, path.to_path_buf()))
+            .is_some()
     }
 
     fn start_job(&mut self, ctx: egui::Context, password: String) {
@@ -583,11 +741,12 @@ impl CryptyApp {
             )
             .collect();
 
-        // For decrypt mode: retrieve the selected keypair (if any).
-        let privkey = self
-            .decrypt_key_index
-            .and_then(|i| self.keys.get(i))
-            .cloned();
+        // Decrypt mode: every stored keypair is a candidate; the job picks the
+        // one matching each file and falls back to the password otherwise.
+        let keys = match self.mode {
+            Mode::Decrypt => self.keys.clone(),
+            Mode::Encrypt => Vec::new(),
+        };
 
         let params = ArsenicParams {
             hdr_cipher: self.hdr_cipher,
@@ -601,7 +760,7 @@ impl CryptyApp {
             ..ArsenicParams::from(self.arsenic_strength)
         };
         self.job
-            .start(self.files.clone(), self.mode, params, self.armor, password, privkey, ctx);
+            .start(self.files.clone(), self.mode, params, self.armor, password, keys, ctx);
     }
 }
 
@@ -653,11 +812,7 @@ impl eframe::App for CryptyApp {
                 // everything else → encrypt/decrypt queue.
                 let mut to_encrypt: Vec<PathBuf> = Vec::new();
                 for path in dropped {
-                    let ext = path.extension()
-                        .and_then(|e| e.to_str())
-                        .unwrap_or("")
-                        .to_lowercase();
-                    if ext == "pubkey" || ext == "key" {
+                    if Self::is_contact_file(&path) {
                         self.km_do_import_contact(path);
                         // Open key manager so the user sees the result.
                         if !self.show_key_manager { self.show_key_manager = true; }
@@ -666,7 +821,6 @@ impl eframe::App for CryptyApp {
                     }
                 }
                 if !to_encrypt.is_empty() {
-                    self.job = JobState::Idle;
                     self.add_files(to_encrypt);
                 }
             }
@@ -685,20 +839,22 @@ impl eframe::App for CryptyApp {
         } = &self.job
         {
             while let Ok((file_index, pct)) = receiver.try_recv() {
-                progress.lock().unwrap().insert(file_index, pct);
+                lock(progress).insert(file_index, pct);
             }
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
 
-            let current = *current_file.lock().unwrap();
+            let current = *lock(current_file);
             if current == usize::MAX {
-                let statuses = file_statuses.lock().unwrap().clone();
+                let statuses = lock(file_statuses).clone();
                 job_completed =
                     Some((processing_files.clone(), statuses, success_label.clone()));
             }
         }
 
         if let Some((files, statuses, success_label)) = job_completed {
-            if self.mode == Mode::Decrypt {
+            // Only offer the sender of a file that was actually decrypted.
+            let first_ok = matches!(statuses.first(), Some(FileStatus::Success));
+            if self.mode == Mode::Decrypt && first_ok {
                 if let Some(path) = files.first() {
                     self.extract_sender_from_file(path);
                 }
@@ -735,5 +891,60 @@ impl eframe::App for CryptyApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         UI::render(self, ui);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn contact_names_from_outside_are_made_safe() {
+        assert_eq!(sanitize_contact_name("  Alice  "), "Alice");
+        // A newline would start a new entry in the contacts file.
+        assert_eq!(sanitize_contact_name("Eve\narsenic1xyz"), "Eve arsenic1xyz");
+        assert_eq!(sanitize_contact_name("\t\n"), "contact");
+        // Reserved prefixes would be read as key lines.
+        assert_eq!(sanitize_contact_name("mlkem:abc"), "_mlkem:abc");
+        assert_eq!(sanitize_contact_name("sign-key:abc"), "_sign-key:abc");
+        assert_eq!(
+            sanitize_contact_name(&"x".repeat(500)).chars().count(),
+            MAX_CONTACT_NAME_CHARS
+        );
+    }
+
+    #[test]
+    fn collect_files_walks_folders_in_order() {
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir_all(dir.path().join("sub/deep")).unwrap();
+        for f in ["b.txt", "a.txt", "sub/c.txt", "sub/deep/d.txt"] {
+            std::fs::write(dir.path().join(f), b"x").unwrap();
+        }
+        let found: Vec<PathBuf> = collect_files_from_path(dir.path())
+            .into_iter()
+            .map(|p| p.strip_prefix(dir.path()).unwrap().to_path_buf())
+            .collect();
+        let expected: Vec<PathBuf> =
+            ["a.txt", "b.txt", "sub/c.txt", "sub/deep/d.txt"].iter().map(PathBuf::from).collect();
+        assert_eq!(found, expected);
+        assert_eq!(
+            collect_files_from_path(&dir.path().join("a.txt")),
+            [dir.path().join("a.txt")]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_files_survives_symlink_loops() {
+        use std::os::unix::fs::symlink;
+        let dir = tempfile::TempDir::new().unwrap();
+        std::fs::create_dir(dir.path().join("sub")).unwrap();
+        std::fs::write(dir.path().join("sub/real.txt"), b"x").unwrap();
+        // A link back to the parent, and a link to a regular file.
+        symlink(dir.path(), dir.path().join("sub/loop")).unwrap();
+        symlink(dir.path().join("sub/real.txt"), dir.path().join("link.txt")).unwrap();
+
+        let found = collect_files_from_path(dir.path());
+        assert_eq!(found, [dir.path().join("link.txt"), dir.path().join("sub/real.txt")]);
     }
 }

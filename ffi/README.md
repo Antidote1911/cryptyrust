@@ -156,7 +156,7 @@ arsenic_free_buffer(&binary);
 
 Decrypt a single block by index without reading the rest of the file.
 
-**Security contract:** only the block's AEAD tag is verified — the Merkle root is **not** checked. Protects against per-block corruption/forgery but not against file truncation or inter-file block substitution. Do not use for security-critical decisions; use full `arsenic_decrypt` instead.
+**Security contract:** the header and the requested block are authenticated; the rest of the file is not read. Whether the block is the last one follows from the file length.
 
 Returns `ARSENIC_ERR_PARAMS` if the file was encrypted with compression (compressed files do not support random access).
 
@@ -177,20 +177,20 @@ arsenic_free_buffer(&block);
 
 ## Passphrase Slot Management
 
-Up to 15 extra passphrase slots can be added to any file. Any slot (primary or extra) can decrypt the file.
+A file can have up to 16 passwords. They are all equal: any of them decrypts the file and can add or remove another.
 
-**Note:** the primary slot benefits from a HeaderMAC fast-fail — wrong passwords are detected before Argon2id. Extra slots have no HeaderMAC; wrong passwords pay the full Argon2id cost per slot.
+**Note:** all passwords share the file's Argon2id salt, so a wrong password costs one Argon2id run whatever their number. A file encrypted for recipients only has no password.
 
 ```c
-// Count extra slots (no password required — count is in the public header)
+// Count the passwords (no password required — the count is in the header)
 int n = arsenic_passphrase_count_file("file.arsn");
-// n = 0 means only the primary slot exists; n = -1 means error.
+// n = 0 means the file opens with a keypair only; n = -1 means error.
 
-// Add an extra passphrase slot
+// Add a password (authenticate with any password of the file)
 rc = arsenic_add_passphrase_file("file.arsn", "existing_pw", "new_pw", NULL, NULL);
 
-// Remove an extra passphrase slot (primary password required for HeaderMAC)
-rc = arsenic_remove_passphrase_file("file.arsn", "primary_pw", "pw_to_remove", NULL, NULL);
+// Remove a password (authenticate with any password of the file)
+rc = arsenic_remove_passphrase_file("file.arsn", "a_current_pw", "pw_to_remove", NULL, NULL);
 ```
 
 ---
@@ -221,7 +221,7 @@ int slot = arsenic_find_slot_for_key_file("file.arsn", priv_key_32);
 
 ## Password Change (Rekey)
 
-Changes the primary password without re-encrypting the payload. O(1) regardless of file size.
+Changes a password without re-encrypting the payload. O(1) regardless of file size. The file key does not change: an old copy of the file still opens with the old password.
 
 ```c
 rc = arsenic_rekey_file("file.arsn", "old_password", "new_password", NULL, NULL);

@@ -1,3 +1,5 @@
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::cast_possible_truncation)]
+
 // Throughput benchmarks for Arsenic V1 encryption.
 //
 // Benchmark groups

@@ -1,12 +1,14 @@
 use arsenic::{ArsenicStrength, CipherId};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
-use std::path::{Path, PathBuf};
+use std::path::Path;
+#[cfg(test)]
+use std::path::PathBuf;
 
 const ARSENIC_MAGIC: [u8; 4] = [0x41, 0x52, 0x53, 0x4E]; // "ARSN"
 const ARMOR_HEADER: &[u8] = b"-----BEGIN ARSENIC";
 
-#[derive(PartialEq, Clone, Copy, Debug)]
+#[derive(PartialEq, Eq, Clone, Copy, Debug)]
 pub enum Mode {
     Encrypt,
     Decrypt,
@@ -23,26 +25,80 @@ pub fn is_cryptyrust_file(path: &Path) -> bool {
 }
 
 
-pub fn detect_mode(files: &[PathBuf]) -> Option<Mode> {
-    if files.is_empty() {
-        return Some(Mode::Encrypt);
+/// Returns true if the file starts with the ASCII-armor header. Reads only the
+/// first bytes, so it is safe to call on very large files.
+pub fn is_armored_file(path: &Path) -> bool {
+    let Ok(mut f) = File::open(path) else { return false };
+    let mut buf = [0u8; 18];
+    let n = f.read(&mut buf).unwrap_or(0);
+    buf[..n].starts_with(ARMOR_HEADER)
+}
+
+/// What the file list shows for one file. Computed once when the file is added
+/// instead of on every frame.
+#[derive(Clone, Debug)]
+pub struct FileMeta {
+    /// Arsenic file, binary or armored.
+    pub encrypted: bool,
+    /// ASCII-armored Arsenic file.
+    pub armored: bool,
+    pub size: String,
+}
+
+impl FileMeta {
+    pub fn read(path: &Path) -> Self {
+        let armored = is_armored_file(path);
+        Self {
+            encrypted: armored || is_cryptyrust_file(path),
+            armored,
+            size: get_file_size(path),
+        }
     }
-    let enc = files.iter().filter(|p| is_cryptyrust_file(p)).count();
-    if enc == files.len() {
-        Some(Mode::Decrypt)
-    } else if enc == 0 {
+}
+
+#[cfg(test)]
+pub fn detect_mode(files: &[PathBuf]) -> Option<Mode> {
+    mode_from_flags(files.iter().map(|p| is_cryptyrust_file(p)))
+}
+
+/// `Decrypt` if every file is encrypted, `Encrypt` if none is (or the list is
+/// empty), `None` for a mix.
+pub fn mode_from_flags(encrypted: impl IntoIterator<Item = bool>) -> Option<Mode> {
+    let (mut total, mut enc) = (0usize, 0usize);
+    for e in encrypted {
+        total += 1;
+        enc += usize::from(e);
+    }
+    if enc == 0 {
         Some(Mode::Encrypt)
+    } else if enc == total {
+        Some(Mode::Decrypt)
     } else {
         None
     }
 }
 
+/// Shortest password accepted when a password is being *set* (encryption,
+/// password change, additional password). Never applied to decryption.
+pub const MIN_PASSWORD_CHARS: usize = 8;
+
+/// Check a password that is about to protect a file.
+pub fn check_new_password(password: &str) -> Result<(), String> {
+    if password.chars().count() < MIN_PASSWORD_CHARS {
+        return Err(format!("Password must be at least {MIN_PASSWORD_CHARS} characters."));
+    }
+    Ok(())
+}
+
 pub fn get_file_size(path: &Path) -> String {
-    match std::fs::metadata(path) {
-        Ok(metadata) => {
+    // Display only: the rounding of a u64 → f64 conversion is irrelevant here.
+    #[allow(clippy::cast_precision_loss)]
+    std::fs::metadata(path).map_or_else(
+        |_| "Unknown".to_string(),
+        |metadata| {
             let size = metadata.len();
             if size < 1024 {
-                format!("{} B", size)
+                format!("{size} B")
             } else if size < 1024 * 1024 {
                 format!("{} KB", size / 1024)
             } else if size < 1024 * 1024 * 1024 {
@@ -50,19 +106,18 @@ pub fn get_file_size(path: &Path) -> String {
             } else {
                 format!("{:.1} GB", size as f64 / (1024.0 * 1024.0 * 1024.0))
             }
-        }
-        Err(_) => "Unknown".to_string(),
-    }
+        },
+    )
 }
 
-pub fn arsenic_strength_label(s: ArsenicStrength) -> &'static str {
+pub const fn arsenic_strength_label(s: ArsenicStrength) -> &'static str {
     match s {
         ArsenicStrength::Interactive => "Interactive  (256 MB)",
         ArsenicStrength::Sensitive => "Sensitive  (1 GB)",
     }
 }
 
-pub fn cipher_label(c: CipherId) -> &'static str {
+pub const fn cipher_label(c: CipherId) -> &'static str {
     match c {
         CipherId::DeoxysII256 => "Deoxys-II-256",
         CipherId::Aes256GcmSiv => "AES-256-GCM-SIV",
@@ -70,7 +125,7 @@ pub fn cipher_label(c: CipherId) -> &'static str {
     }
 }
 
-pub fn cipher_short_label(c: CipherId) -> &'static str {
+pub const fn cipher_short_label(c: CipherId) -> &'static str {
     match c {
         CipherId::DeoxysII256 => "Deoxys-II",
         CipherId::Aes256GcmSiv => "AES-GCM-SIV",
@@ -78,7 +133,7 @@ pub fn cipher_short_label(c: CipherId) -> &'static str {
     }
 }
 
-pub fn cipher_to_key(c: CipherId) -> &'static str {
+pub const fn cipher_to_key(c: CipherId) -> &'static str {
     match c {
         CipherId::DeoxysII256 => "deoxys_ii",
         CipherId::Aes256GcmSiv => "aes_gcm_siv",
@@ -95,10 +150,10 @@ pub fn cipher_from_key(s: &str) -> Option<CipherId> {
     }
 }
 
-/// Atomically claims a unique output path using `create_new` (O_CREAT|O_EXCL).
+/// Atomically claims a unique output path using `create_new` (`O_CREAT|O_EXCL`).
 /// Returns the path string and the open empty File handle (keeps the slot claimed).
 pub fn create_unique_output_file(base: &str, ext: &str) -> io::Result<(String, File)> {
-    let candidate = format!("{}{}", base, ext);
+    let candidate = format!("{base}{ext}");
     match OpenOptions::new()
         .write(true)
         .create_new(true)
@@ -110,7 +165,7 @@ pub fn create_unique_output_file(base: &str, ext: &str) -> io::Result<(String, F
     }
     let mut n = 1u32;
     loop {
-        let candidate = format!("{} ({}){}", base, n, ext);
+        let candidate = format!("{base} ({n}){ext}");
         match OpenOptions::new()
             .write(true)
             .create_new(true)
@@ -176,6 +231,35 @@ mod tests {
             .collect();
         assert_eq!(detect_mode(&files), Some(Mode::Decrypt));
         for p in files { let _ = std::fs::remove_file(p); }
+    }
+
+    #[test]
+    fn file_meta_distinguishes_binary_and_armored() {
+        let mut bin = NamedTempFile::new().unwrap();
+        bin.write_all(&[0x41, 0x52, 0x53, 0x4E, 0, 0]).unwrap();
+        let mut arm = NamedTempFile::new().unwrap();
+        arm.write_all(b"-----BEGIN ARSENIC ENCRYPTED FILE-----\nAAAA\n").unwrap();
+        let mut plain = NamedTempFile::new().unwrap();
+        plain.write_all(b"hello").unwrap();
+
+        let m = FileMeta::read(bin.path());
+        assert!(m.encrypted && !m.armored);
+        let m = FileMeta::read(arm.path());
+        assert!(m.encrypted && m.armored);
+        assert!(is_armored_file(arm.path()) && !is_armored_file(bin.path()));
+        let m = FileMeta::read(plain.path());
+        assert!(!m.encrypted && !m.armored);
+        assert_eq!(m.size, "5 B");
+    }
+
+    #[test]
+    fn new_password_needs_eight_characters() {
+        assert!(check_new_password("1234567").is_err());
+        assert!(check_new_password("12345678").is_ok());
+        // Characters, not bytes: 7 accented letters are 14 bytes but too short.
+        assert!(check_new_password("ééééééé").is_err());
+        assert!(check_new_password("éééééééé").is_ok());
+        assert!(check_new_password("").is_err());
     }
 
     // ── is_cryptyrust_file ───────────────────────────────────────────────────

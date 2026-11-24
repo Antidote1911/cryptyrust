@@ -1,3 +1,7 @@
+// Base64 bit packing: the casts keep the low bits on purpose, and the output
+// alphabet is ASCII so the UTF-8 conversions cannot fail.
+#![allow(clippy::cast_possible_truncation, clippy::expect_used, clippy::missing_panics_doc)]
+
 //! ASCII armor — base64 encoding with PEM-style header/footer.
 //!
 //! Armor makes a binary `.arsn` file safe to transmit over text channels
@@ -17,13 +21,13 @@ const LINE_WIDTH: usize = 64;
 const B64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
 
 fn b64_encode(data: &[u8]) -> String {
-    let cap = (data.len() + 2) / 3 * 4;
+    let cap = data.len().div_ceil(3) * 4;
     let mut out = Vec::with_capacity(cap);
     for chunk in data.chunks(3) {
         let n = match chunk.len() {
-            3 => ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8) | chunk[2] as u32,
-            2 => ((chunk[0] as u32) << 16) | ((chunk[1] as u32) << 8),
-            _ => (chunk[0] as u32) << 16,
+            3 => (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8) | u32::from(chunk[2]),
+            2 => (u32::from(chunk[0]) << 16) | (u32::from(chunk[1]) << 8),
+            _ => u32::from(chunk[0]) << 16,
         };
         out.push(B64[((n >> 18) & 63) as usize]);
         out.push(B64[((n >> 12) & 63) as usize]);
@@ -34,14 +38,12 @@ fn b64_encode(data: &[u8]) -> String {
 }
 
 fn b64_decode(s: &[u8]) -> Option<Vec<u8>> {
-    if s.len() % 4 != 0 { return None; }
+    if !s.len().is_multiple_of(4) { return None; }
     let mut rev = [0xffu8; 256];
     for (i, &c) in B64.iter().enumerate() { rev[c as usize] = i as u8; }
 
     let mut out = Vec::with_capacity(s.len() / 4 * 3);
-    let mut iter = s.chunks(4);
-    loop {
-        let Some(chunk) = iter.next() else { break };
+    for chunk in s.chunks(4) {
         let mut vals = [0u32; 4];
         let mut pad = 0usize;
         for (i, &c) in chunk.iter().enumerate() {
@@ -51,7 +53,7 @@ fn b64_decode(s: &[u8]) -> Option<Vec<u8>> {
             } else {
                 let v = rev[c as usize];
                 if v == 0xff { return None; }
-                vals[i] = v as u32;
+                vals[i] = u32::from(v);
             }
         }
         if pad > 2 { return None; }

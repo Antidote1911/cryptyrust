@@ -1,3 +1,7 @@
+// unwrap/expect here only convert fixed-size arrays to the ml-kem crate's
+// array types: the lengths are compile-time constants.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! ML-KEM helpers (768 and 1024) with plain byte-array I/O.
 //!
 //! All public functions accept/return fixed-size `[u8; N]` arrays so the rest
@@ -63,16 +67,28 @@ pub fn encapsulation_key_768(mlkem_seed: &[u8; 64]) -> [u8; EK_LEN_768] {
 /// Encapsulate for ML-KEM-768: produce `(ciphertext[1088], shared_secret[32])`.
 ///
 /// `m` must be 32 bytes of fresh OS CSPRNG randomness.
-pub fn encaps_768(ek_bytes: &[u8; EK_LEN_768], m: &[u8; 32]) -> ([u8; CT_LEN_768], [u8; 32]) {
+///
+/// Returns `None` if `ek_bytes` is not a valid ML-KEM-768 public key (it comes
+/// from a contact file, so it cannot be trusted to be well-formed).
+pub fn encaps_768(
+    ek_bytes: &[u8; EK_LEN_768],
+    m: &[u8; 32],
+) -> Option<([u8; CT_LEN_768], [u8; 32])> {
     let ek_key: Key<EncapsulationKey768> = ek_bytes.as_slice().try_into().expect("EK_LEN_768");
-    let ek = EncapsulationKey768::new(&ek_key).expect("valid ML-KEM-768 public key");
+    let ek = EncapsulationKey768::new(&ek_key).ok()?;
     let m_arr: B32 = m.as_slice().try_into().unwrap();
     let (ct, ss) = ek.encapsulate_deterministic(&m_arr);
     let mut ct_out = [0u8; CT_LEN_768];
     ct_out.copy_from_slice(ct.as_slice());
     let mut ss_out = [0u8; 32];
     ss_out.copy_from_slice(ss.as_slice());
-    (ct_out, ss_out)
+    Some((ct_out, ss_out))
+}
+
+/// True if `ek_bytes` is a well-formed ML-KEM-768 public key.
+pub fn is_valid_ek_768(ek_bytes: &[u8; EK_LEN_768]) -> bool {
+    let ek_key: Key<EncapsulationKey768> = ek_bytes.as_slice().try_into().expect("EK_LEN_768");
+    EncapsulationKey768::new(&ek_key).is_ok()
 }
 
 /// Decapsulate ML-KEM-768: recover the shared secret.
@@ -102,16 +118,21 @@ pub fn encapsulation_key_1024(mlkem_seed: &[u8; 64]) -> [u8; EK_LEN_1024] {
 }
 
 /// Encapsulate for ML-KEM-1024: produce `(ciphertext[1568], shared_secret[32])`.
-pub fn encaps_1024(ek_bytes: &[u8; EK_LEN_1024], m: &[u8; 32]) -> ([u8; CT_LEN_1024], [u8; 32]) {
+///
+/// Returns `None` if `ek_bytes` is not a valid ML-KEM-1024 public key.
+pub fn encaps_1024(
+    ek_bytes: &[u8; EK_LEN_1024],
+    m: &[u8; 32],
+) -> Option<([u8; CT_LEN_1024], [u8; 32])> {
     let ek_key: Key<EncapsulationKey1024> = ek_bytes.as_slice().try_into().expect("EK_LEN_1024");
-    let ek = EncapsulationKey1024::new(&ek_key).expect("valid ML-KEM-1024 public key");
+    let ek = EncapsulationKey1024::new(&ek_key).ok()?;
     let m_arr: B32 = m.as_slice().try_into().unwrap();
     let (ct, ss) = ek.encapsulate_deterministic(&m_arr);
     let mut ct_out = [0u8; CT_LEN_1024];
     ct_out.copy_from_slice(ct.as_slice());
     let mut ss_out = [0u8; 32];
     ss_out.copy_from_slice(ss.as_slice());
-    (ct_out, ss_out)
+    Some((ct_out, ss_out))
 }
 
 /// Decapsulate ML-KEM-1024.

@@ -1,6 +1,6 @@
 # arsenic
 
-Pure-Rust cryptographic library implementing the **Arsenic V1** file encryption format (`.arsn`).
+Pure-Rust cryptographic library implementing the **Arsenic V2** file encryption format (`.arsn`).
 
 Used by the [`cryptyrust`](../cryptyrust) binary (GUI + CLI + key management) and the [`arsenic_ffi`](../ffi) C FFI layer.
 
@@ -19,11 +19,12 @@ Used by the [`cryptyrust`](../cryptyrust) binary (GUI + CLI + key management) an
   - `XChaCha20-Poly1305` — 192-bit nonce, software-friendly *(default payload)*
   - `AES-256-GCM-SIV` — nonce-misuse resistant
 - **Argon2id** key derivation with two presets (`Interactive` 256 MiB / `Sensitive` 1 GiB)
-- **LUKS-style keyslot** — password change rewrites only the 48-byte DEK wrapper; payload untouched
-- **BLAKE3 Merkle tree** — domain-separated integrity over all encrypted blocks; verified before any plaintext write
-- **Streaming block processing** — O(block_size + N_blocks × 32) memory regardless of file size
+- **LUKS-style keyslots** — a password change rewrites only its 92-byte slot and the header MAC; payload untouched
+- **Authenticated header** — a BLAKE3 MAC keyed from the file key covers every header byte, for password and keypair holders alike
+- **Truncation-proof payload** — block index and a final-block flag are bound into every block; single-pass decryption
+- **Parallel streaming** — blocks are processed in parallel within a bounded window (≤ 128 MiB of plaintext), with or without compression
 - **Crash-safe rekey** — `.bak` backup written and fsynced before any in-place write
-- **Sender identity embedding** — public keys stored unencrypted in header (advisory)
+- **Sender identity embedding** — public keys stored in clear in the header, covered by the header MAC (a claim, not a proof of identity)
 - **Key material erasure** — `Secret<T>` wrappers zeroized on drop
 
 ---
@@ -82,8 +83,8 @@ params.compress = Some(3); // zstd level 3
 use arsenic::{arsenic_add_passphrase, arsenic_remove_passphrase, arsenic_list_passphrases};
 
 arsenic_add_passphrase(path, &existing_pw, &new_pw, &NoUi)?;
-arsenic_remove_passphrase(path, &primary_pw, &pw_to_remove, &NoUi)?;
-let extra_count = arsenic_list_passphrases(path)?; // number of extra slots (0 = primary only)
+arsenic_remove_passphrase(path, &any_pw_of_the_file, &pw_to_remove, &NoUi)?;
+let count = arsenic_list_passphrases(path)?; // number of passwords (0 = keypairs only)
 ```
 
 ### Partial / random-access block decryption
@@ -92,8 +93,7 @@ let extra_count = arsenic_list_passphrases(path)?; // number of extra slots (0 =
 use arsenic::decrypt_block_at;
 
 // Decrypt block 500 of a multi-block file without reading blocks 0–499.
-// Note: only the block's AEAD tag is verified — no Merkle root check.
-// Do not use for security-critical access control decisions.
+// The header and that block are authenticated; the rest of the file is not read.
 let block = decrypt_block_at(&mut seekable_input, &password, 500, &NoUi)?;
 ```
 
@@ -105,9 +105,9 @@ let block = decrypt_block_at(&mut seekable_input, &password, 500, &NoUi)?;
 |---|---|
 | `encrypt_arsenic` | Stream encrypt: `Read` → `Write + Seek` |
 | `encrypt_arsenic_to_writer` | Stream encrypt to non-seekable `Write` (buffers ciphertext in RAM) |
-| `decrypt_arsenic` | Stream decrypt with Merkle verification; `Read + Seek` → `Write` |
+| `decrypt_arsenic` | Single-pass authenticated decrypt; `Read + Seek` → `Write` |
 | `decrypt_arsenic_with_key` | Asymmetric stream decrypt with hybrid keypair |
-| `decrypt_block_at` | Decrypt one block by index (AEAD only, no Merkle) |
+| `decrypt_block_at` | Decrypt one block by index (header + that block authenticated) |
 | `decrypt_block_at_with_key` | Same, asymmetric path |
 | `armor` | Encode binary ciphertext as ASCII armor |
 | `dearmor` | Decode ASCII armor back to binary |
@@ -119,10 +119,10 @@ let block = decrypt_block_at(&mut seekable_input, &password, 500, &NoUi)?;
 | `arsenic_remove_recipient` | Remove a keyslot by index |
 | `arsenic_list_recipients` | List ephemeral X25519 keys of all keyslots |
 | `arsenic_find_matching_key` | Find which stored key can decrypt a file |
-| `arsenic_add_passphrase` | Add an extra passphrase slot |
-| `arsenic_remove_passphrase` | Remove an extra passphrase slot |
-| `arsenic_list_passphrases` | Count extra passphrase slots |
-| `arsenic_read_sender_info` | Read sender identity from public header |
+| `arsenic_add_passphrase` | Add a password |
+| `arsenic_remove_passphrase` | Remove a password |
+| `arsenic_list_passphrases` | Count the passwords of a file |
+| `arsenic_read_sender_info` | Read sender identity from the header (authenticated only by a decryption) |
 | `ArsenicParams` | Cipher IDs, Argon2id cost, recipients, compression, sender |
 | `HybridRecipient` | Combined X25519 + ML-KEM-768 public key |
 | `ArsenicStrength` | `Interactive` (256 MiB) / `Sensitive` (1 GiB) |
@@ -162,28 +162,37 @@ let block = decrypt_block_at(&mut seekable_input, &password, 500, &NoUi)?;
 
 ### Multiple passphrase slots
 
-- Max **15 extra slots** + 1 primary = 16 total
-- All slots share the same Argon2id parameters (t/m/p)
-- Primary slot: HeaderMAC fast-fail on wrong password
-- Extra slots: AEAD-only authentication (full Argon2id cost per attempt)
-- Extra slots are authenticated by the AEAD tag of `wrapped_dek`; they cannot be added or removed without the primary password
+- Up to **16 passwords** per file, all equal: any of them opens the file and can add, change or remove another
+- All slots share the Argon2id salt and parameters, so a wrong password costs one Argon2id run whatever their number
+- Each slot carries a check tag: the matching slot is found in constant time, and the slot is committed to its key
+- A file encrypted for recipients only has **no** password slot
+- The last key slot of a file cannot be removed
 
 ---
 
 ## Known design trade-offs
 
-### No streaming decryption from non-seekable sources
+### Plaintext is released block by block
 
-`decrypt_arsenic` requires `R: Read + Seek`. The two-pass design (Pass 1: Merkle
-verification; Pass 2: decrypt + write) guarantees no plaintext is written for
-tampered or truncated files. Use `decrypt_block_at` for partial access with a
-weaker guarantee (per-block AEAD only).
+`decrypt_arsenic` is a single pass: each window of blocks is authenticated,
+then written. A truncated or tampered file is always detected, but possibly
+after earlier (authentic) plaintext was written — the caller must discard the
+output when an error is returned. The file-level functions do this.
+
+It requires `R: Read + Seek`, because the position of the last block is taken
+from the file length.
 
 ### Compression and plaintext size
 
-`params.compress = Some(level)` buffers the entire input in RAM, compresses with
-zstd, then encrypts. Memory usage is O(uncompressed_size + compressed_size).
-Compressed files cannot use random-access decryption (`decrypt_block_at`).
+`params.compress = Some(level)` streams the input through zstd before
+encryption; memory stays bounded. Compression leaks information about the
+plaintext through the ciphertext size. Compressed files cannot use
+random-access decryption (`decrypt_block_at`).
+
+### Changing a password does not change the file key
+
+A password change or removal rewrites key slots only. Anyone who knew the old
+password and kept a copy of the old file can still decrypt that copy.
 
 ### Recipient revocation
 
@@ -196,25 +205,19 @@ their keyslot intact. True revocation requires re-encrypting with a new DEK.
 ## Format summary
 
 ```
-┌──────────────────────────────────────────────┐  ← offset 0x00
-│  Pre-MAC section    77 bytes                  │  HeaderMAC covers this
-│  HeaderMAC          32 bytes                  │  BLAKE3_keyed_hash(KEK, pre-MAC)
-│  Primary WrappedDEK 48 bytes                  │  AEAD(KEK, DEK)
-│  extra_pass_count    4 bytes                  │  u32 LE (0..15)
-│  Extra pass slots   76 bytes × K              │  AEAD(KEK_extra, DEK) each
-│  hybrid_768_count    4 bytes                  │
-│  Keyslots_768     1180 bytes × N              │  X25519+ML-KEM-768 wrapped DEK
-│  hybrid_1024_count   4 bytes                  │
-│  Keyslots_1024    1660 bytes × M              │  X25519+ML-KEM-1024 wrapped DEK
-│  ProtectedMeta      ≥66 bytes                 │  AEAD(MetaKey, TLV[50+])
-│  sender_present       1 byte                  │
-│  [sender region]   ≥1219 bytes                │  plaintext, advisory
-└──────────────────────────────────────────────┘  ← offset = header_total_size (≥236)
+┌──────────────────────────────────────────────┐  offset 0
+│  Public parameters   65 bytes                 │  ciphers, Argon2id salt and costs, base nonce
+│  Password slots       4 + 92 × K              │  K = 0…16, AEAD(wrap key, DEK) + check tag
+│  Keyslots 768         4 + 1180 × N            │  X25519 + ML-KEM-768 wrapped DEK
+│  Keyslots 1024        4 + 1660 × M            │  X25519 + ML-KEM-1024 wrapped DEK
+│  Protected metadata   4 + nonce + AEAD(TLV)   │  size, block size, compression, filename…
+│  Sender               1 byte [+ identity]     │  in clear
+│  HeaderMAC           32 bytes                 │  BLAKE3 keyed from the DEK, over all of the above
+└──────────────────────────────────────────────┘  offset = header_total_size (≥ 155)
 ┌──────────────────────────────────────────────┐
-│  Block 0: [compressed] plaintext + 16-byte AEAD tag  │
-│  Block 1: …                                   │
+│  Block 0: plaintext + 16-byte AEAD tag        │  index + final flag in nonce and AAD
+│  Block 1: …                                   │  at least one block, the last one is "final"
 └──────────────────────────────────────────────┘
-  ↓ BLAKE3 Merkle tree (root stored in ProtectedMeta)
 ```
 
 Full specification: [`FORMAT.md`](FORMAT.md).

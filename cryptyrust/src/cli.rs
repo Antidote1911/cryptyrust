@@ -6,8 +6,7 @@ const ABOUT: &str = "
 Arsenic file encryption — encrypts, decrypts, and manages keys.
 
 Key management:
-  cryptyrust keygen -n alice --store               Generate keypair (X25519 + ML-KEM-768)
-  cryptyrust keygen -n alice --store --kem-level 1024  Generate keypair (ML-KEM-1024)
+  cryptyrust keygen -n alice --store               Generate keypair (X25519 + ML-KEM)
   cryptyrust keygen --list                         List stored keypairs
 
 Encryption / decryption:
@@ -28,9 +27,9 @@ Recipient management:
   cryptyrust recipients remove FILE -i KEY_FILE    Remove a recipient keyslot
 
 Passphrase slot management:
-  cryptyrust passphrase list FILE                  Count extra passphrase slots
-  cryptyrust passphrase add FILE -p PW --new-pass NEW  Add a passphrase slot
-  cryptyrust passphrase remove FILE -p PW --remove-pass OLD  Remove a passphrase slot
+  cryptyrust passphrase list FILE                  Count the passwords of a file
+  cryptyrust passphrase add FILE -p PW --new-pass NEW  Add a password
+  cryptyrust passphrase remove FILE -p PW --remove-pass OLD  Remove a password
 
 Author : Fabrice Corraire <antidote1911@gmail.com>
 Github : https://github.com/Antidote1911/
@@ -58,10 +57,12 @@ pub struct Cli {
     output: Option<String>,
 
     /// Password (not recommended — appears in shell history).
+    /// At least 8 characters when encrypting.
     #[clap(short, long, value_name = "PASSWORD")]
     password: Option<String>,
 
-    /// Read the password from a UTF-8 file (no trailing newline).
+    /// Read the password from a UTF-8 file. The whole content is the password,
+    /// including a trailing newline if the file has one.
     #[clap(short = 'f', long, value_name = "FILE")]
     passwordfile: Option<String>,
 
@@ -123,6 +124,15 @@ pub enum KemLevelArg {
     L1024,
 }
 
+impl From<KemLevelArg> for KemLevel {
+    fn from(level: KemLevelArg) -> Self {
+        match level {
+            KemLevelArg::L768 => Self::L768,
+            KemLevelArg::L1024 => Self::L1024,
+        }
+    }
+}
+
 #[derive(Copy, Clone, PartialEq, Eq, PartialOrd, Ord, clap::ValueEnum)]
 pub enum CipherArg {
     /// Deoxys-II-256
@@ -161,16 +171,17 @@ pub struct KeygenCli {
     #[clap(short = 'y', long = "to-public", value_name = "IDENTITY", num_args = 1..)]
     pub to_public: Vec<String>,
 
-    /// ML-KEM security level for new encryption keypairs.
-    #[clap(long = "kem-level", value_enum, value_name = "LEVEL", default_value = "768")]
-    pub kem_level: KemLevelArg,
+    /// Deprecated no-op, still accepted so existing scripts keep working:
+    /// a keypair works with both ML-KEM levels, chosen at encryption time.
+    #[clap(long = "kem-level", value_enum, value_name = "LEVEL", hide = true)]
+    pub kem_level: Option<KemLevelArg>,
 }
 
 // ── Passphrase slot management sub-command ────────────────────────────────────
 
 #[derive(Parser)]
 #[clap(name = "cryptyrust passphrase", author, version)]
-#[clap(about = "Add, remove, or list extra passphrase keyslots in an .arsn file")]
+#[clap(about = "Add, remove, or count the passwords of an .arsn file")]
 pub struct PassphraseCli {
     #[clap(subcommand)]
     pub action: PassphraseAction,
@@ -178,24 +189,21 @@ pub struct PassphraseCli {
 
 #[derive(clap::Subcommand)]
 pub enum PassphraseAction {
-    /// Show the number of extra passphrase slots (primary slot not counted).
+    /// Show the number of passwords that open the file.
     List {
         #[clap(value_name = "FILE")]
         file: String,
     },
 
-    /// Add an extra passphrase slot.
+    /// Add a password to the file (up to 16).
     ///
-    /// After this, the file can be decrypted with either the primary password
-    /// or the new password.
-    ///
-    /// NOTE: extra slots do not benefit from the HeaderMAC fast-fail — a wrong
-    /// password pays the full Argon2id cost for each extra slot.
+    /// Afterwards the file opens with any of its passwords. Every password
+    /// has the same rights: any of them can add, change or remove another.
     Add {
         #[clap(value_name = "FILE")]
         file: String,
 
-        /// Existing password to authenticate (primary slot recommended).
+        /// A password of the file, to authenticate.
         #[clap(short, long, value_name = "PASSWORD")]
         password: Option<String>,
 
@@ -212,19 +220,20 @@ pub enum PassphraseAction {
         new_pass_file: Option<String>,
     },
 
-    /// Remove an extra passphrase slot.
+    /// Remove a password from the file.
     ///
-    /// Requires the primary password to recompute the HeaderMAC.
-    /// The primary slot itself cannot be removed.
+    /// Authenticate with any password of the file, including the one being
+    /// removed. The last key slot of a file (password or recipient) cannot be
+    /// removed.
     Remove {
         #[clap(value_name = "FILE")]
         file: String,
 
-        /// Primary password (used for HeaderMAC authentication).
+        /// A password of the file, to authenticate.
         #[clap(short, long, value_name = "PASSWORD")]
         password: Option<String>,
 
-        /// Read the primary password from a file.
+        /// Read the authenticating password from a file.
         #[clap(short = 'f', long, value_name = "FILE")]
         passwordfile: Option<String>,
 
@@ -278,9 +287,15 @@ pub enum RecipientsAction {
         #[clap(short, long, value_name = "PASSWORD")]
         password: Option<String>,
 
-        /// Read the password from a UTF-8 file.
+        /// Read the password from a UTF-8 file. The whole content is the password,
+        /// including a trailing newline if the file has one.
         #[clap(short = 'f', long, value_name = "FILE")]
         passwordfile: Option<String>,
+
+        /// ML-KEM level of the new keyslot. Default: the level already used
+        /// by the file's keyslots (768 if it has none).
+        #[clap(long = "kem-level", value_enum, value_name = "LEVEL")]
+        kem_level: Option<KemLevelArg>,
     },
 
     /// Remove a recipient keyslot from an existing file.
@@ -288,9 +303,8 @@ pub enum RecipientsAction {
     /// Specify the recipient either by identity file (-i) or by slot index (--slot).
     /// Use `cryptyrust recipients list FILE` to discover slot indices.
     ///
-    /// The symmetric password is always required to authorize the operation and
-    /// recompute the HeaderMAC. Files encrypted with recipients only (no password)
-    /// cannot have keyslots removed post-hoc unless they were also given a password.
+    /// A password of the file is always required to authorize the operation.
+    /// Files encrypted for recipients only (no password) cannot be edited.
     Remove {
         /// The .arsn file to modify.
         #[clap(value_name = "FILE")]
@@ -308,7 +322,8 @@ pub enum RecipientsAction {
         #[clap(short, long, value_name = "PASSWORD")]
         password: Option<String>,
 
-        /// Read the password from a UTF-8 file.
+        /// Read the password from a UTF-8 file. The whole content is the password,
+        /// including a trailing newline if the file has one.
         #[clap(short = 'f', long, value_name = "FILE")]
         passwordfile: Option<String>,
     },
@@ -323,24 +338,24 @@ impl Cli {
     pub fn encrypt(&self)      -> Option<&str>  { self.encrypt.as_deref() }
     pub fn decrypt(&self)      -> Option<&str>  { self.decrypt.as_deref() }
     pub fn rekey(&self)        -> Option<&str>  { self.rekey.as_deref() }
-    pub fn bench(&self)        -> bool          { self.bench }
+    pub const fn bench(&self)        -> bool          { self.bench }
     pub fn recipients(&self)   -> &[String]     { &self.recipients }
     pub fn identities(&self)   -> &[String]     { &self.identities }
 
-    pub fn strength(&self) -> ArsenicStrength {
+    pub const fn strength(&self) -> ArsenicStrength {
         match self.strength {
             StrengthArg::Interactive => ArsenicStrength::Interactive,
             StrengthArg::Sensitive   => ArsenicStrength::Sensitive,
         }
     }
-    pub fn hdr_cipher(&self) -> CipherId {
+    pub const fn hdr_cipher(&self) -> CipherId {
         match self.hdr_cipher {
             CipherArg::DeoxysIi  => CipherId::DeoxysII256,
             CipherArg::Xchacha20 => CipherId::XChaCha20Poly1305,
             CipherArg::AesGcmSiv => CipherId::Aes256GcmSiv,
         }
     }
-    pub fn pld_cipher(&self) -> CipherId {
+    pub const fn pld_cipher(&self) -> CipherId {
         match self.pld_cipher {
             CipherArg::DeoxysIi  => CipherId::DeoxysII256,
             CipherArg::Xchacha20 => CipherId::XChaCha20Poly1305,
@@ -348,11 +363,8 @@ impl Cli {
         }
     }
     pub fn kem_level(&self) -> KemLevel {
-        match self.kem_level {
-            KemLevelArg::L768  => KemLevel::L768,
-            KemLevelArg::L1024 => KemLevel::L1024,
-        }
+        self.kem_level.into()
     }
-    pub fn armor(&self)    -> bool          { self.armor }
-    pub fn compress(&self) -> Option<i32>   { self.compress }
+    pub const fn armor(&self)    -> bool          { self.armor }
+    pub const fn compress(&self) -> Option<i32>   { self.compress }
 }

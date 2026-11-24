@@ -7,21 +7,20 @@ pub(crate) mod hybrid_kem;
 
 pub use crypto::{
     decrypt_arsenic, decrypt_arsenic_with_key, encrypt_arsenic, find_decrypting_key,
-    find_slot_for_privkey, list_recipients, rekey_arsenic,
+    find_slot_for_privkey, list_recipients, read_header, rekey_arsenic,
     build_header_with_added_recipient, build_header_with_removed_recipient,
     build_header_with_added_passphrase, build_header_with_removed_passphrase,
     encrypt_arsenic_to_writer,
     decrypt_block_at, decrypt_block_at_with_key,
-    try_extra_passphrase_slots,
     HybridPrivKey,
 };
 pub use armor::{armor, dearmor};
 
 use crate::arsenic::hybrid_kem::EK_LEN as MLKEM_EK_LEN;
 pub use header::{
-    HybridKeyslot, HybridKeyslot1024, ExtraPassSlot,
+    HybridKeyslot, HybridKeyslot1024, PasswordSlot,
     EnvelopeMetadata, MIN_HEADER_TOTAL_SIZE, WRAPPED_DEK_LEN,
-    EXTRA_PASS_COUNT_LEN, EXTRA_PASS_SLOT_LEN, MAX_EXTRA_PASSPHRASE_SLOTS,
+    PASSWORD_SLOT_LEN, MAX_PASSWORD_SLOTS, MAX_ASYM_KEYSLOTS,
     COMPRESS_ZSTD,
 };
 pub use header::{MAX_T_COST, MAX_P_COST};
@@ -49,16 +48,16 @@ pub struct HybridRecipient {
     pub x25519: [u8; 32],
     /// ML-KEM-768 encapsulation key — 1184 bytes (always present).
     pub mlkem: [u8; MLKEM_EK_LEN],
-    /// ML-KEM-1024 encapsulation key — 1568 bytes (present when KemLevel::L1024).
+    /// ML-KEM-1024 encapsulation key — 1568 bytes (present when `KemLevel::L1024`).
     pub mlkem_1024: Option<[u8; 1568]>,
 }
 
 impl HybridRecipient {
-    pub fn new(x25519: [u8; 32], mlkem: [u8; MLKEM_EK_LEN]) -> Self {
+    pub const fn new(x25519: [u8; 32], mlkem: [u8; MLKEM_EK_LEN]) -> Self {
         Self { x25519, mlkem, mlkem_1024: None }
     }
 
-    pub fn new_with_1024(x25519: [u8; 32], mlkem: [u8; MLKEM_EK_LEN], mlkem_1024: [u8; 1568]) -> Self {
+    pub const fn new_with_1024(x25519: [u8; 32], mlkem: [u8; MLKEM_EK_LEN], mlkem_1024: [u8; 1568]) -> Self {
         Self { x25519, mlkem, mlkem_1024: Some(mlkem_1024) }
     }
 }
@@ -93,12 +92,12 @@ impl CipherId {
         }
     }
 
-    pub fn to_byte(self) -> u8 {
+    pub const fn to_byte(self) -> u8 {
         self as u8
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ArsenicStrength {
     Interactive,
     Sensitive,

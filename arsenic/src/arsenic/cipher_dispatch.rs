@@ -1,3 +1,6 @@
+// unwrap/expect here only truncate a 32-byte BLAKE3 output to a shorter nonce.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 //! Uniform encrypt/decrypt interface over the three supported AEAD ciphers.
 //!
 //! All ciphers produce a 16-byte authentication tag, so ciphertext lengths are
@@ -22,7 +25,7 @@ use crate::errors::CoreErr;
 
 use super::CipherId;
 
-/// BLAKE3-expand a 12-byte nonce to 24 bytes for XChaCha20 header use.
+/// BLAKE3-expand a 12-byte nonce to 24 bytes for `XChaCha20` header use.
 fn expand_12_to_24(n: &[u8; 12]) -> [u8; 24] {
     blake3::derive_key("Arsenic V1 KEK Nonce XChaCha20", n.as_slice())[..24]
         .try_into().expect("24 <= 32")
@@ -37,7 +40,7 @@ fn expand_12_to_15(n: &[u8; 12]) -> [u8; 15] {
 /// Encrypt the key envelope using the chosen header cipher.
 ///
 /// `kek_nonce` is always the 12-byte field stored in the header.
-pub(crate) fn envelope_encrypt(
+pub fn envelope_encrypt(
     cipher_id: CipherId,
     key: &[u8; 32],
     kek_nonce: &[u8; 12],
@@ -85,7 +88,7 @@ pub(crate) fn envelope_encrypt(
 }
 
 /// Decrypt the key envelope using the chosen header cipher.
-pub(crate) fn envelope_decrypt(
+pub fn envelope_decrypt(
     cipher_id: CipherId,
     key: &[u8; 32],
     kek_nonce: &[u8; 12],
@@ -137,7 +140,7 @@ pub(crate) fn envelope_decrypt(
 /// `nonce24` is always 24 bytes (derived per-block via BLAKE3).
 /// AES-256-GCM-SIV uses the first 12; Deoxys-II-256 uses the first 15;
 /// XChaCha20-Poly1305 uses all 24.
-pub(crate) fn block_encrypt(
+pub fn block_encrypt(
     cipher_id: CipherId,
     key: &[u8; 32],
     nonce24: &[u8; 24],
@@ -183,7 +186,7 @@ pub(crate) fn block_encrypt(
 }
 
 /// Decrypt a payload block.
-pub(crate) fn block_decrypt(
+pub fn block_decrypt(
     cipher_id: CipherId,
     key: &[u8; 32],
     nonce24: &[u8; 24],

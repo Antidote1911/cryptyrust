@@ -13,7 +13,7 @@ Built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/e
 - **Multi-file parallel encryption** via Rayon
 - **Individual cancellation** of each in-progress operation
 - **Post-quantum hybrid encryption** — X25519 + ML-KEM-768 or ML-KEM-1024 (NIST FIPS 203)
-- **Multiple passphrase keyslots** — up to 15 extra passwords on the same file
+- **Multiple passwords** — up to 16 equal passwords on the same file
 - **ASCII armor** — base64 output for email/text channels; auto-detected on decrypt
 - **Optional zstd compression** — levels 1–22, with size-leak warning
 - **Automatic key-based decryption** — if a keystore key matches, no password popup
@@ -92,8 +92,8 @@ cryptyrust --bench                           # benchmark ciphers
 | `-e FILE` | Encrypt FILE |
 | `-d FILE` | Decrypt FILE |
 | `--rekey FILE` | Change password in-place |
-| `-p PASSWORD` | Password (shell history risk) |
-| `-f FILE` | Read password from file |
+| `-p PASSWORD` | Password (shell history risk); at least 8 characters when encrypting |
+| `-f FILE` | Read password from file (whole content, trailing newline included) |
 | `-o PATH` | Output file or directory |
 | `-R NAME_OR_FILE` | Add recipient (repeatable) |
 | `-i KEY_FILE` | Identity file for decryption (repeatable) |
@@ -112,7 +112,6 @@ cryptyrust --bench                           # benchmark ciphers
 ```bash
 cryptyrust keygen -n alice --store           # save to shared keystore
 cryptyrust keygen -n alice -o alice.key      # save to file
-cryptyrust keygen -n alice --store --kem-level 1024
 cryptyrust keygen --list
 cryptyrust keygen -y alice.key               # show public key
 ```
@@ -133,15 +132,15 @@ cryptyrust recipients remove file.txt.arsn --slot 0 -p "passphrase"
 ## Passphrase Slot Management
 
 ```bash
-# Count extra passphrase slots
+# Count the passwords of a file
 cryptyrust passphrase list file.txt.arsn
 
-# Add an extra passphrase (any existing password authenticates)
-cryptyrust passphrase add file.txt.arsn -p "existing" --new-pass "extra"
+# Add a password (any password of the file authenticates; up to 16 per file)
+cryptyrust passphrase add file.txt.arsn -p "a-current-password" --new-pass "second-password"
 cryptyrust passphrase add file.txt.arsn --new-pass-file extra_pw.txt
 
-# Remove an extra passphrase (primary password required for HeaderMAC)
-cryptyrust passphrase remove file.txt.arsn -p "primary" --remove-pass "extra"
+# Remove a password (any password of the file authenticates)
+cryptyrust passphrase remove file.txt.arsn -p "a-current-password" --remove-pass "second-password"
 ```
 
 ---

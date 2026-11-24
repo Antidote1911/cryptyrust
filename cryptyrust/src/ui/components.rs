@@ -1,3 +1,7 @@
+// egui layout code is one long declarative block per window; splitting it by
+// line count would only scatter the layout.
+#![allow(clippy::too_many_lines)]
+
 use eframe::egui;
 use egui_extras::{Column, TableBuilder};
 use std::collections::HashMap;
@@ -7,12 +11,11 @@ use std::sync::Arc;
 
 use crate::app::CryptyApp;
 use crate::file_utils::{
-    arsenic_strength_label, cipher_label, cipher_short_label, get_file_size, is_cryptyrust_file,
-    Mode,
+    arsenic_strength_label, cipher_label, cipher_short_label, FileMeta, Mode,
 };
-use crate::job::PasswordPopup;
-use arsenic::{encode_privkey, encode_pubkey};
-use crate::keystore::{contacts_path, keys_dir, pubkey_short};
+use crate::job::{FileStatus, PasswordPopup};
+use arsenic::encode_pubkey;
+use crate::keystore::{pubkey_short, serialize_identity};
 use arsenic::{best_combination, ArsenicStrength, CipherId, KemLevel};
 
 pub fn render_config_menu(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool) {
@@ -164,7 +167,7 @@ pub fn render_bench_window(app: &mut CryptyApp, ctx: &egui::Context) {
                 });
                 ui.add_space(4.0);
                 ui.add(
-                    egui::ProgressBar::new(app.bench_progress as f32 / 100.0)
+                    egui::ProgressBar::new(pct_fraction(app.bench_progress))
                         .show_percentage()
                         .animate(true),
                 );
@@ -259,6 +262,8 @@ pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
 
             let pw_hint = if pw_optional && app.mode == Mode::Encrypt {
                 "Password… (optional — recipients selected)"
+            } else if app.mode == Mode::Encrypt {
+                "Password… (minimum 8 characters)"
             } else if pw_optional && app.mode == Mode::Decrypt {
                 "Password… (optional — keypair selected)"
             } else {
@@ -347,7 +352,7 @@ pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
                 ui.add_space(4.0);
 
                 let n_rows = app.keys.len() + app.contacts.len();
-                let scroll_h = (n_rows as f32 * 24.0 + 24.0).min(180.0);
+                let scroll_h = list_height(n_rows, 24.0, 24.0, 180.0);
                 egui::ScrollArea::vertical()
                     .max_height(scroll_h)
                     .id_salt("pw_recipients")
@@ -413,7 +418,7 @@ pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
                 );
                 ui.add_space(4.0);
 
-                let scroll_h = (app.keys.len() as f32 * 26.0 + 8.0).min(150.0);
+                let scroll_h = list_height(app.keys.len(), 26.0, 8.0, 150.0);
                 egui::ScrollArea::vertical()
                     .max_height(scroll_h)
                     .id_salt("decrypt_key_sel")
@@ -460,7 +465,7 @@ pub fn render_password_popup(app: &mut CryptyApp, ctx: &egui::Context) {
         app.validate_and_start(ctx);
     }
     if do_cancel {
-        app.clear_all();
+        app.close_popup();
     }
 }
 
@@ -491,7 +496,7 @@ pub fn render_change_pw_popup(app: &mut CryptyApp, ctx: &egui::Context) {
             ui.add(
                 egui::TextEdit::singleline(&mut app.cpw_new)
                     .password(!app.cpw_show)
-                    .hint_text("New password…")
+                    .hint_text("New password… (minimum 8 characters)")
                     .desired_width(260.0),
             );
 
@@ -505,6 +510,15 @@ pub fn render_change_pw_popup(app: &mut CryptyApp, ctx: &egui::Context) {
 
             ui.add_space(4.0);
             ui.checkbox(&mut app.cpw_show, "Show passwords");
+            ui.add_space(2.0);
+            ui.label(
+                egui::RichText::new(
+                    "Copies made earlier still open with the old password.\n\
+                     If it is compromised, decrypt and re-encrypt instead.",
+                )
+                .small()
+                .weak(),
+            );
 
             if let Some(err) = &app.cpw_error {
                 ui.add_space(4.0);
@@ -576,7 +590,7 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
                     );
                     ui.add_space(4.0);
                     ui.label(
-                        egui::RichText::new("Chiffrement de fichiers post-quantique")
+                        egui::RichText::new("Post-quantum file encryption")
                             .size(12.0)
                             .weak(),
                     );
@@ -608,40 +622,40 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
         ui.columns(2, |cols| {
             // Colonne 1 — Format
             let ui = &mut cols[0];
-            ui.label(egui::RichText::new("Format Arsenic V1").size(13.0).strong());
+            ui.label(egui::RichText::new("Arsenic V2 format").size(13.0).strong());
             ui.add_space(4.0);
             ui.label(
-                egui::RichText::new(format!("{}  (en-tête)", cipher_short_label(app.hdr_cipher)))
+                egui::RichText::new(format!("{}  (header)", cipher_short_label(app.hdr_cipher)))
                     .size(12.5),
             );
             ui.label(
                 egui::RichText::new(format!("{}  (payload)", cipher_short_label(app.pld_cipher)))
                     .size(12.5),
             );
-            ui.label(egui::RichText::new("BLAKE3 Merkle tree").size(12.5));
-            ui.label(egui::RichText::new("Streaming par blocs").size(12.5));
+            ui.label(egui::RichText::new("Authenticated header (BLAKE3)").size(12.5));
+            ui.label(egui::RichText::new("Block streaming").size(12.5));
             ui.add_space(4.0);
-            ui.label(egui::RichText::new("Fonctionnalités").size(13.0).strong());
+            ui.label(egui::RichText::new("Features").size(13.0).strong());
             ui.add_space(2.0);
-            let compress_txt = match app.compress {
-                None => "Compression : off".to_string(),
-                Some(l) => format!("Compression : zstd niveau {l}"),
-            };
+            let compress_txt = app.compress.map_or_else(
+                || "Compression: off".to_string(),
+                |l| format!("Compression: zstd level {l}"),
+            );
             ui.label(egui::RichText::new(compress_txt).size(12.0).weak());
             ui.label(
-                egui::RichText::new(if app.armor { "Armor : activé" } else { "Armor : off" })
+                egui::RichText::new(if app.armor { "Armor: on" } else { "Armor: off" })
                     .size(12.0)
                     .weak(),
             );
             ui.label(
-                egui::RichText::new("Multi-passphrase · Accès bloc")
+                egui::RichText::new("Multi-passphrase · Block access")
                     .size(12.0)
                     .weak(),
             );
 
             // Colonne 2 — Crypto
             let ui = &mut cols[1];
-            ui.label(egui::RichText::new("Cryptographie").size(13.0).strong());
+            ui.label(egui::RichText::new("Cryptography").size(13.0).strong());
             ui.add_space(4.0);
             ui.label(egui::RichText::new("Argon2id  (KDF)").size(12.5));
             ui.label(
@@ -677,9 +691,8 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 ui.label(
                     egui::RichText::new(format!(
-                        "🔑  {} keypair{}  stocké{}",
+                        "🔑  {} stored keypair{}",
                         app.keys.len(),
-                        if app.keys.len() > 1 { "s" } else { "" },
                         if app.keys.len() > 1 { "s" } else { "" },
                     ))
                     .size(12.0)
@@ -709,7 +722,7 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
             );
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if ui
-                    .add(egui::Button::new("Fermer").min_size(egui::vec2(60.0, 22.0)))
+                    .add(egui::Button::new("Close").min_size(egui::vec2(60.0, 22.0)))
                     .clicked()
                 {
                     app.show_about = false;
@@ -726,7 +739,7 @@ pub fn render_about_window(app: &mut CryptyApp, ctx: &egui::Context) {
 // ── Key Manager content ───────────────────────────────────────────────────────
 
 /// Renders the key manager content inside whatever container the caller provides
-/// (viewport CentralPanel or legacy Window).
+/// (viewport `CentralPanel` or legacy Window).
 ///
 /// Sets `*close = true` when the user clicks Close or presses Escape.
 /// The caller is responsible for the actual cleanup (resetting km_* state).
@@ -809,10 +822,8 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
                                             do_delete = Some(i);
                                         }
                                         if ui.button("Cancel").clicked() { cancel_confirm = true; }
-                                    } else {
-                                        if ui.add(egui::Button::new("🗑 Delete").fill(egui::Color32::TRANSPARENT)).clicked() {
-                                            do_confirm_delete = Some(i);
-                                        }
+                                    } else if ui.add(egui::Button::new("🗑 Delete").fill(egui::Color32::TRANSPARENT)).clicked() {
+                                        do_confirm_delete = Some(i);
                                     }
                                 });
                             });
@@ -833,6 +844,8 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
         });
         if let Some(err) = &app.km_error {
             ui.colored_label(ui.visuals().error_fg_color, err);
+        } else if let Some(notice) = &app.km_notice {
+            ui.colored_label(egui::Color32::from_rgb(80, 180, 80), notice);
         }
 
         ui.add_space(10.0);
@@ -903,10 +916,8 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
                                             do_delete_contact = Some(i);
                                         }
                                         if ui.button("Cancel").clicked() { cancel_confirm_contact = true; }
-                                    } else {
-                                        if ui.add(egui::Button::new("🗑 Delete").fill(egui::Color32::TRANSPARENT)).clicked() {
-                                            do_confirm_delete_contact = Some(i);
-                                        }
+                                    } else if ui.add(egui::Button::new("🗑 Delete").fill(egui::Color32::TRANSPARENT)).clicked() {
+                                        do_confirm_delete_contact = Some(i);
                                     }
                                 });
                             });
@@ -944,12 +955,8 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
         // ════════════════════════════════════════════════════════
 
         // ── Storage paths + security warning ─────────────────────────────
-        let keys_label = keys_dir()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "unknown".into());
-        let contacts_label = contacts_path()
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or_else(|| "unknown".into());
+        let keys_label = &app.keys_dir_label;
+        let contacts_label = &app.contacts_path_label;
 
         ui.horizontal(|ui| {
             ui.label(egui::RichText::new("⚠").color(egui::Color32::from_rgb(220, 180, 40)).size(14.0));
@@ -971,7 +978,7 @@ pub fn render_key_manager_content(app: &mut CryptyApp, ui: &mut egui::Ui, close:
     if cancel_confirm           { app.km_confirm_delete = None; }
     if cancel_confirm_contact   { app.km_confirm_delete_contact = None; }
     if let Some(t) = copy_text  { ui.ctx().copy_text(t); }
-    if do_generate              { app.km_generate_key(); }
+    if do_generate              { app.km_notice = None; app.km_generate_key(); }
     if do_add_contact           { app.km_add_contact(); }
     if do_import_contact        { app.km_import_contact_from_file(); }
     if let Some(i) = do_export_key { app.km_export_key(i); }
@@ -991,7 +998,9 @@ pub fn render_privkey_popup(app: &mut CryptyApp, ctx: &egui::Context) {
     };
 
     let name = key.name.clone();
-    let encoded = encode_privkey(&key.private_key);
+    // The whole identity: the X25519 key alone cannot rebuild the keypair,
+    // the ML-KEM seed is independent and needed to decrypt.
+    let encoded = serialize_identity(key);
 
     let mut close = false;
     let mut copy = false;
@@ -1003,6 +1012,7 @@ pub fn render_privkey_popup(app: &mut CryptyApp, ctx: &egui::Context) {
         .resizable(false)
         .anchor(egui::Align2::CENTER_CENTER, [0.0, 0.0])
         .min_width(480.0)
+        .max_width(560.0)
         .show(ctx, |ui| {
             ui.add_space(4.0);
 
@@ -1020,7 +1030,7 @@ pub fn render_privkey_popup(app: &mut CryptyApp, ctx: &egui::Context) {
                         );
                         ui.vertical(|ui| {
                             ui.label(
-                                egui::RichText::new("Never share this key.")
+                                egui::RichText::new("Never share this identity.")
                                     .color(warn_color)
                                     .strong(),
                             );
@@ -1038,7 +1048,12 @@ pub fn render_privkey_popup(app: &mut CryptyApp, ctx: &egui::Context) {
             ui.add_space(10.0);
 
             // Key display — read-only selectable text so the user can select+copy manually
-            ui.label(egui::RichText::new("Private key:").strong());
+            ui.label(egui::RichText::new("Identity file (private key + ML-KEM seed):").strong());
+            ui.label(
+                egui::RichText::new("Save all of it as a .key file to back up or move this keypair.")
+                    .small()
+                    .weak(),
+            );
             ui.add_space(4.0);
             egui::Frame::new()
                 .fill(ui.visuals().extreme_bg_color)
@@ -1049,7 +1064,7 @@ pub fn render_privkey_popup(app: &mut CryptyApp, ctx: &egui::Context) {
                         egui::TextEdit::multiline(&mut encoded.as_str())
                             .font(egui::TextStyle::Monospace)
                             .desired_width(f32::INFINITY)
-                            .desired_rows(2)
+                            .desired_rows(8)
                             .interactive(false),
                     );
                 });
@@ -1112,16 +1127,44 @@ fn render_type_cell(ui: &mut egui::Ui, is_encrypted: bool) {
     }
 }
 
+/// A 0–100 percentage as a 0.0–1.0 fraction.
+fn pct_fraction(pct: i32) -> f32 {
+    f32::from(u8::try_from(pct.clamp(0, 100)).unwrap_or(100)) / 100.0
+}
+
+/// Height of a list of `rows` rows, capped at `max`.
+fn list_height(rows: usize, row_height: f32, padding: f32, max: f32) -> f32 {
+    f32::from(u16::try_from(rows).unwrap_or(u16::MAX)).mul_add(row_height, padding).min(max)
+}
+
 fn render_progress_cell(ui: &mut egui::Ui, pct: i32) {
-    let fraction = (pct as f32 / 100.0).clamp(0.0, 1.0);
+    let fraction = pct_fraction(pct);
     ui.add(
         egui::ProgressBar::new(fraction)
-            .text(format!("{}%", pct))
+            .text(format!("{pct}%"))
             .desired_width(110.0),
     );
 }
 
-pub fn render_file_table(ui: &mut egui::Ui, files: &[PathBuf]) -> Option<usize> {
+/// Cached type/size of `path`, read from disk only if it is not in the cache.
+fn meta_of(meta: &HashMap<PathBuf, FileMeta>, path: &PathBuf) -> FileMeta {
+    meta.get(path).cloned().unwrap_or_else(|| FileMeta::read(path))
+}
+
+fn remove_button(ui: &mut egui::Ui) -> bool {
+    ui.add(
+        egui::Button::new(egui::RichText::new("✕").size(12.0))
+            .min_size(egui::vec2(20.0, 20.0))
+            .fill(egui::Color32::TRANSPARENT),
+    )
+    .clicked()
+}
+
+pub fn render_file_table(
+    ui: &mut egui::Ui,
+    files: &[PathBuf],
+    meta: &HashMap<PathBuf, FileMeta>,
+) -> Option<usize> {
     let mut to_remove: Option<usize> = None;
 
     TableBuilder::new(ui)
@@ -1132,79 +1175,69 @@ pub fn render_file_table(ui: &mut egui::Ui, files: &[PathBuf]) -> Option<usize> 
         .column(Column::remainder().clip(true))
         .column(Column::auto())
         .header(30.0, |mut header| {
-            header.col(|ui| {
-                header_label(ui, "Remove");
-            });
-            header.col(|ui| {
-                header_label(ui, "Type");
-            });
-            header.col(|ui| {
-                header_label(ui, "Name");
-            });
-            header.col(|ui| {
-                header_label(ui, "Size");
-            });
+            header.col(|ui| header_label(ui, "Remove"));
+            header.col(|ui| header_label(ui, "Type"));
+            header.col(|ui| header_label(ui, "Name"));
+            header.col(|ui| header_label(ui, "Size"));
         })
-        .body(|mut body| {
-            for (i, path) in files.iter().enumerate() {
-                let is_enc = is_cryptyrust_file(path);
-                body.row(32.0, |mut row| {
-                    row.col(|ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new("✕").size(12.0))
-                                    .min_size(egui::vec2(20.0, 20.0))
-                                    .fill(egui::Color32::TRANSPARENT),
-                            )
-                            .clicked()
-                        {
-                            to_remove = Some(i);
-                        }
-                    });
-                    row.col(|ui| {
-                        render_type_cell(ui, is_enc);
-                    });
-                    row.col(|ui| {
-                        ui.label(egui::RichText::new(path.to_string_lossy().as_ref()));
-                    });
-                    row.col(|ui| {
-                        ui.label(egui::RichText::new(get_file_size(path)).weak());
-                    });
+        .body(|body| {
+            // Only the visible rows are laid out.
+            body.rows(32.0, files.len(), |mut row| {
+                let i = row.index();
+                let path = &files[i];
+                let info = meta_of(meta, path);
+                row.col(|ui| {
+                    if remove_button(ui) {
+                        to_remove = Some(i);
+                    }
                 });
-            }
+                row.col(|ui| render_type_cell(ui, info.encrypted));
+                row.col(|ui| {
+                    ui.label(egui::RichText::new(path.to_string_lossy().as_ref()));
+                });
+                row.col(|ui| {
+                    ui.label(egui::RichText::new(&info.size).weak());
+                });
+            });
         });
 
     to_remove
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn render_processing_table(
     ui: &mut egui::Ui,
     files: &[PathBuf],
+    meta: &HashMap<PathBuf, FileMeta>,
     progress_map: &HashMap<usize, i32>,
-    current_idx: usize,
+    statuses: &[FileStatus],
     cancel_flags: &[Arc<AtomicBool>],
     cancel_all: &Arc<AtomicBool>,
+    cancellable: bool,
 ) {
     // "Stop all" button above the table
-    ui.horizontal(|ui| {
-        let all_cancelled = cancel_all.load(Ordering::Relaxed);
-        if all_cancelled {
-            ui.label(
-                egui::RichText::new("⏹  Cancellation in progress…")
-                    .color(egui::Color32::from_rgb(220, 160, 40))
-                    .small(),
-            );
-        } else {
-            let btn = egui::Button::new(
-                egui::RichText::new("⏹  Stop all tasks").color(egui::Color32::from_rgb(220, 80, 60)),
-            )
-            .min_size(egui::vec2(130.0, 24.0));
-            if ui.add(btn).clicked() {
-                cancel_all.store(true, Ordering::Relaxed);
+    let all_cancelled = cancel_all.load(Ordering::Relaxed);
+    if cancellable {
+        ui.horizontal(|ui| {
+            if all_cancelled {
+                ui.label(
+                    egui::RichText::new("⏹  Cancellation in progress…")
+                        .color(egui::Color32::from_rgb(220, 160, 40))
+                        .small(),
+                );
+            } else {
+                let btn = egui::Button::new(
+                    egui::RichText::new("⏹  Stop all tasks")
+                        .color(egui::Color32::from_rgb(220, 80, 60)),
+                )
+                .min_size(egui::vec2(130.0, 24.0));
+                if ui.add(btn).clicked() {
+                    cancel_all.store(true, Ordering::Relaxed);
+                }
             }
-        }
-    });
-    ui.add_space(4.0);
+        });
+        ui.add_space(4.0);
+    }
 
     TableBuilder::new(ui)
         .striped(true)
@@ -1217,84 +1250,86 @@ pub fn render_processing_table(
         .column(Column::initial(130.0).at_least(100.0))
         .header(30.0, |mut header| {
             header.col(|_ui| {});
-            header.col(|ui| {
-                header_label(ui, "Type");
-            });
-            header.col(|ui| {
-                header_label(ui, "Name");
-            });
-            header.col(|ui| {
-                header_label(ui, "Size");
-            });
-            header.col(|ui| {
-                header_label(ui, "Progress");
-            });
-            header.col(|ui| {
-                header_label(ui, "Action");
-            });
+            header.col(|ui| header_label(ui, "Type"));
+            header.col(|ui| header_label(ui, "Name"));
+            header.col(|ui| header_label(ui, "Size"));
+            header.col(|ui| header_label(ui, "Progress"));
+            header.col(|ui| header_label(ui, "Action"));
         })
-        .body(|mut body| {
-            for (i, path) in files.iter().enumerate() {
-                let is_enc = is_cryptyrust_file(path);
+        .body(|body| {
+            body.rows(32.0, files.len(), |mut row| {
+                let i = row.index();
+                let path = &files[i];
+                let info = meta_of(meta, path);
                 let pct = progress_map.get(&i).copied().unwrap_or(0);
-                let is_current = i == current_idx;
-                let is_cancelled = cancel_flags
-                    .get(i)
-                    .map(|f| f.load(Ordering::Relaxed))
-                    .unwrap_or(false)
-                    || cancel_all.load(Ordering::Relaxed);
+                let status = statuses.get(i).cloned().unwrap_or(FileStatus::Pending);
+                let finished = matches!(
+                    status,
+                    FileStatus::Success | FileStatus::Failed(_) | FileStatus::Cancelled
+                );
+                let cancel_requested = all_cancelled
+                    || cancel_flags.get(i).is_some_and(|f| f.load(Ordering::Relaxed));
 
-                body.row(32.0, |mut row| {
-                    row.col(|ui| {
-                        if is_current && pct < 100 && !is_cancelled {
-                            ui.label(egui::RichText::new("▶").size(10.0));
-                        }
-                    });
-                    row.col(|ui| {
-                        render_type_cell(ui, is_enc);
-                    });
-                    row.col(|ui| {
-                        ui.label(egui::RichText::new(path.to_string_lossy().as_ref()));
-                    });
-                    row.col(|ui| {
-                        ui.label(egui::RichText::new(get_file_size(path)).weak());
-                    });
-                    row.col(|ui| {
-                        if is_cancelled {
-                            ui.label(
-                                egui::RichText::new("Cancelling…")
-                                    .color(egui::Color32::from_rgb(220, 160, 40))
-                                    .small(),
-                            );
-                        } else {
-                            render_progress_cell(ui, pct);
-                        }
-                    });
-                    row.col(|ui| {
-                        if !is_cancelled {
-                            let flag = cancel_flags.get(i).cloned();
-                            let stop_btn = egui::Button::new(
-                                egui::RichText::new("⏹  Stop")
-                                    .color(egui::Color32::from_rgb(220, 80, 60))
-                                    .small(),
-                            )
-                            .min_size(egui::vec2(60.0, 22.0));
-                            if ui.add(stop_btn).on_hover_text("Cancel this file").clicked() {
-                                if let Some(flag) = flag {
-                                    flag.store(true, Ordering::Relaxed);
-                                }
+                row.col(|ui| {
+                    if matches!(status, FileStatus::Processing) && !cancel_requested {
+                        ui.label(egui::RichText::new("▶").size(10.0));
+                    }
+                });
+                row.col(|ui| render_type_cell(ui, info.encrypted));
+                row.col(|ui| {
+                    ui.label(egui::RichText::new(path.to_string_lossy().as_ref()));
+                });
+                row.col(|ui| {
+                    ui.label(egui::RichText::new(&info.size).weak());
+                });
+                row.col(|ui| match &status {
+                    FileStatus::Failed(_) => {
+                        ui.label(
+                            egui::RichText::new("Failed")
+                                .color(ui.visuals().error_fg_color)
+                                .small(),
+                        );
+                    }
+                    FileStatus::Cancelled => {
+                        ui.label(
+                            egui::RichText::new("Cancelled")
+                                .color(egui::Color32::from_rgb(180, 140, 60))
+                                .small(),
+                        );
+                    }
+                    _ if cancel_requested && !finished => {
+                        ui.label(
+                            egui::RichText::new("Cancelling…")
+                                .color(egui::Color32::from_rgb(220, 160, 40))
+                                .small(),
+                        );
+                    }
+                    _ => render_progress_cell(ui, pct),
+                });
+                row.col(|ui| {
+                    if cancellable && !finished && !cancel_requested {
+                        let stop_btn = egui::Button::new(
+                            egui::RichText::new("⏹  Stop")
+                                .color(egui::Color32::from_rgb(220, 80, 60))
+                                .small(),
+                        )
+                        .min_size(egui::vec2(60.0, 22.0));
+                        if ui.add(stop_btn).on_hover_text("Cancel this file").clicked() {
+                            if let Some(flag) = cancel_flags.get(i) {
+                                flag.store(true, Ordering::Relaxed);
                             }
                         }
-                    });
+                    }
                 });
-            }
+            });
         });
 }
 
 pub fn render_completed_table(
     ui: &mut egui::Ui,
     files: &[PathBuf],
-    statuses: &[crate::job::FileStatus],
+    meta: &HashMap<PathBuf, FileMeta>,
+    statuses: &[FileStatus],
     success_label: &str,
 ) -> Option<usize> {
     let mut to_remove: Option<usize> = None;
@@ -1308,70 +1343,52 @@ pub fn render_completed_table(
         .column(Column::auto())
         .column(Column::initial(200.0).at_least(130.0).clip(true))
         .header(30.0, |mut header| {
-            header.col(|ui| {
-                header_label(ui, "Remove");
-            });
-            header.col(|ui| {
-                header_label(ui, "Type");
-            });
-            header.col(|ui| {
-                header_label(ui, "Name");
-            });
-            header.col(|ui| {
-                header_label(ui, "Size");
-            });
-            header.col(|ui| {
-                header_label(ui, "Result");
-            });
+            header.col(|ui| header_label(ui, "Remove"));
+            header.col(|ui| header_label(ui, "Type"));
+            header.col(|ui| header_label(ui, "Name"));
+            header.col(|ui| header_label(ui, "Size"));
+            header.col(|ui| header_label(ui, "Result"));
         })
-        .body(|mut body| {
-            for (i, (path, status)) in files.iter().zip(statuses.iter()).enumerate() {
-                let is_enc = is_cryptyrust_file(path);
-                body.row(32.0, |mut row| {
-                    row.col(|ui| {
-                        if ui
-                            .add(
-                                egui::Button::new(egui::RichText::new("✕").size(12.0))
-                                    .min_size(egui::vec2(20.0, 20.0))
-                                    .fill(egui::Color32::TRANSPARENT),
-                            )
-                            .clicked()
-                        {
-                            to_remove = Some(i);
-                        }
-                    });
-                    row.col(|ui| {
-                        render_type_cell(ui, is_enc);
-                    });
-                    row.col(|ui| {
-                        ui.label(egui::RichText::new(path.to_string_lossy().as_ref()));
-                    });
-                    row.col(|ui| {
-                        ui.label(egui::RichText::new(get_file_size(path)).weak());
-                    });
-                    row.col(|ui| match status {
-                        crate::job::FileStatus::Success => {
-                            ui.label(
-                                egui::RichText::new(format!("✅  {success_label}"))
-                                    .color(egui::Color32::from_rgb(80, 200, 80)),
-                            );
-                        }
-                        crate::job::FileStatus::Failed(error) => {
-                            ui.label(
-                                egui::RichText::new(format!("❌  {error}"))
-                                    .color(ui.visuals().error_fg_color),
-                            );
-                        }
-                        crate::job::FileStatus::Cancelled => {
-                            ui.label(
-                                egui::RichText::new("⏹  Cancelled")
-                                    .color(egui::Color32::from_rgb(180, 140, 60)),
-                            );
-                        }
-                        _ => {}
-                    });
+        .body(|body| {
+            body.rows(32.0, files.len().min(statuses.len()), |mut row| {
+                let i = row.index();
+                let path = &files[i];
+                let info = meta_of(meta, path);
+                row.col(|ui| {
+                    if remove_button(ui) {
+                        to_remove = Some(i);
+                    }
                 });
-            }
+                row.col(|ui| render_type_cell(ui, info.encrypted));
+                row.col(|ui| {
+                    ui.label(egui::RichText::new(path.to_string_lossy().as_ref()));
+                });
+                row.col(|ui| {
+                    ui.label(egui::RichText::new(&info.size).weak());
+                });
+                row.col(|ui| match &statuses[i] {
+                    FileStatus::Success => {
+                        ui.label(
+                            egui::RichText::new(format!("✅  {success_label}"))
+                                .color(egui::Color32::from_rgb(80, 200, 80)),
+                        );
+                    }
+                    FileStatus::Failed(error) => {
+                        ui.label(
+                            egui::RichText::new(format!("❌  {error}"))
+                                .color(ui.visuals().error_fg_color),
+                        )
+                        .on_hover_text(error);
+                    }
+                    FileStatus::Cancelled => {
+                        ui.label(
+                            egui::RichText::new("⏹  Cancelled")
+                                .color(egui::Color32::from_rgb(180, 140, 60)),
+                        );
+                    }
+                    _ => {}
+                });
+            });
         });
 
     to_remove

@@ -19,11 +19,11 @@ impl<T> Secret<T>
 where
     T: Zeroize,
 {
-    pub fn new(secret: T) -> Self {
-        Secret { hidden: secret }
+    pub const fn new(secret: T) -> Self {
+        Self { hidden: secret }
     }
 
-    pub fn expose(&self) -> &T {
+    pub const fn expose(&self) -> &T {
         &self.hidden
     }
 }
