@@ -158,13 +158,10 @@ jobs:
           upload-artifact: false
 
       - name: Check that the program starts
-        # In the folder the action has just built (flatpak_app), with the rights of the manifest.
-        # Not blocking: inside this container the sandbox itself does not always start (no
-        # session bus), which says nothing about the bundle. Look at the result of the step.
-        continue-on-error: true
-        run: |
-          dbus-run-session -- flatpak-builder --disable-rofiles-fuse --run flatpak_app \
-              packaging/flatpak/io.github.antidote1911.cryptyrust.yml cryptyrust --version
+        # In the folder the action has just built (flatpak_app), inside the sandbox of the
+        # runtime. "flatpak build" and not "flatpak-builder --run": the latter needs FUSE,
+        # which this container does not have.
+        run: flatpak build flatpak_app cryptyrust --version
 
       - uses: actions/upload-artifact@v4
         with:
