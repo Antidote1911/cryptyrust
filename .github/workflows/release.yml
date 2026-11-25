@@ -22,7 +22,8 @@ jobs:
   # ── Linux AppImage ─────────────────────────────────────────────────────────
   build-linux:
     name: Build – Linux x86_64 (AppImage)
-    runs-on: ubuntu-latest
+    # Not ubuntu-latest: the program needs the glibc it was built with or later (2.39 here)
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
