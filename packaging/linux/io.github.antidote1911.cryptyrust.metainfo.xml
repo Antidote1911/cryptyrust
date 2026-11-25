@@ -5,6 +5,7 @@
   <name>Cryptyrust</name>
   <summary>Post-quantum file encryption</summary>
   <summary xml:lang="fr">Chiffrement de fichiers post-quantique</summary>
+  <summary xml:lang="es">Cifrado de archivos poscuántico</summary>
   <metadata_license>CC0-1.0</metadata_license>
   <project_license>GPL-3.0-only</project_license>
   <developer id="io.github.antidote1911">

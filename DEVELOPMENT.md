@@ -94,7 +94,8 @@ cryptyrust/src/
 ├── keystore.rs      Re-export of arsenic::keystore
 ├── i18n/
 │   ├── mod.rs       Interface language: tr(), trf(), Lang
-│   └── fr.rs        French strings
+│   ├── fr.rs        French strings
+│   └── es.rs        Spanish strings
 └── ui/
     ├── mod.rs       Main rendering dispatch, secondary windows
     ├── layouts.rs   Menu bar, action bar, central panel, status banners
@@ -115,10 +116,11 @@ trf("A key named \"{name}\" already exists.", &[("name", &name)]);
 ```
 
 - **New text** — wrap it in `tr(…)` (or `trf(…)` when it has `{name}`
-  placeholders) and add the pair `("English", "Français")` to
-  `cryptyrust/src/i18n/fr.rs`.
+  placeholders) and add its pair to each table:
+  `("English", "Français")` in `cryptyrust/src/i18n/fr.rs`, `("English", "Español")`
+  in `es.rs`.
 - **New language** — add a variant to `Lang` in `i18n/mod.rs`, a table next to
-  `fr.rs`, and its branch in `tr_in` and `core_err`. The language list of the
+  `fr.rs` and `es.rs`, and its branch in `tr_in` and `core_err`. The language list of the
   settings window follows `Lang::ALL`.
 
 A test checks that each translation keeps the placeholders and line breaks of

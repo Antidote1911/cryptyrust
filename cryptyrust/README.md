@@ -21,7 +21,7 @@ Built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/e
 - **Built-in benchmark** of AEAD ciphers
 - **In-place password change** (rekey — O(1), payload untouched)
 - **Recipient management** — add or remove asymmetric keyslots post-encryption
-- English and French interface, light / dark theme; settings persisted between sessions
+- English, French and Spanish interface, light / dark theme; settings persisted between sessions
 
 ---
 
@@ -54,7 +54,7 @@ Built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/e
 
 | Page | Setting | Options | Default |
 |---|---|---|---|
-| General | Language | English · Français | System language |
+| General | Language | English · Français · Español | System language |
 | General | Theme | Light · Dark | System theme |
 | Encryption | Argon2id strength | Interactive (256 MiB) · Sensitive (1 GiB) | Interactive |
 | Encryption | Header cipher | Deoxys-II-256 · AES-256-GCM-SIV · XChaCha20-Poly1305 | Deoxys-II-256 |

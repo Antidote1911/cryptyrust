@@ -11,7 +11,7 @@ encrypt them; drop encrypted files to decrypt them. The same program is also a
 command-line tool for scripts.
 
 Encryption is post-quantum hybrid and the file format is fully documented.
-The interface is available in English and French.
+The interface is available in English, French and Spanish.
 
 <img src='cryptyrust.png'/>
 
@@ -54,7 +54,7 @@ To build it yourself, see [`DEVELOPMENT.md`](DEVELOPMENT.md).
 - **Password change** without re-encrypting the payload — O(1) regardless of file size
 - **Recipient management** — add/remove asymmetric keyslots post-encryption
 - **Built-in benchmark** — find the fastest cipher for your machine
-- **English and French** interface, light and dark theme
+- **English, French and Spanish** interface, light and dark theme
 - Cross-platform: Linux, Windows, macOS
 
 ---
@@ -78,7 +78,7 @@ sessions.
 
 | Page | Setting | Options | Default |
 |---|---|---|---|
-| General | Language | English · Français | System language |
+| General | Language | English · Français · Español | System language |
 | General | Theme | Light · Dark | System theme |
 | Encryption | Argon2id strength | Interactive (256 MiB) · Sensitive (1 GiB) | Interactive |
 | Encryption | Header cipher | Deoxys-II-256 · AES-256-GCM-SIV · XChaCha20-Poly1305 | Deoxys-II-256 |
