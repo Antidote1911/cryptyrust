@@ -1,0 +1,18 @@
+Package: cryptyrust
+Version: {VERSION}
+Architecture: amd64
+Maintainer: Antidote1911 <antidote1911@users.noreply.github.com>
+Installed-Size: {SIZE}
+Depends: libc6 (>= {GLIBC}), libgcc-s1, libxkbcommon0, libxkbcommon-x11-0, libx11-6, libx11-xcb1, libxcb1, libxcursor1, libxi6, libgl1, libegl1
+Recommends: xdg-desktop-portal, libwayland-client0
+Section: utils
+Priority: optional
+Homepage: https://github.com/Antidote1911/cryptyrust
+Description: Post-quantum file encryption, drag-and-drop GUI and command line
+ Cryptyrust protects files with a password, with the public keys of the
+ people who must be able to open them, or with both. Files dropped on the
+ window are encrypted or decrypted; the same program is a command-line tool
+ when it is given arguments.
+ .
+ Encryption is hybrid (X25519 + ML-KEM) with Argon2id key derivation, in the
+ documented Arsenic V2 file format.

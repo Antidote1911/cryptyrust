@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- AppStream description of Cryptyrust: what software centres display. Installed in share/metainfo. -->
+<component type="desktop-application">
+  <id>io.github.antidote1911.cryptyrust</id>
+  <name>Cryptyrust</name>
+  <summary>Post-quantum file encryption</summary>
+  <summary xml:lang="fr">Chiffrement de fichiers post-quantique</summary>
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>GPL-3.0-only</project_license>
+  <developer id="io.github.antidote1911">
+    <name>Antidote1911</name>
+  </developer>
+  <description>
+    <p>Cryptyrust protects files with a password, with the public keys of the people who must be able to open them, or with both. Drop files on the window to encrypt them; drop encrypted files to decrypt them. The same program is a command-line tool for scripts.</p>
+    <p xml:lang="fr">Cryptyrust protège des fichiers par un mot de passe, par les clés publiques des personnes qui doivent pouvoir les ouvrir, ou par les deux. Déposez des fichiers sur la fenêtre pour les chiffrer ; déposez des fichiers chiffrés pour les déchiffrer. Le même programme est un outil en ligne de commande pour les scripts.</p>
+    <ul>
+      <li>Hybrid post-quantum encryption: X25519 with ML-KEM-768 or ML-KEM-1024</li>
+      <li xml:lang="fr">Chiffrement hybride post-quantique : X25519 avec ML-KEM-768 ou ML-KEM-1024</li>
+      <li>Up to 16 passwords per file, Argon2id key derivation</li>
+      <li xml:lang="fr">Jusqu'à 16 mots de passe par fichier, dérivation de clé Argon2id</li>
+      <li>Key manager shared by the window and the command line</li>
+      <li xml:lang="fr">Gestionnaire de clés commun à la fenêtre et à la ligne de commande</li>
+      <li>Optional zstd compression and ASCII armor for text channels</li>
+      <li xml:lang="fr">Compression zstd et armure ASCII pour les canaux texte, en option</li>
+      <li>Documented file format (Arsenic V2)</li>
+      <li xml:lang="fr">Format de fichier documenté (Arsenic V2)</li>
+    </ul>
+  </description>
+  <launchable type="desktop-id">cryptyrust.desktop</launchable>
+  <url type="homepage">https://github.com/Antidote1911/cryptyrust</url>
+  <url type="bugtracker">https://github.com/Antidote1911/cryptyrust/issues</url>
+  <url type="vcs-browser">https://github.com/Antidote1911/cryptyrust</url>
+  <screenshots>
+    <screenshot type="default">
+      <caption>Main window</caption>
+      <caption xml:lang="fr">Fenêtre principale</caption>
+      <image>https://raw.githubusercontent.com/Antidote1911/cryptyrust/master/cryptyrust.png</image>
+    </screenshot>
+  </screenshots>
+  <categories>
+    <category>Utility</category>
+    <category>Security</category>
+  </categories>
+  <provides>
+    <binary>cryptyrust</binary>
+  </provides>
+  <content_rating type="oars-1.1"/>
+</component>

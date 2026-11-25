@@ -1,9 +1,19 @@
+# Builds Cryptyrust for Linux, macOS and Windows and publishes the files in a GitHub release.
+#
+#   git tag v3.1.0 && git push origin v3.1.0   builds, then creates the release "v3.1.0"
+#   "Run workflow" button (Actions tab)        builds only: the files are kept as artifacts of
+#                                              the run and named after the version of Cargo.toml,
+#                                              no release is created
+#
+# Linux: an AppImage, a Debian package (the same program in /usr/bin) and a Flatpak bundle
+# (built from packaging/flatpak/, on the freedesktop runtime).
 name: Release
 
 on:
   push:
     tags:
       - 'v*'
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
@@ -19,9 +29,15 @@ jobs:
 
       - name: Get version
         id: version
+        # The tag; for a run started by hand, the version of Cargo.toml
         run: |
           v="${{ github.ref_name }}"
-          echo "VERSION=${v#v}" >> "$GITHUB_OUTPUT"
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            v=${v#v}
+          else
+            v=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          fi
+          echo "VERSION=$v" >> "$GITHUB_OUTPUT"
 
       - name: Install system dependencies
         run: |
@@ -65,10 +81,95 @@ jobs:
             --icon-file packaging/cryptyrust.png \
             --output appimage
 
+      - name: Build the Debian package
+        # The program in /usr/bin, as it is: it carries no library of its own. The glibc it
+        # needs is read from the program, so the package says so on older systems.
+        env:
+          VERSION: ${{ steps.version.outputs.VERSION }}
+        run: |
+          root=deb/cryptyrust
+          install -Dm755 target/release/cryptyrust -t $root/usr/bin
+          strip --strip-unneeded $root/usr/bin/cryptyrust
+          install -Dm644 packaging/linux/cryptyrust.desktop -t $root/usr/share/applications
+          install -Dm644 packaging/linux/io.github.antidote1911.cryptyrust.metainfo.xml -t $root/usr/share/metainfo
+          install -Dm644 packaging/cryptyrust.png -t $root/usr/share/icons/hicolor/512x512/apps
+          install -Dm644 README.md arsenic/FORMAT.md -t $root/usr/share/doc/cryptyrust
+          install -Dm644 cryptyrust/README.md $root/usr/share/doc/cryptyrust/USAGE.md
+          install -Dm644 LICENSE $root/usr/share/doc/cryptyrust/copyright
+          chmod -R u=rwX,go=rX $root
+          glibc=$(objdump -T $root/usr/bin/cryptyrust | grep -o 'GLIBC_[0-9.]*' | sort -uV | tail -1)
+          mkdir -p $root/DEBIAN
+          sed -e "s/{VERSION}/$VERSION/" -e "s/{GLIBC}/${glibc#GLIBC_}/" \
+              -e "s/{SIZE}/$(du -sk $root | cut -f1)/" packaging/debian/control > $root/DEBIAN/control
+          dpkg-deb --root-owner-group -Zxz --build $root "cryptyrust_${VERSION}_amd64.deb"
+          dpkg-deb --info "cryptyrust_${VERSION}_amd64.deb"
+
+      - name: Check the Debian package
+        # Installed for real, the program run, then removed.
+        run: |
+          sudo apt-get install -y ./cryptyrust_*_amd64.deb
+          timeout 120 cryptyrust --version
+          test -f /usr/share/applications/cryptyrust.desktop
+          sudo apt-get remove -y cryptyrust
+          test ! -e /usr/bin/cryptyrust
+
       - uses: actions/upload-artifact@v4
         with:
           name: cryptyrust-linux-appimage
           path: cryptyrust-${{ steps.version.outputs.VERSION }}-linux.AppImage
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cryptyrust-linux-deb
+          path: cryptyrust_${{ steps.version.outputs.VERSION }}_amd64.deb
+          if-no-files-found: error
+
+  # ── Linux Flatpak ──────────────────────────────────────────────────────────
+  build-flatpak:
+    name: Build – Linux x86_64 (Flatpak)
+    runs-on: ubuntu-latest
+    container:
+      image: ghcr.io/flathub-infra/flatpak-github-actions:freedesktop-25.08 # the runtime of the manifest
+      options: --privileged
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Get version
+        id: version
+        shell: bash
+        # The tag; for a run started by hand, the version of Cargo.toml
+        run: |
+          v="${{ github.ref_name }}"
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            v=${v#v}
+          else
+            v=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          fi
+          echo "VERSION=$v" >> "$GITHUB_OUTPUT"
+
+      - uses: flatpak/flatpak-github-actions/flatpak-builder@v6
+        with:
+          bundle: cryptyrust-${{ steps.version.outputs.VERSION }}-linux.flatpak
+          manifest-path: packaging/flatpak/io.github.antidote1911.cryptyrust.yml
+          cache-key: flatpak-builder-${{ github.sha }}
+          upload-artifact: false
+
+      - name: Check that the program starts
+        # In the folder the action has just built (flatpak_app), with the rights of the manifest.
+        # Not blocking: inside this container the sandbox itself does not always start (no
+        # session bus), which says nothing about the bundle. Look at the result of the step.
+        continue-on-error: true
+        run: |
+          dbus-run-session -- flatpak-builder --run flatpak_app \
+              packaging/flatpak/io.github.antidote1911.cryptyrust.yml cryptyrust --version
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cryptyrust-linux-flatpak
+          path: cryptyrust-${{ steps.version.outputs.VERSION }}-linux.flatpak
+          if-no-files-found: error
 
   # ── macOS Universal DMG ────────────────────────────────────────────────────
   build-macos:
@@ -80,9 +181,15 @@ jobs:
 
       - name: Get version
         id: version
+        # The tag; for a run started by hand, the version of Cargo.toml
         run: |
           v="${{ github.ref_name }}"
-          echo "VERSION=${v#v}" >> "$GITHUB_OUTPUT"
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            v=${v#v}
+          else
+            v=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          fi
+          echo "VERSION=$v" >> "$GITHUB_OUTPUT"
 
       - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
@@ -190,8 +297,14 @@ jobs:
       - name: Get version
         id: version
         shell: pwsh
+        # The tag; for a run started by hand, the version of Cargo.toml
         run: |
-          $v = "${{ github.ref_name }}" -replace '^v', ''
+          if ($env:GITHUB_REF -like 'refs/tags/v*') {
+            $v = "${{ github.ref_name }}" -replace '^v', ''
+          } else {
+            $v = (Select-String -Path Cargo.toml -Pattern '^version\s*=\s*"([^"]+)"' |
+              Select-Object -First 1).Matches[0].Groups[1].Value
+          }
           "VERSION=$v" | Out-File -FilePath $env:GITHUB_OUTPUT -Append
 
       - name: Package portable ZIP
@@ -222,7 +335,8 @@ jobs:
   # ── GitHub Release ─────────────────────────────────────────────────────────
   release:
     name: Create GitHub Release
-    needs: [build-linux, build-macos, build-windows]
+    if: startsWith(github.ref, 'refs/tags/')
+    needs: [build-linux, build-flatpak, build-macos, build-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -232,9 +346,15 @@ jobs:
 
       - name: Get version
         id: version
+        # The tag; for a run started by hand, the version of Cargo.toml
         run: |
           v="${{ github.ref_name }}"
-          echo "VERSION=${v#v}" >> "$GITHUB_OUTPUT"
+          if [[ $GITHUB_REF == refs/tags/v* ]]; then
+            v=${v#v}
+          else
+            v=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -1)
+          fi
+          echo "VERSION=$v" >> "$GITHUB_OUTPUT"
 
       - name: Download artifacts
         uses: actions/download-artifact@v4
@@ -247,6 +367,8 @@ jobs:
         with:
           files: |
             cryptyrust-${{ steps.version.outputs.VERSION }}-linux.AppImage
+            cryptyrust-${{ steps.version.outputs.VERSION }}-linux.flatpak
+            cryptyrust_${{ steps.version.outputs.VERSION }}_amd64.deb
             cryptyrust-${{ steps.version.outputs.VERSION }}-macos-universal.dmg
             cryptyrust-${{ steps.version.outputs.VERSION }}-win-portable.zip
             cryptyrust-${{ steps.version.outputs.VERSION }}-win-setup.exe

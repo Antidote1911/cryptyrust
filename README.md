@@ -24,9 +24,15 @@ Download the build for your system from the
 
 | System | File |
 |---|---|
-| Linux | `cryptyrust-<version>-linux.AppImage` |
+| Linux (any distribution) | `cryptyrust-<version>-linux.AppImage` |
+| Debian, Ubuntu and derivatives | `cryptyrust_<version>_amd64.deb` — `sudo apt install ./cryptyrust_<version>_amd64.deb` |
+| Linux (Flatpak) | `cryptyrust-<version>-linux.flatpak` — `flatpak install cryptyrust-<version>-linux.flatpak` |
 | macOS (Intel and Apple Silicon) | `cryptyrust-<version>-macos-universal.dmg` |
 | Windows | `cryptyrust-<version>-win-setup.exe` (installer) or `…-win-portable.zip` |
+
+The Debian package and the Flatpak bundle come with the releases after 3.1.0.
+The Flatpak keeps its own keystore, separate from the one of a
+Cryptyrust installed another way.
 
 To build it yourself, see [`DEVELOPMENT.md`](DEVELOPMENT.md).
 

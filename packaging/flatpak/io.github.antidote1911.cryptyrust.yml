@@ -1,0 +1,51 @@
+# Flatpak of Cryptyrust, built from the sources of the repository.
+#
+#   flatpak-builder --user --install --force-clean build-flatpak packaging/flatpak/io.github.antidote1911.cryptyrust.yml
+#   flatpak run io.github.antidote1911.cryptyrust
+#
+# The releases carry it as a bundle (cryptyrust-…-linux.flatpak, .github/workflows/release.yml):
+#   flatpak install cryptyrust-…-linux.flatpak
+#
+# The build downloads the Rust crates: it is given the network. Flathub does not allow that — a
+# submission there needs the crates listed as sources of the manifest.
+#
+# The keystore of the sandbox is its own (~/.var/app/io.github.antidote1911.cryptyrust/config):
+# it is not the one of a Cryptyrust installed another way.
+app-id: io.github.antidote1911.cryptyrust
+runtime: org.freedesktop.Platform
+runtime-version: '25.08'
+sdk: org.freedesktop.Sdk
+sdk-extensions:
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: cryptyrust
+# The menu entry and the icon must bear the name of the application
+rename-desktop-file: cryptyrust.desktop
+rename-icon: cryptyrust
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --device=dri
+  # An encrypted file is written next to its source, and whole folders can be dropped on the
+  # window: the file chooser of the sandbox, which hands over one file, is not enough.
+  - --filesystem=home
+build-options:
+  append-path: /usr/lib/sdk/rust-stable/bin
+  build-args:
+    - --share=network
+  env:
+    CARGO_HOME: /run/build/cryptyrust/cargo
+modules:
+  - name: cryptyrust
+    buildsystem: simple
+    build-commands:
+      - cargo build --release --locked --package cryptyrust
+      - install -Dm755 target/release/cryptyrust -t /app/bin
+      - install -Dm644 packaging/linux/cryptyrust.desktop -t /app/share/applications
+      - install -Dm644 packaging/cryptyrust.png -t /app/share/icons/hicolor/512x512/apps
+      - install -Dm644 packaging/linux/io.github.antidote1911.cryptyrust.metainfo.xml -t /app/share/metainfo
+    sources:
+      - type: dir
+        path: ../..
+        skip:
+          - target

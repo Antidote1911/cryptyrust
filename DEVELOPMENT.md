@@ -130,5 +130,46 @@ the GUI sets it.
 ## Releases
 
 Pushing a version tag runs [`.github/workflows/release.yml`](.github/workflows/release.yml),
-which builds the Linux AppImage, the macOS universal `.dmg`, and the Windows
-installer and portable zip, then publishes them with the format specification.
+which builds the files below, then publishes them with the format
+specification. Started by hand (**Actions → Release → Run workflow**), it only
+builds: the files are kept as artifacts of the run and no release is created.
+
+| File | Built from |
+|---|---|
+| `cryptyrust-<version>-linux.AppImage` | linuxdeploy |
+| `cryptyrust_<version>_amd64.deb` | [`packaging/debian/control`](packaging/debian/control) — the program in `/usr/bin` |
+| `cryptyrust-<version>-linux.flatpak` | [`packaging/flatpak/`](packaging/flatpak/) — freedesktop runtime |
+| `cryptyrust-<version>-macos-universal.dmg` | [`packaging/macos/`](packaging/macos/) |
+| `cryptyrust-<version>-win-setup.exe`, `…-win-portable.zip` | [`packaging/windows/`](packaging/windows/) |
+
+The Flatpak can be built locally:
+
+```bash
+flatpak-builder --user --install --force-clean build-flatpak \
+    packaging/flatpak/io.github.antidote1911.cryptyrust.yml
+```
+
+### Arch Linux (AUR)
+
+[`packaging/aur/`](packaging/aur/) holds the two packages, which replace each
+other:
+
+| Package | Content |
+|---|---|
+| `cryptyrust-bin` | The program taken from the AppImage of the release; nothing is built |
+| `cryptyrust` | Built from the sources of the release |
+
+Once the release is on GitHub:
+
+```bash
+packaging/aur/publish.sh             # version of Cargo.toml; asks before each push
+packaging/aur/publish.sh --no-push   # only updates PKGBUILD and .SRCINFO here
+packaging/aur/publish.sh --wait      # right after pushing the tag: waits for the release
+```
+
+The script sets `pkgver`, puts `pkgrel` back to 1, computes the checksums from
+the files of the release, rebuilds `.SRCINFO`, then commits both files to the
+AUR repository of each package. The push goes through SSH with the key of your
+AUR account; a package that does not exist yet is created by its first push.
+It needs `pacman-contrib` (`updpkgsums`), `git` and `curl`. Commit
+`packaging/aur/` afterwards.
