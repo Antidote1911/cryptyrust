@@ -26,6 +26,7 @@ Download the build for your system from the
 |---|---|
 | Linux (any distribution) | `cryptyrust-<version>-linux.AppImage` |
 | Debian, Ubuntu and derivatives | `cryptyrust_<version>_amd64.deb` — `sudo apt install ./cryptyrust_<version>_amd64.deb` |
+| Arch Linux and derivatives (AUR) | [`cryptyrust-bin`](https://aur.archlinux.org/packages/cryptyrust-bin) — `yay -S cryptyrust-bin` — or [`cryptyrust`](https://aur.archlinux.org/packages/cryptyrust), built from the sources |
 | Linux (Flatpak) | `cryptyrust-<version>-linux.flatpak` — `flatpak install cryptyrust-<version>-linux.flatpak` |
 | macOS (Intel and Apple Silicon) | `cryptyrust-<version>-macos-universal.dmg` |
 | Windows | `cryptyrust-<version>-win-setup.exe` (installer) or `…-win-portable.zip` |
