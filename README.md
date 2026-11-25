@@ -3,11 +3,32 @@
 
 # Cryptyrust
 
-**Cross-platform file encryption — drag-and-drop GUI, CLI, and C FFI library.**
+**Cross-platform file encryption — drag-and-drop GUI and command line.**
 
-Pre-built binaries for Linux, macOS (universal) and Windows are available on the [releases page](https://github.com/Antidote1911/cryptyrust/releases/latest).
+Cryptyrust protects files with a password, with the public keys of the people
+who must be able to open them, or with both. Drop files on the window to
+encrypt them; drop encrypted files to decrypt them. The same program is also a
+command-line tool for scripts.
+
+Encryption is post-quantum hybrid and the file format is fully documented.
+The interface is available in English and French.
 
 <img src='cryptyrust.png'/>
+
+---
+
+## Install
+
+Download the build for your system from the
+[releases page](https://github.com/Antidote1911/cryptyrust/releases/latest):
+
+| System | File |
+|---|---|
+| Linux | `cryptyrust-<version>-linux.AppImage` |
+| macOS (Intel and Apple Silicon) | `cryptyrust-<version>-macos-universal.dmg` |
+| Windows | `cryptyrust-<version>-win-setup.exe` (installer) or `…-win-portable.zip` |
+
+To build it yourself, see [`DEVELOPMENT.md`](DEVELOPMENT.md).
 
 ---
 
@@ -26,17 +47,8 @@ Pre-built binaries for Linux, macOS (universal) and Windows are available on the
 - **Password change** without re-encrypting the payload — O(1) regardless of file size
 - **Recipient management** — add/remove asymmetric keyslots post-encryption
 - **Built-in benchmark** — find the fastest cipher for your machine
+- **English and French** interface, light and dark theme
 - Cross-platform: Linux, Windows, macOS
-
----
-
-## Project Structure
-
-| Crate / Directory | Output | Description |
-|---|---|---|
-| [`arsenic/`](arsenic/) | library | Cryptographic core — [README](arsenic/README.md) · [Format spec](arsenic/FORMAT.md) |
-| [`cryptyrust/`](cryptyrust/) | `cryptyrust` | GUI + CLI + key management — [README](cryptyrust/README.md) |
-| [`ffi/`](ffi/) | `libarsenic_ffi.so/.a` | C-compatible FFI layer — [README](ffi/README.md) |
 
 ---
 
@@ -52,19 +64,30 @@ Pre-built binaries for Linux, macOS (universal) and Windows are available on the
 2. Share your `.pubkey` file with correspondents.
 3. When encrypting, select recipients in the popup — the password becomes optional.
 
-### Configuration options
+### Settings
 
-| Setting | Options | Default |
-|---|---|---|
-| Argon2id strength | Interactive (256 MiB) · Sensitive (1 GiB) | Interactive |
-| Header cipher | Deoxys-II-256 · AES-256-GCM-SIV · XChaCha20-Poly1305 | Deoxys-II-256 |
-| Payload cipher | XChaCha20-Poly1305 · AES-256-GCM-SIV · Deoxys-II-256 | XChaCha20-Poly1305 |
-| Compression | Off · zstd level 1–22 | Off |
-| ASCII Armor | Off · On | Off |
+**Config → Settings…** opens the settings window. Choices are saved between
+sessions.
+
+| Page | Setting | Options | Default |
+|---|---|---|---|
+| General | Language | English · Français | System language |
+| General | Theme | Light · Dark | System theme |
+| Encryption | Argon2id strength | Interactive (256 MiB) · Sensitive (1 GiB) | Interactive |
+| Encryption | Header cipher | Deoxys-II-256 · AES-256-GCM-SIV · XChaCha20-Poly1305 | Deoxys-II-256 |
+| Encryption | Payload cipher | XChaCha20-Poly1305 · AES-256-GCM-SIV · Deoxys-II-256 | XChaCha20-Poly1305 |
+| Encryption | ML-KEM level | ML-KEM-768 · ML-KEM-1024 | ML-KEM-768 |
+| Output | Compression | Disabled · zstd level 1–22 | Disabled |
+| Output | Format | Binary (`.arsn`) · ASCII armor (`.arsn.armor`) | Binary |
+
+**Config → Benchmark ciphers…** finds the fastest cipher for your machine.
 
 ---
 
 ## CLI — Quick Usage
+
+Run with arguments, `cryptyrust` is a command-line tool. The full reference is
+in [`cryptyrust/README.md`](cryptyrust/README.md).
 
 ```bash
 # Encrypt with password
@@ -137,37 +160,6 @@ cryptyrust passphrase remove file.pdf.arsn -p "a-current-password" --remove-pass
 
 ---
 
-## Building
-
-### Prerequisites
-
-- [Rust toolchain](https://rustup.rs/) stable
-- **Linux only** — X11 / Wayland development packages:
-  ```bash
-  sudo apt install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-                   libxkbcommon-dev libssl-dev pkg-config
-  ```
-
-### Build
-
-```bash
-cargo build --release
-# Binary: target/release/cryptyrust
-```
-
-### macOS universal binary
-
-```bash
-rustup target add x86_64-apple-darwin aarch64-apple-darwin
-cargo build --release --target x86_64-apple-darwin
-cargo build --release --target aarch64-apple-darwin
-lipo -create target/x86_64-apple-darwin/release/cryptyrust \
-             target/aarch64-apple-darwin/release/cryptyrust \
-             -output cryptyrust_universal
-```
-
----
-
 ## Data Loss Warning
 
 If you lose or forget your password, **your data cannot be recovered.** There is no backdoor.
@@ -177,7 +169,12 @@ Losing your `.key` file when you encrypted for recipients without a password is 
 
 ---
 
-## Library and Format
+## Documentation
 
-All cryptographic logic is in the [`arsenic`](arsenic/) crate.
-See [`arsenic/README.md`](arsenic/README.md) for the API and [`arsenic/FORMAT.md`](arsenic/FORMAT.md) for the complete binary format specification.
+| Document | For |
+|---|---|
+| [`cryptyrust/README.md`](cryptyrust/README.md) | Users — full GUI and CLI reference |
+| [`DEVELOPMENT.md`](DEVELOPMENT.md) | Developers — project layout, build, tests, translations |
+| [`arsenic/README.md`](arsenic/README.md) | Developers — API of the cryptographic library |
+| [`arsenic/FORMAT.md`](arsenic/FORMAT.md) | Specification of the Arsenic V2 file format |
+| [`ffi/README.md`](ffi/README.md) | Developers — C-compatible FFI layer |

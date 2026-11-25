@@ -21,7 +21,7 @@ Built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/e
 - **Built-in benchmark** of AEAD ciphers
 - **In-place password change** (rekey — O(1), payload untouched)
 - **Recipient management** — add or remove asymmetric keyslots post-encryption
-- Light / dark theme; settings persisted between sessions
+- English and French interface, light / dark theme; settings persisted between sessions
 
 ---
 
@@ -50,16 +50,22 @@ Built with [egui](https://github.com/emilk/egui) / [eframe](https://github.com/e
 
 ## Configuration
 
-**Config** menu:
+**Config → Settings…** opens the settings window:
 
-| Setting | Options | Default |
-|---|---|---|
-| Argon2id strength | Interactive (256 MiB) · Sensitive (1 GiB) | Interactive |
-| Header cipher | Deoxys-II-256 · AES-256-GCM-SIV · XChaCha20-Poly1305 | Deoxys-II-256 |
-| Payload cipher | XChaCha20-Poly1305 · AES-256-GCM-SIV · Deoxys-II-256 | XChaCha20-Poly1305 |
-| Compression | Off · zstd level 1–22 | Off |
-| ASCII Armor | Off · On | Off |
-| Benchmark | ⏱ Benchmark ciphers… | — |
+| Page | Setting | Options | Default |
+|---|---|---|---|
+| General | Language | English · Français | System language |
+| General | Theme | Light · Dark | System theme |
+| Encryption | Argon2id strength | Interactive (256 MiB) · Sensitive (1 GiB) | Interactive |
+| Encryption | Header cipher | Deoxys-II-256 · AES-256-GCM-SIV · XChaCha20-Poly1305 | Deoxys-II-256 |
+| Encryption | Payload cipher | XChaCha20-Poly1305 · AES-256-GCM-SIV · Deoxys-II-256 | XChaCha20-Poly1305 |
+| Encryption | ML-KEM level | ML-KEM-768 · ML-KEM-1024 | ML-KEM-768 |
+| Output | Compression | Disabled · zstd level 1–22 | Disabled |
+| Output | Format | Binary (`.arsn`) · ASCII armor (`.arsn.armor`) | Binary |
+
+**Config → Benchmark ciphers…** measures the AEAD ciphers on this machine.
+
+The command line always speaks English.
 
 ---
 
@@ -145,35 +151,6 @@ cryptyrust passphrase remove file.txt.arsn -p "a-current-password" --remove-pass
 
 ---
 
-## Building
+## Building and Code Structure
 
-```bash
-cargo build --release -p cryptyrust
-# Binary: target/release/cryptyrust
-```
-
-### Linux Dependencies
-
-```bash
-sudo apt install libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev \
-                 libxkbcommon-dev libssl-dev pkg-config
-```
-
----
-
-## Code Structure
-
-```
-cryptyrust/src/
-├── main.rs          Entry point: GUI if no args, CLI otherwise
-├── app.rs           Application state, business logic, job dispatch
-├── cli.rs           Clap argument definitions
-├── cli_runner.rs    CLI command implementations
-├── job.rs           Encrypt/decrypt job management (Rayon thread pool)
-├── file_utils.rs    Mode detection, output path generation
-├── keystore.rs      Re-export of arsenic::keystore
-└── ui/
-    ├── mod.rs       Main rendering dispatch
-    ├── layouts.rs   Menu bar, action bar, central panel, status banners
-    └── components.rs Tables, popups, key manager, About window
-```
+See [`DEVELOPMENT.md`](../DEVELOPMENT.md).
