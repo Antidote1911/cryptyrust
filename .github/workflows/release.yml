@@ -162,7 +162,7 @@ jobs:
         # session bus), which says nothing about the bundle. Look at the result of the step.
         continue-on-error: true
         run: |
-          dbus-run-session -- flatpak-builder --run flatpak_app \
+          dbus-run-session -- flatpak-builder --disable-rofiles-fuse --run flatpak_app \
               packaging/flatpak/io.github.antidote1911.cryptyrust.yml cryptyrust --version
 
       - uses: actions/upload-artifact@v4
