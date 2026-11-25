@@ -1,3 +1,4 @@
+use crate::i18n::tr;
 use std::collections::HashMap;
 use std::io::{Cursor, Read};
 use std::panic::{self, AssertUnwindSafe};
@@ -118,8 +119,8 @@ impl JobState {
         let cancel_all = Arc::new(AtomicBool::new(false));
 
         let success_label = match mode {
-            Mode::Encrypt => "Encryption OK".to_string(),
-            Mode::Decrypt => "Decryption OK".to_string(),
+            Mode::Encrypt => tr("Encryption OK").to_string(),
+            Mode::Decrypt => tr("Decryption OK").to_string(),
         };
 
         *self = Self::Running {
@@ -172,7 +173,7 @@ impl JobState {
                         }))
                         .unwrap_or_else(|_| {
                             Err(CoreErr::IOError(std::io::Error::other(
-                                "internal error while processing this file",
+                                tr("internal error while processing this file"),
                             )))
                         });
                         match result {
@@ -181,7 +182,7 @@ impl JobState {
                                 set_status(i, FileStatus::Success);
                             }
                             Err(CoreErr::Cancelled) => set_status(i, FileStatus::Cancelled),
-                            Err(e) => set_status(i, FileStatus::Failed(e.to_string())),
+                            Err(e) => set_status(i, FileStatus::Failed(crate::i18n::core_err(&e))),
                         }
                     });
                 }
@@ -215,7 +216,7 @@ impl JobState {
             current_file: current_file.clone(),
             processing_files: vec![file.clone()],
             file_statuses: file_statuses.clone(),
-            success_label: "Password changed".to_string(),
+            success_label: tr("Password changed").to_string(),
             cancel_flags: vec![cancel_flag.clone()],
             cancel_all: cancel_all.clone(),
             // The header rewrite is not interruptible: no Stop button is shown.
@@ -230,7 +231,7 @@ impl JobState {
                     let _ = tx.send((0, 100));
                     FileStatus::Success
                 }
-                Err(e) => FileStatus::Failed(e.to_string()),
+                Err(e) => FileStatus::Failed(crate::i18n::core_err(&e)),
             };
             lock(&file_statuses)[0] = status;
 
@@ -361,7 +362,7 @@ fn matching_key<'k, R: Read>(input: &mut R, keys: &'k [KeyEntry]) -> Option<&'k 
 fn require_password(password: &Secret<String>) -> Result<(), CoreErr> {
     if password.expose().is_empty() {
         return Err(CoreErr::DecryptFail(
-            "no stored keypair matches this file — a password is required.".into(),
+            tr("no stored keypair matches this file — a password is required.").into(),
         ));
     }
     Ok(())
@@ -377,7 +378,7 @@ fn decrypt_armored(
 ) -> Result<(), CoreErr> {
     let data = std::fs::read(path)?;
     let text = std::str::from_utf8(&data)
-        .map_err(|_| CoreErr::DecryptFail("armor file is not valid UTF-8".into()))?;
+        .map_err(|_| CoreErr::DecryptFail(tr("armor file is not valid UTF-8").into()))?;
     let ct = dearmor(text)?;
     let filesize = ct.len() as u64;
 

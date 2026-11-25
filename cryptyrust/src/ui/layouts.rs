@@ -2,6 +2,7 @@
 // line count would only scatter the layout.
 #![allow(clippy::too_many_lines)]
 
+use crate::i18n::{tr, trf};
 use eframe::egui;
 
 use crate::app::CryptyApp;
@@ -14,9 +15,9 @@ use crate::ui::components;
 pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool, popup_open: bool) {
     egui::Panel::top("menubar").show_inside(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
-            ui.menu_button("File", |ui| {
+            ui.menu_button(tr("File"), |ui| {
                 if ui
-                    .add_enabled(!is_running && !popup_open, egui::Button::new("Add files…"))
+                    .add_enabled(!is_running && !popup_open, egui::Button::new(tr("Add files…")))
                     .clicked()
                 {
                     ui.close();
@@ -25,8 +26,8 @@ pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool,
                     }
                 }
                 if ui
-                    .add_enabled(!is_running && !popup_open, egui::Button::new("Add folder…"))
-                    .on_hover_text("Add all files inside a folder (recursive)")
+                    .add_enabled(!is_running && !popup_open, egui::Button::new(tr("Add folder…")))
+                    .on_hover_text(tr("Add all files inside a folder (recursive)"))
                     .clicked()
                 {
                     ui.close();
@@ -38,7 +39,7 @@ pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool,
                 if ui
                     .add_enabled(
                         !app.files.is_empty() && !is_running && !popup_open,
-                        egui::Button::new("Clear list"),
+                        egui::Button::new(tr("Clear list")),
                     )
                     .clicked()
                 {
@@ -50,11 +51,11 @@ pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool,
                     if ui
                         .add(
                             egui::Button::new(
-                                egui::RichText::new("⏹  Stop all tasks")
+                                egui::RichText::new(tr("⏹  Stop all tasks"))
                                     .color(egui::Color32::from_rgb(220, 80, 60)),
                             ),
                         )
-                        .on_hover_text("Cancel all pending and in-progress operations")
+                        .on_hover_text(tr("Cancel all pending and in-progress operations"))
                         .clicked()
                     {
                         ui.close();
@@ -62,22 +63,22 @@ pub fn render_menu_bar(app: &mut CryptyApp, ui: &mut egui::Ui, is_running: bool,
                     }
                 }
                 ui.separator();
-                if ui.button("Quit").clicked() {
+                if ui.button(tr("Quit")).clicked() {
                     ui.ctx().send_viewport_cmd(egui::ViewportCommand::Close);
                 }
             });
 
             components::render_config_menu(app, ui, is_running);
 
-            ui.menu_button("Keys", |ui| {
-                if ui.button("Key Manager…").clicked() {
+            ui.menu_button(tr("Keys"), |ui| {
+                if ui.button(tr("Key Manager…")).clicked() {
                     ui.close();
                     app.show_key_manager = true;
                 }
             });
 
-            ui.menu_button("About", |ui| {
-                if ui.button("About Cryptyrust…").clicked() {
+            ui.menu_button(tr("About"), |ui| {
+                if ui.button(tr("About Cryptyrust…")).clicked() {
                     ui.close();
                     app.show_about = true;
                 }
@@ -147,7 +148,7 @@ pub fn render_action_bar(
                 if completed {
                     // ── Post-opération : Clear uniquement ──────────────
                     if ui
-                        .add(egui::Button::new("🗑  Clear").min_size(egui::vec2(80.0, 32.0)))
+                        .add(egui::Button::new(tr("🗑  Clear")).min_size(egui::vec2(80.0, 32.0)))
                         .clicked()
                     {
                         do_clear = true;
@@ -157,7 +158,7 @@ pub fn render_action_bar(
                     if ui
                         .add_enabled(
                             !is_running && !popup_open,
-                            egui::Button::new("➕  Add files").min_size(egui::vec2(100.0, 32.0)),
+                            egui::Button::new(tr("➕  Add files")).min_size(egui::vec2(100.0, 32.0)),
                         )
                         .clicked()
                     {
@@ -170,9 +171,9 @@ pub fn render_action_bar(
                     if ui
                         .add_enabled(
                             !is_running && !popup_open,
-                            egui::Button::new("📁  Add folder").min_size(egui::vec2(105.0, 32.0)),
+                            egui::Button::new(tr("📁  Add folder")).min_size(egui::vec2(105.0, 32.0)),
                         )
-                        .on_hover_text("Add all files inside a folder (recursive)")
+                        .on_hover_text(tr("Add all files inside a folder (recursive)"))
                         .clicked()
                     {
                         do_add_folder = true;
@@ -185,7 +186,7 @@ pub fn render_action_bar(
                         if ui
                             .add_enabled(
                                 !is_running && !popup_open,
-                                egui::Button::new("🗑  Clear").min_size(egui::vec2(80.0, 32.0)),
+                                egui::Button::new(tr("🗑  Clear")).min_size(egui::vec2(80.0, 32.0)),
                             )
                             .clicked()
                         {
@@ -198,7 +199,7 @@ pub fn render_action_bar(
                         if ui
                             .add_enabled(
                                 can_change_pw,
-                                egui::Button::new("🔑  Change password")
+                                egui::Button::new(tr("🔑  Change password"))
                                     .min_size(egui::vec2(140.0, 32.0)),
                             )
                             .clicked()
@@ -210,11 +211,11 @@ pub fn render_action_bar(
 
                         // ── Encrypt / Decrypt ──────────────────────────
                         let btn_label = if app.mixed {
-                            "⚠  Mixed files"
+                            tr("⚠  Mixed files")
                         } else {
                             match app.mode {
-                                Mode::Encrypt => "🔒  Encrypt",
-                                Mode::Decrypt => "🔓  Decrypt",
+                                Mode::Encrypt => tr("🔒  Encrypt"),
+                                Mode::Decrypt => tr("🔓  Decrypt"),
                             }
                         };
 
@@ -231,7 +232,7 @@ pub fn render_action_bar(
                 // ── Quit (far right) ───────────────────────────────────
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if ui
-                        .add(egui::Button::new("✕  Quit").min_size(egui::vec2(80.0, 32.0)))
+                        .add(egui::Button::new(tr("✕  Quit")).min_size(egui::vec2(80.0, 32.0)))
                         .clicked()
                     {
                         do_quit = true;
@@ -310,16 +311,13 @@ pub fn render_central_panel(app: &mut CryptyApp, ui: &mut egui::Ui) {
                     let mut do_dismiss = false;
                     ui.horizontal(|ui| {
                         ui.label(
-                            egui::RichText::new(format!(
-                                "📨 From: {sender_name} (unverified) — add to contacts?"
-                            ))
+                            egui::RichText::new(trf("📨 From: {sender_name} (unverified) — add to contacts?", &[("sender_name", &sender_name)]))
                             .color(color),
                         )
                         .on_hover_text(
-                            "This name is declared by whoever made the file and is not authenticated.\n\
-                             Check the public key through another channel before trusting it.",
+                            tr("This name is declared by whoever made the file and is not authenticated.\nCheck the public key through another channel before trusting it."),
                         );
-                        if ui.button("Add").clicked() { do_add = true; }
+                        if ui.button(tr("Add")).clicked() { do_add = true; }
                         if ui.button("✕").clicked()       { do_dismiss = true; }
                     });
                     if do_add     { app.confirm_add_contact_from_file(); }
@@ -370,7 +368,7 @@ fn render_drop_zone(ui: &egui::Ui, avail: egui::Rect, hovering: bool) {
     ui.painter().text(
         avail.center(),
         egui::Align2::CENTER_CENTER,
-        "Drop files here to encrypt or decrypt",
+        tr("Drop files here to encrypt or decrypt"),
         egui::FontId::proportional(18.0),
         ui.visuals().text_color(),
     );

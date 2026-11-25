@@ -1797,3 +1797,15 @@ fn vector_keys_only_empty_file() {
     assert_eq!(ct.len(), hdr_len(ct) + 16);
     assert!(do_decrypt(ct, "anything").is_err());
 }
+
+#[test]
+fn bench_stops_when_cancelled() {
+    struct Cancelled;
+    impl arsenic::Ui for Cancelled {
+        fn output(&self, _percentage: i32) {}
+        fn is_cancelled(&self) -> bool {
+            true
+        }
+    }
+    assert!(arsenic::bench_cipher_combinations(1, &Cancelled).is_empty());
+}

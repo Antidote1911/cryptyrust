@@ -1,3 +1,4 @@
+use crate::i18n::{tr, trf};
 use arsenic::{ArsenicStrength, CipherId};
 use std::fs::{File, OpenOptions};
 use std::io::{self, Read};
@@ -85,7 +86,7 @@ pub const MIN_PASSWORD_CHARS: usize = 8;
 /// Check a password that is about to protect a file.
 pub fn check_new_password(password: &str) -> Result<(), String> {
     if password.chars().count() < MIN_PASSWORD_CHARS {
-        return Err(format!("Password must be at least {MIN_PASSWORD_CHARS} characters."));
+        return Err(trf("Password must be at least {min} characters.", &[("min", &MIN_PASSWORD_CHARS)]));
     }
     Ok(())
 }
@@ -94,26 +95,26 @@ pub fn get_file_size(path: &Path) -> String {
     // Display only: the rounding of a u64 → f64 conversion is irrelevant here.
     #[allow(clippy::cast_precision_loss)]
     std::fs::metadata(path).map_or_else(
-        |_| "Unknown".to_string(),
+        |_| tr("Unknown").to_string(),
         |metadata| {
             let size = metadata.len();
             if size < 1024 {
-                format!("{size} B")
+                format!("{size} {}", tr("B"))
             } else if size < 1024 * 1024 {
-                format!("{} KB", size / 1024)
+                format!("{} {}", size / 1024, tr("KB"))
             } else if size < 1024 * 1024 * 1024 {
-                format!("{} MB", size / (1024 * 1024))
+                format!("{} {}", size / (1024 * 1024), tr("MB"))
             } else {
-                format!("{:.1} GB", size as f64 / (1024.0 * 1024.0 * 1024.0))
+                format!("{:.1} {}", size as f64 / (1024.0 * 1024.0 * 1024.0), tr("GB"))
             }
         },
     )
 }
 
-pub const fn arsenic_strength_label(s: ArsenicStrength) -> &'static str {
+pub fn arsenic_strength_label(s: ArsenicStrength) -> &'static str {
     match s {
-        ArsenicStrength::Interactive => "Interactive  (256 MB)",
-        ArsenicStrength::Sensitive => "Sensitive  (1 GB)",
+        ArsenicStrength::Interactive => tr("Interactive  (256 MB)"),
+        ArsenicStrength::Sensitive => tr("Sensitive  (1 GB)"),
     }
 }
 

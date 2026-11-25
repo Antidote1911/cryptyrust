@@ -52,6 +52,9 @@ pub fn best_combination(results: &[CipherBenchResult]) -> (CipherId, CipherId) {
 /// the total benchmark time under three seconds on modern hardware).
 ///
 /// Progress 0–100 is reported via `ui`. Results are sorted fastest-first.
+///
+/// `ui.is_cancelled()` is checked between the steps: once it is true the
+/// benchmark stops and returns an empty list.
 pub fn bench_cipher_combinations(payload_mib: usize, ui: &dyn Ui) -> Vec<CipherBenchResult> {
     ui.output(0);
 
@@ -65,6 +68,9 @@ pub fn bench_cipher_combinations(payload_mib: usize, ui: &dyn Ui) -> Vec<CipherB
         .expect("Argon2id key derivation failed");
 
     ui.output(10);
+    if ui.is_cancelled() {
+        return Vec::new();
+    }
 
     // ── Cipher throughput tests ───────────────────────────────────────────
     let payload: Vec<u8> = (0..payload_mib * 1024 * 1024).map(|i| i as u8).collect();
@@ -79,6 +85,9 @@ pub fn bench_cipher_combinations(payload_mib: usize, ui: &dyn Ui) -> Vec<CipherB
         let ct = cipher_dispatch::block_encrypt(cipher, &key, &nonce24, &aad, &payload)
             .expect("bench encrypt");
         let encrypt_mibps = payload_mib as f64 / t0.elapsed().as_secs_f64();
+        if ui.is_cancelled() {
+            return Vec::new();
+        }
 
         let t1 = Instant::now();
         let _ = cipher_dispatch::block_decrypt(cipher, &key, &nonce24, &aad, &ct)
@@ -91,6 +100,9 @@ pub fn bench_cipher_combinations(payload_mib: usize, ui: &dyn Ui) -> Vec<CipherB
             decrypt_mibps,
         });
         ui.output((10 + (i + 1) * step) as i32);
+        if ui.is_cancelled() {
+            return Vec::new();
+        }
     }
 
     results.sort_by(|a, b| {

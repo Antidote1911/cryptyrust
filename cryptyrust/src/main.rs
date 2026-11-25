@@ -2,10 +2,15 @@
 // The subsystem is decided at link time, so instead we allocate/free the console
 // at runtime on Windows when needed.
 
+// `{name}` placeholders of translated messages are filled at run time by
+// `i18n::trf`, not by a formatting macro.
+#![allow(clippy::literal_string_with_formatting_args)]
+
 mod app;
 mod cli;
 mod cli_runner;
 mod file_utils;
+mod i18n;
 mod job;
 mod keystore;
 mod ui;

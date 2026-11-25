@@ -1,6 +1,7 @@
 mod components;
 mod layouts;
 
+use crate::i18n::tr;
 use eframe::egui;
 
 use crate::app::CryptyApp;
@@ -46,6 +47,39 @@ impl UI {
             components::render_bench_window(app, &ctx);
         }
 
+        // Settings — fenêtre OS indépendante, comme le key manager.
+        if app.show_config {
+            let mut close_cfg = false;
+            let dark_mode = app.dark_mode;
+            ctx.show_viewport_immediate(
+                egui::ViewportId::from_hash_of("config"),
+                egui::ViewportBuilder::default()
+                    .with_title(tr("Settings"))
+                    .with_inner_size([600.0, 340.0])
+                    .with_min_inner_size([520.0, 280.0])
+                    .with_resizable(true),
+                |vp_ctx, _class| {
+                    vp_ctx.set_visuals(if dark_mode {
+                        egui::Visuals::dark()
+                    } else {
+                        egui::Visuals::light()
+                    });
+
+                    if vp_ctx.input(|i| i.viewport().close_requested()) {
+                        close_cfg = true;
+                    }
+
+                    #[allow(deprecated)]
+                    egui::CentralPanel::default().show(vp_ctx, |ui| {
+                        components::render_config_content(app, ui, is_running, &mut close_cfg);
+                    });
+                },
+            );
+            if close_cfg {
+                app.show_config = false;
+            }
+        }
+
         // Key manager — fenêtre OS indépendante, déplaçable hors de la fenêtre principale.
         if app.show_key_manager {
             let mut close_km = false;
@@ -53,7 +87,7 @@ impl UI {
             ctx.show_viewport_immediate(
                 egui::ViewportId::from_hash_of("key_manager"),
                 egui::ViewportBuilder::default()
-                    .with_title("Key Manager")
+                    .with_title(tr("Key Manager"))
                     .with_inner_size([660.0, 560.0])
                     .with_min_inner_size([520.0, 380.0])
                     .with_resizable(true),

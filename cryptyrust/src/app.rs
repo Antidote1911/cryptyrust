@@ -1,3 +1,4 @@
+use crate::i18n::{tr, trf, Lang};
 use arsenic::{
     bench_cipher_combinations, ArsenicParams, ArsenicStrength, CipherBenchResult, CipherId,
     KemLevel, Ui,
@@ -5,7 +6,8 @@ use arsenic::{
 use eframe::egui;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use std::thread;
 
 use crate::file_utils::{
@@ -22,6 +24,27 @@ use crate::ui::UI;
 pub enum BenchMsg {
     Progress(i32),
     Done(Vec<CipherBenchResult>),
+    Cancelled,
+}
+
+/// Pages of the settings window, in the order of its category list.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum ConfigCategory {
+    General,
+    Encryption,
+    Output,
+}
+
+impl ConfigCategory {
+    pub const ALL: [Self; 3] = [Self::General, Self::Encryption, Self::Output];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::General => tr("General"),
+            Self::Encryption => tr("Encryption"),
+            Self::Output => tr("Output"),
+        }
+    }
 }
 
 // One flag per independent window/option of the UI: a state machine would
@@ -58,12 +81,20 @@ pub struct CryptyApp {
     /// Sender info extracted after decryption — offered as "Add to contacts?".
     pub pending_contact_from_file: Option<arsenic::keystore::ContactEntry>,
     pub show_about: bool,
+    /// Interface language.
+    pub language: Lang,
+    /// Settings window (independent OS window).
+    pub show_config: bool,
+    /// Page shown in the settings window.
+    pub config_category: ConfigCategory,
     pub dark_mode: bool,
     // Cipher benchmark state
     pub bench_running: bool,
     pub bench_progress: i32,
     pub bench_results: Option<Vec<CipherBenchResult>>,
     pub bench_rx: Option<mpsc::Receiver<BenchMsg>>,
+    /// Set by the Stop button; read by the benchmark thread between steps.
+    pub bench_cancel: Arc<AtomicBool>,
     pub show_bench: bool,
     // Change-password popup state
     pub cpw_old: String,
@@ -105,6 +136,14 @@ impl CryptyApp {
             .and_then(|s| s.get_string("dark_mode"))
             .and_then(|s| s.parse().ok())
             .unwrap_or(system_dark);
+
+        // Saved choice, else the language of the session.
+        let language = storage
+            .and_then(|s| s.get_string("language"))
+            .and_then(|s| Lang::from_code(&s))
+            .unwrap_or_else(Lang::system);
+        // Before anything below builds a message.
+        crate::i18n::set_lang(language);
 
         let arsenic_strength = storage
             .and_then(|s| s.get_string("arsenic_strength"))
@@ -166,11 +205,15 @@ impl CryptyApp {
             armor,
             pending_contact_from_file: None,
             show_about: false,
+            language,
+            show_config: false,
+            config_category: ConfigCategory::General,
             dark_mode,
             bench_running: false,
             bench_progress: 0,
             bench_results: None,
             bench_rx: None,
+            bench_cancel: Arc::new(AtomicBool::new(false)),
             show_bench: false,
             cpw_old: String::new(),
             cpw_new: String::new(),
@@ -285,6 +328,16 @@ impl CryptyApp {
         self.refresh_mode();
     }
 
+    /// Switch the interface language. Sizes shown in the file list are
+    /// formatted when a file is added: read them again in the new language.
+    pub fn set_language(&mut self, language: Lang) {
+        self.language = language;
+        crate::i18n::set_lang(language);
+        for (path, meta) in &mut self.file_meta {
+            *meta = FileMeta::read(path);
+        }
+    }
+
     pub fn remove_file(&mut self, idx: usize) {
         let removed = self.files.remove(idx);
         self.file_meta.remove(&removed);
@@ -397,7 +450,7 @@ impl CryptyApp {
                 Mode::Decrypt => {
                     if self.decrypt_key_index.is_none() {
                         self.pw_error =
-                            Some("Enter a password or select a keypair.".into());
+                            Some(tr("Enter a password or select a keypair.").into());
                         return;
                     }
                     // Asymmetric path: password unused.
@@ -405,7 +458,7 @@ impl CryptyApp {
                 }
                 Mode::Encrypt if n_sel == 0 => {
                     self.pw_error =
-                        Some("Enter a password or select at least one recipient.".into());
+                        Some(tr("Enter a password or select at least one recipient.").into());
                     return;
                 }
                 Mode::Encrypt => {
@@ -421,7 +474,7 @@ impl CryptyApp {
                     return;
                 }
                 if self.pw != self.pw_confirm {
-                    self.pw_error = Some("Passwords do not match.".into());
+                    self.pw_error = Some(tr("Passwords do not match.").into());
                     return;
                 }
             }
@@ -436,15 +489,15 @@ impl CryptyApp {
 
     pub fn validate_and_change_pw(&mut self, ctx: &egui::Context) {
         if self.cpw_old.is_empty() {
-            self.cpw_error = Some("Current password cannot be empty.".into());
+            self.cpw_error = Some(tr("Current password cannot be empty.").into());
             return;
         }
         if let Err(e) = check_new_password(&self.cpw_new) {
-            self.cpw_error = Some(format!("New password: {e}"));
+            self.cpw_error = Some(trf("New password: {e}", &[("e", &e)]));
             return;
         }
         if self.cpw_new != self.cpw_confirm {
-            self.cpw_error = Some("New passwords do not match.".into());
+            self.cpw_error = Some(tr("New passwords do not match.").into());
             return;
         }
         let old_pw = std::mem::take(&mut self.cpw_old);
@@ -462,6 +515,9 @@ impl CryptyApp {
         self.bench_progress = 0;
         self.bench_results = None;
         self.show_bench = true;
+        // A fresh flag: a thread still winding down keeps its own.
+        self.bench_cancel = Arc::new(AtomicBool::new(false));
+        let cancel = self.bench_cancel.clone();
 
         thread::spawn({
             let tx = tx;
@@ -470,11 +526,15 @@ impl CryptyApp {
                 struct BenchUi {
                     tx: mpsc::Sender<BenchMsg>,
                     ctx: egui::Context,
+                    cancel: Arc<AtomicBool>,
                 }
                 impl Ui for BenchUi {
                     fn output(&self, pct: i32) {
                         let _ = self.tx.send(BenchMsg::Progress(pct));
                         self.ctx.request_repaint();
+                    }
+                    fn is_cancelled(&self) -> bool {
+                        self.cancel.load(Ordering::Relaxed)
                     }
                 }
                 let results = bench_cipher_combinations(
@@ -482,28 +542,38 @@ impl CryptyApp {
                     &BenchUi {
                         tx: tx.clone(),
                         ctx: ctx.clone(),
+                        cancel: cancel.clone(),
                     },
                 );
-                let _ = tx.send(BenchMsg::Done(results));
+                let _ = tx.send(if cancel.load(Ordering::Relaxed) {
+                    BenchMsg::Cancelled
+                } else {
+                    BenchMsg::Done(results)
+                });
                 ctx.request_repaint();
             }
         });
+    }
+
+    /// Ask the running benchmark to stop; its window closes once it has.
+    pub fn stop_bench(&self) {
+        self.bench_cancel.store(true, Ordering::Relaxed);
     }
 
     /// Generate a new keypair with the current `km_new_name` and persist it.
     pub fn km_generate_key(&mut self) {
         let name = self.km_new_name.trim().to_string();
         if name.is_empty() {
-            self.km_error = Some("Name cannot be empty.".into());
+            self.km_error = Some(tr("Name cannot be empty.").into());
             return;
         }
         if self.keys.iter().any(|k| k.name == name) {
-            self.km_error = Some(format!("A key named \"{name}\" already exists."));
+            self.km_error = Some(trf("A key named \"{name}\" already exists.", &[("name", &name)]));
             return;
         }
         let mut entry = KeyEntry::generate(name);
         if let Err(e) = save_key(&mut entry) {
-            self.km_error = Some(format!("Could not save key: {e}"));
+            self.km_error = Some(trf("Could not save key: {e}", &[("e", &e)]));
             return;
         }
         self.keys.push(entry);
@@ -516,37 +586,37 @@ impl CryptyApp {
         use arsenic::decode_pubkey;
         let name = self.km_new_contact_name.trim().to_string();
         if name.is_empty() {
-            self.km_contact_error = Some("Name cannot be empty.".into());
+            self.km_contact_error = Some(tr("Name cannot be empty.").into());
             return;
         }
         if name.chars().any(char::is_control) {
-            self.km_contact_error = Some("Name must not contain control characters.".into());
+            self.km_contact_error = Some(tr("Name must not contain control characters.").into());
             return;
         }
         if name.chars().count() > MAX_CONTACT_NAME_CHARS {
             self.km_contact_error =
-                Some(format!("Name is too long (max {MAX_CONTACT_NAME_CHARS} characters)."));
+                Some(trf("Name is too long (max {max} characters).", &[("max", &MAX_CONTACT_NAME_CHARS)]));
             return;
         }
         if is_reserved_contact_name(&name) {
             self.km_contact_error =
-                Some("Name must not start with \"mlkem:\" or \"sign-key:\".".into());
+                Some(tr("Name must not start with \"mlkem:\" or \"sign-key:\".").into());
             return;
         }
         if self.contacts.iter().any(|c| c.name == name) {
-            self.km_contact_error = Some(format!("A contact named \"{name}\" already exists."));
+            self.km_contact_error = Some(trf("A contact named \"{name}\" already exists.", &[("name", &name)]));
             return;
         }
         let key_str = self.km_new_contact_key.trim().to_string();
         let Some(public_key) = decode_pubkey(&key_str) else {
             self.km_contact_error =
-                Some("Invalid X25519 key — expected arsenic1… format.".into());
+                Some(tr("Invalid X25519 key — expected arsenic1… format.").into());
             return;
         };
         let mlkem_str = self.km_new_contact_mlkem_key.trim().to_string();
         let Some(mlkem_key) = arsenic::decode_mlkem_pubkey(&mlkem_str) else {
             self.km_contact_error =
-                Some("Invalid ML-KEM key — expected arsenic1m… format.".into());
+                Some(tr("Invalid ML-KEM key — expected arsenic1m… format.").into());
             return;
         };
         self.contacts.push(ContactEntry {
@@ -572,7 +642,7 @@ impl CryptyApp {
             }
             Err(e) => {
                 self.contacts.pop();
-                self.km_contact_error = Some(format!("Could not save contacts: {e}"));
+                self.km_contact_error = Some(trf("Could not save contacts: {e}", &[("e", &e)]));
                 false
             }
         }
@@ -584,7 +654,7 @@ impl CryptyApp {
             let removed = self.contacts.remove(index);
             if let Err(e) = save_contacts(&self.contacts) {
                 self.contacts.insert(index, removed);
-                self.km_contact_error = Some(format!("Could not save contacts: {e}"));
+                self.km_contact_error = Some(trf("Could not save contacts: {e}", &[("e", &e)]));
             }
         }
         self.km_confirm_delete_contact = None;
@@ -598,7 +668,7 @@ impl CryptyApp {
                     self.keys.remove(index);
                     self.km_error = None;
                 }
-                Err(e) => self.km_error = Some(format!("Could not delete key file: {e}")),
+                Err(e) => self.km_error = Some(trf("Could not delete key file: {e}", &[("e", &e)])),
             }
         }
         self.km_notice = None;
@@ -652,18 +722,18 @@ impl CryptyApp {
         let content = arsenic::keystore::serialize_pubkey(entry);
         let filename = format!("{}.pubkey", entry.name);
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Public key", &["pubkey"])
+            .add_filter(tr("Public key"), &["pubkey"])
             .set_file_name(&filename)
             .save_file()
         {
             match std::fs::write(&path, &content) {
                 Ok(()) => {
                     self.km_error = None;
-                    self.km_notice = Some(format!("✓ Exported to {}", path.display()));
+                    self.km_notice = Some(trf("✓ Exported to {path}", &[("path", &path.display())]));
                 }
                 Err(e) => {
                     self.km_notice = None;
-                    self.km_error = Some(format!("Export failed: {e}"));
+                    self.km_error = Some(trf("Export failed: {e}", &[("e", &e)]));
                 }
             }
         }
@@ -672,8 +742,8 @@ impl CryptyApp {
     /// Open a file picker and import a contact from a `.pubkey` or `.key` file.
     pub fn km_import_contact_from_file(&mut self) {
         if let Some(path) = rfd::FileDialog::new()
-            .add_filter("Public key files", &["pubkey", "key"])
-            .set_title("Import contact — select a .pubkey or .key file")
+            .add_filter(tr("Public key files"), &["pubkey", "key"])
+            .set_title(tr("Import contact — select a .pubkey or .key file"))
             .pick_file()
         {
             self.km_do_import_contact(path);
@@ -684,23 +754,23 @@ impl CryptyApp {
     pub fn km_do_import_contact(&mut self, path: PathBuf) {
         let content = match std::fs::read_to_string(&path) {
             Ok(c)  => c,
-            Err(e) => { self.km_contact_error = Some(format!("Cannot read file: {e}")); return; }
+            Err(e) => { self.km_contact_error = Some(trf("Cannot read file: {e}", &[("e", &e)])); return; }
         };
         let Some(mut entry) = arsenic::keystore::parse_pubkey_file(&content, path) else {
-            self.km_contact_error = Some("No valid public key found in this file.".into());
+            self.km_contact_error = Some(tr("No valid public key found in this file.").into());
             return;
         };
         entry.name = sanitize_contact_name(&entry.name);
         if self.keys.iter().any(|k| k.public_key == entry.public_key) {
-            self.km_contact_error = Some(format!("\"{}\" is one of your own keypairs.", entry.name));
+            self.km_contact_error = Some(trf("\"{name}\" is one of your own keypairs.", &[("name", &entry.name)]));
             return;
         }
         if self.contacts.iter().any(|c| c.public_key == entry.public_key) {
-            self.km_contact_error = Some("A contact with this public key already exists.".into());
+            self.km_contact_error = Some(tr("A contact with this public key already exists.").into());
             return;
         }
         if self.contacts.iter().any(|c| c.name == entry.name) {
-            self.km_contact_error = Some(format!("A contact named \"{}\" already exists.", entry.name));
+            self.km_contact_error = Some(trf("A contact named \"{name}\" already exists.", &[("name", &entry.name)]));
             return;
         }
         self.contacts.push(entry);
@@ -767,6 +837,7 @@ impl CryptyApp {
 impl eframe::App for CryptyApp {
     fn save(&mut self, storage: &mut dyn eframe::Storage) {
         storage.set_string("dark_mode", self.dark_mode.to_string());
+        storage.set_string("language", self.language.code().to_string());
         storage.set_string(
             "arsenic_strength",
             match self.arsenic_strength {
@@ -882,6 +953,12 @@ impl eframe::App for CryptyApp {
                         self.bench_results = Some(results);
                         self.bench_running = false;
                         self.bench_rx = None;
+                    }
+                    BenchMsg::Cancelled => {
+                        self.bench_results = None;
+                        self.bench_running = false;
+                        self.bench_rx = None;
+                        self.show_bench = false;
                     }
                 }
             }

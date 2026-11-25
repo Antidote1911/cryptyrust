@@ -15,6 +15,7 @@ clap = { version = "4.6.1", features = ["derive", "cargo"] }
 rpassword = "7.5.2"
 anyhow = "1.0.102"
 indicatif = "0.18.4"
+sys-locale = "0.3.2"
 
 # Same winit as eframe, for its X11 event loop (see main.rs)
 [target.'cfg(target_os = "linux")'.dependencies]
